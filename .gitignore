@@ -1,0 +1,19 @@
+# Env & secrets
+.env
+*.env
+*.pem
+*.key
+
+# Fabric (agent-specific, not for sharing)
+fabric/
+
+# Hermes config (has tokens)
+.hermes/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
