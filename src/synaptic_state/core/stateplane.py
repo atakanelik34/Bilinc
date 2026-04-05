@@ -431,20 +431,17 @@ class StatePlane:
         memory_types: Optional[List[MemoryType]],
         min_confidence: float,
     ) -> List[MemoryEntry]:
-        """
-        Retrieve memories within budget constraints.
-        """
+        """Retrieve memories within budget constraints."""
+        type_names = [mt.value for mt in memory_types] if memory_types else None
+        
         if not intent:
-            # No intent — return most important memories by type priority
             entries = sorted(
                 self._storage.values(),
                 key=lambda e: e.importance * e.current_strength,
                 reverse=True,
             )
-            
             if memory_types:
                 entries = [e for e in entries if e.memory_type in memory_types]
-            
             total_tokens = 0
             result = []
             for entry in entries:
@@ -452,34 +449,27 @@ class StatePlane:
                 if total_tokens + tokens <= self.config.default_budget_tokens:
                     result.append(entry)
                     total_tokens += tokens
-            
             return result
         
-        # Intent-based retrieval
-        scores = self.retriever.search(intent, top_k=len(self._storage))
-        
+        scores = self.retriever.search(intent, top_k=len(self._storage) or 50)
         result = []
         total_tokens = 0
         
-        for entry_id, score, metadata in(scores):
-            entry = self._storage.get(
-                [k for k, v in self._storage.items() if v.id == entry_id][0]
-                if any(v.id == entry_id for v in self._storage.values())
-                else None,
-            )
+        for entry_id, score, metadata in scores:
+            entry = None
+            for v in self._storage.values():
+                if v.id == entry_id:
+                    entry = v
+                    break
             if entry is None:
                 continue
-            
             if entry.current_strength < min_confidence:
                 continue
-            
             if memory_types and entry.memory_type not in memory_types:
                 continue
-            
             tokens = self._estimate_tokens(entry)
             if total_tokens + tokens > self.config.default_budget_tokens:
                 continue
-            
             result.append(entry)
             total_tokens += tokens
         
