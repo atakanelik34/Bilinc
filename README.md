@@ -1,99 +1,108 @@
-# SynapticAI: Verifiable State Plane for Autonomous Agents
+# 🧠⚡ SynapticAI
 
-> **"Remember less. Stay correct longer."**
-> *Neuro-Symbolic Memory That Learns What to Forget.*
+**Semantic Multi-Layer Memory System for AI Agents**
 
----
+SynapticAI gives AI agents a unified memory architecture with semantic search, cross-layer bridging, and master index patterns — so your agent can actually *remember* and *connect the dots*.
 
-## Overview
+## The Problem
 
-SynapticAI is not a memory database. It is the **context control plane for long-running agents**.
+AI agents typically have 4-5 separate memory systems:
+- Short-term injected memory (system prompt)
+- Vector database entries (semantic search)
+- Procedural skills (installation guides, workflows)
+- Session transcripts (conversation history)
+- Config files (tokens, env vars, auth)
 
-### The Problem
+**None of them talk to each other.** You have to query each one separately.
 
-Current agent memory is either:
-- **Vector stores** (easy but drift/conflict handling weak)
-- **Graph databases** (powerful but ops-heavy)
-- **Session replay** (expensive and unbounded)
+## The Solution
 
-SynapticAI introduces **"Recall → Verify → Commit"** — memory is not storage, it is **state management with verification guarantees**.
+SynapticAI connects them all with:
 
-### Why This Approach Wins
+1. **Master Index Pattern** — One authoritative entry per topic
+2. **Semantic Search First** — `fabric_recall` finds relevant info across all layers
+3. **Cross-Layer References** — Entries link to each other (`tags`, `session_id`, source)
+4. **Search Flow Priority** — Single query → ranked results from all layers
 
-**Bigger context kills weak memory products, not strong memory companies.**
-
-- 1M context windows commoditize "retrieve & inject"
-- But they **don't solve**: verification, staleness, conflict resolution, cross-tool continuity
-- SynapticAI solves what context windows can't: **verified, portable, budget-aware state**
-
----
-
-## Architecture Layers
+## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│              OBSERVABILITY LAYER                          │
-│  Memory Debugger │ Provenance Graph │ "Why forget?"       │
-├──────────────────────────────────────────────────────────┤
-│             ADAPTIVE BUDGET LAYER                         │
-│  ContextBudget RL │ Budget-Aware │ Compression            │
-├──────────────────────────────────────────────────────────┤
-│                 STATE PLANE (Core)                        │
-│  Context-independent typed state storage                  │
-├──────────────────────────────────────────────────────────┤
-│           NEURO-SYMBOLIC MEMORY CORE                      │
-│  System 1 (Neural/Fast) │ System 2 (Symbolic/Slow)        │
-│  Episodic │ Procedural  │ Semantic │ Symbolic             │
-├──────────────────────────────────────────────────────────┤
-│           AGM BELIEF REVISION ENGINE                      │
-│  EXPAND │ CONTRACT │ REVISE — formal guarantees           │
-├──────────────────────────────────────────────────────────┤
-│           LEARNABLE FORGETTING ENGINE                     │
-│  Biological decay curves │ Importance-based retention     │
-├──────────────────────────────────────────────────────────┤
-│               VERIFICATION GATE                           │
-│  Recall → VERIFY → COMMIT / REJECT                        │
-└──────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│              fabric_recall "query"          │
+│         (semantic search — first stop)       │
+├─────────────┬───────────┬─────────┬─────────┤
+│  Memory     │  Fabric   │ Session │ Skills  │
+│  (prefs)    │  (notes,  │ (history│ (procs) │
+│  injected   │  decisions│  + LLM  │ + guide │
+│  per-turn)  │  + outcomes) │ sum)  │  lines  │
+└─────────────┴───────────┴─────────┴─────────┘
+         │           │           │
+         └───────────┼───────────┘
+                     ▼
+            Cross-Layer Index
+         (tags, session_id, refs)
 ```
 
----
+## Search Flow
 
-## Quick Start
-
-```python
-from synaptic_state import StatePlane
-
-plane = StatePlane(
-    neural="vector",
-    symbolic="graph",
-    backend="postgresql"
-)
-
-# Commit with verification
-plane.commit(
-    key="user_pref",
-    value={"editor": "cursor", "tabs": 2},
-    verify=True
-)
-
-# Recall with budget
-memories = plane.recall(
-    intent="editor config",
-    budget_tokens=2048,
-    strategy="rl_optimized"
-)
+```
+1. fabric_recall "query"      → semantic search (priority 1)
+2. fabric_search "keyword"    → exact keyword match
+3. session_search "query"     → historical conversations
+4. skills                     → procedural how-tos
+5. memory                     → user preferences (always injected)
 ```
 
----
+## Master Index Structure
 
-## Research Foundation
+Each master index is a single `fabric_write` entry tagged `master-index`:
 
-Built on cutting-edge research:
-- ContextBudget (2604.01664), ACC/CCS (2601.11653), D-MEM (2603.14597)
-- StatePlane (2603.13644), Kumiho AGM (2603.17244), S3-Attention (2601.17702)
+```markdown
+# Master Index — Topic Name
 
----
+## Current Status
+## Components
+## Auth & Config
+## Related Skills
+## Decisions Made
+## Cross-References → other master entries
+```
+
+## Installation
+
+```bash
+# For Hermes Agent users:
+# 1. Clone this repo
+# 2. Run the setup script
+./scripts/setup.sh
+
+# The script creates:
+# - Master index templates in ~/fabric/
+# - unified-search skill in ~/.hermes/skills/
+# - Memory bridge entries
+```
+
+## Usage
+
+Once installed, any agent can retrieve cross-layer memory with:
+
+```
+fabric_recall "any topic"    → ranked semantic results
+fabric_remember "decision"   → log important decisions
+fabric_link "entry_id"       → cross-reference entries
+```
+
+## Why It Works
+
+- **Lightweight** — No new infrastructure, just patterns on existing tools
+- **Agent-native** — Designed for AI agent memory, not human note-taking
+- **Extensible** — Works with fabric, session_search, skills, any config store
+- **Search-first** — Single query replaces 5 separate lookups
 
 ## License
 
 MIT
+
+## Author
+
+Atakan Elik (@atakanelik34)
