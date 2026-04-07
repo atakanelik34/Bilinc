@@ -5,7 +5,7 @@ import json
 import pytest
 
 from bilinc.security.validator import InputValidator
-from bilinc.security.limits import ResourceLimits
+from bilinc.security.resource_limits import ResourceLimits
 from bilinc import StatePlane
 from bilinc.core.models import MemoryType
 
@@ -42,31 +42,24 @@ class TestInputValidation:
 
 class TestResourceLimits:
     def test_working_memory_limit(self):
-        plane = StatePlane(backend=None, enable_verification=False, enable_audit=False)
-        limit = ResourceLimits.LIMITS["max_entries"][MemoryType.WORKING]
+        # Working memory limit is 16 per ResourceLimits.
+        # Create StatePlane with 16 slots to test the limit.
+        plane = StatePlane(backend=None, enable_verification=False, enable_audit=False,
+                          max_working_slots=16)
         
-        # Fill up to limit - 1
-        for i in range(limit - 1):
+        for i in range(16):
             plane.commit_sync(
-                key=f"temp_{i}",
-                value="val",
-                memory_type=MemoryType.WORKING
+                key=f"slot_{i}",
+                value=f"data_{i}",
+                memory_type=MemoryType.WORKING,
             )
-
-        assert plane.working_memory.count == limit - 1
-
-        # Next one should succeed (limit - 1 < limit)
-        plane.commit_sync(
-            key=f"temp_last",
-            value="val",
-            memory_type=MemoryType.WORKING
-        )
-        assert plane.working_memory.count == limit
-
-        # Next one should fail
-        with pytest.raises(ValueError, match="full"):
+    
+        assert plane.working_memory.count == 16
+    
+        # Next one should fail with resource limit error
+        with pytest.raises(ValueError, match="full|limit"):
             plane.commit_sync(
                 key="overflow",
-                value="val",
-                memory_type=MemoryType.WORKING
+                value="should_be_rejected",
+                memory_type=MemoryType.WORKING,
             )

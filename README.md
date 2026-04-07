@@ -3,7 +3,7 @@
 ## Verifiable State Plane for Autonomous Agents
 
 [![PyPI](https://img.shields.io/pypi/v/bilinc)](https://pypi.org/project/bilinc/)
-[![Tests](https://img.shields.io/badge/tests-108%20passed-brightgreen)](https://github.com/atakanelik34/Bilinc)
+[![Tests](https://img.shields.io/badge/tests-124%20passed-brightgreen)](https://github.com/atakanelik34/Bilinc/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)
 
@@ -165,7 +165,7 @@ sync.merge_sync("agent_alpha", "agent_beta")
 | **Phase 3: Belief Engine** | — | AGM + DP Postulates, Knowledge Graph, Multi-Agent Sync, StatePlane Integration | 58 |
 | **Phase 4: MCP + Ecosystem** | v0.4.0a1 | MCP Server v2 (12 tools), Rate Limiter | 16 |
 | **Phase 5: Production** | — | Security Hardening, Observability, Benchmarks, Docs | 13 |
-| **Total** | | | **109 passing** |
+| **Total** | | | **124 passing** |
 
 ## Documentation
 

@@ -99,7 +99,7 @@ class StatePlane:
                     verify=False, importance=1.0, metadata=None):
         """Synchronous wrapper for commit with input validation."""
         from bilinc.security.validator import InputValidator
-        from bilinc.security.limits import ResourceLimits
+        from bilinc.security.resource_limits import ResourceLimits
         
         # 1. Validate Input
         key = InputValidator.validate_key(key)
