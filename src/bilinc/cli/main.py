@@ -35,7 +35,7 @@ def _parse_value(val: str):
     return val
 
 def main():
-    parser = argparse.ArgumentParser(description="Bilinc CLI")
+    parser = argparse.ArgumentParser(description="Bilinc — Verifiable State Plane for Autonomous Agents")
     sub = parser.add_subparsers(dest="command", help="Available commands")
     
     # Commit
