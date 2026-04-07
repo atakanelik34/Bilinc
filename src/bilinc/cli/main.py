@@ -3,11 +3,10 @@
 Bilinc CLI
 
 Usage:
-  synaptic commit --key USER_PREF --value '{"tabs": 2}'
-  synaptic recall --intent "editor settings"
-  synaptic forget --key USER_PREF
-  synaptic explain --key USER_PREF
-  synaptic status
+  bilinc commit --key USER_PREF --value '{"tabs": 2}'
+  bilinc recall --key USER_PREF
+  bilinc forget --key USER_PREF
+  bilinc status
 """
 
 import argparse
@@ -15,6 +14,7 @@ import json
 import sys
 
 from bilinc.core.stateplane import StatePlane
+from bilinc.core.models import MemoryType
 import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
@@ -26,76 +26,75 @@ def main():
     p_commit = sub.add_parser("commit", help="Commit a memory entry")
     p_commit.add_argument("--key", required=True, help="Memory key")
     p_commit.add_argument("--value", required=True, help="Memory value (JSON or string)")
-    p_commit.add_argument("--type", default="episodic", choices=["episodic", "procedural", "semantic", "symbolic"])
-    p_commit.add_argument("--verify", action="store_true", default=True)
-    p_commit.add_argument("--ttl", type=float, default=None)
-    p_commit.add_argument("--source", default="cli")
-    p_commit.add_argument("--session", default="")
+    p_commit.add_argument("--type", default="semantic", 
+                          choices=["episodic", "procedural", "semantic", "working", "spatial"])
+    p_commit.add_argument("--importance", type=float, default=1.0)
     
     # Recall
     p_recall = sub.add_parser("recall", help="Recall memories")
-    p_recall.add_argument("--intent", default="", help="What you're looking for")
-    p_recall.add_argument("--budget", type=int, default=2048)
-    p_recall.add_argument("--strategy", default="rl_optimized")
-    p_recall.add_argument("--min-confidence", type=float, default=0.3)
+    p_recall.add_argument("--key", help="Specific memory key")
+    p_recall.add_argument("--limit", type=int, default=20)
     
     # Forget
     p_forget = sub.add_parser("forget", help="Remove a memory entry")
     p_forget.add_argument("--key", required=True)
     
-    # Explain
-    p_explain = sub.add_parser("explain", help="Explain why a memory was forgotten")
-    p_explain.add_argument("--key", required=True)
-    
     # Status
     sub.add_parser("status", help="Show operational statistics")
     
     args = parser.parse_args()
-    plane = StatePlane()
+    plane = StatePlane(enable_verification=False, enable_audit=False)
+    plane.init_agm()
+    plane.init_knowledge_graph()
     
     if args.command == "commit":
-        result = plane.commit(
+        value = json.loads(args.value) if args.value.startswith(('{', '[')) else args.value
+        result = plane.commit_with_agm(
             key=args.key,
-            value=json.loads(args.value) if args.value.startswith(('{', '[')) else args.value,
+            value=value,
             memory_type=args.type,
-            verify=args.verify,
-            ttl=args.ttl,
-            source=args.source,
-            session_id=args.session,
+            importance=args.importance,
         )
-        print(json.dumps(result, indent=2))
+        print(json.dumps({
+            "success": result.success if hasattr(result, 'success') else True,
+            "key": result.key if hasattr(result, 'key') else args.key,
+        }, indent=2))
     
     elif args.command == "recall":
-        result = plane.recall(
-            intent=args.intent,
-            budget_tokens=args.budget,
-            strategy=args.strategy,
-            min_confidence=args.min_confidence,
-        )
-        output = {
-            "memories": [{"key": m.key, "type": m.memory_type.value, "strength": m.current_strength} for m in result.memories],
-            "total_tokens": result.total_tokens_estimated,
-            "budget_used": f"{result.total_tokens_estimated}/{result.budget_requested}",
-            "stale_count": result.stale_count,
-            "conflict_count": result.conflict_count,
-        }
-        print(json.dumps(output, indent=2))
+        if args.key:
+            entry = plane.agm_engine.belief_state.get_belief(args.key) if hasattr(plane, 'agm_engine') else None
+            if entry:
+                print(json.dumps({"found": True, "key": entry.key, "value": entry.value}, indent=2, default=str))
+            else:
+                print(json.dumps({"found": False, "key": args.key}, indent=2))
+        else:
+            beliefs = plane.agm_engine.belief_state.get_all_beliefs()
+            result = beliefs[:args.limit]
+            print(json.dumps({
+                "count": len(result),
+                "beliefs": [{"key": e.key, "value": e.value} for e in result]
+            }, indent=2, default=str))
     
     elif args.command == "forget":
-        entry = plane.forget(args.key)
-        if entry:
-            print(f"Forgotten: {args.key}")
+        if hasattr(plane, 'agm_engine') and plane.agm_engine:
+            result = plane.agm_engine.contract(args.key)
+            print(json.dumps({"removed": result.success, "key": args.key}, indent=2))
         else:
-            print(f"Key not found: {args.key}")
-    
-    elif args.command == "explain":
-        explanation = plane.explain_forgetting(args.key)
-        print(json.dumps(explanation, indent=2))
+            print(json.dumps({"error": "AGM engine not initialized"}))
     
     elif args.command == "status":
-        stats = plane.get_stats()
-        drift = plane.get_drift_report()
-        print(json.dumps({"stats": stats, "drift": drift}, indent=2))
+        if hasattr(plane, 'agm_engine') and plane.agm_engine:
+            agm = plane.agm_engine
+            kg = plane.knowledge_graph.stats if hasattr(plane, 'knowledge_graph') else {}
+            print(json.dumps({
+                "agm": {
+                    "beliefs": len(agm.belief_state.get_all_beliefs()),
+                    "operations": len(agm.operation_log),
+                },
+                "knowledge_graph": kg,
+            }, indent=2))
+        else:
+            print(json.dumps({"status": "no_components_initialized"}))
     
     else:
         parser.print_help()

@@ -1,0 +1,2 @@
+[console_scripts]
+synaptic = bilinc.cli.main:main

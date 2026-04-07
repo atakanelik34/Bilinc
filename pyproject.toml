@@ -36,6 +36,8 @@ classifiers = [
 dependencies = [
     "mcp>=1.0.0",
     "pydantic>=2.0",
+    "z3-solver>=4.12.0",
+    "networkx>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -52,7 +54,7 @@ server = [
 ]
 
 [project.scripts]
-synaptic = "bilinc.cli.main:main"
+bilinc = "bilinc.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

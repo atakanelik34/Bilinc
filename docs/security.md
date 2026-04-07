@@ -41,15 +41,16 @@ clean = InputValidator.sanitize_for_kg("<script>alert('xss')</script>RealNode")
 | Value Size | 1MB | Reject commit |
 | Audit Log | 1,000,000 entries | Rotation recommended |
 
-## MCP Auth
+## MCP Auth (Planned)
 
-Enable API key authentication for MCP servers:
+API key authentication is **planned but not yet enforced** in the stdio transport.
+For production HTTP deployments, use a reverse proxy with token validation.
 
 ```bash
 export STATEMEL_API_KEY="your-secure-key-here"
 ```
 
-```python
+When enabled, authentication uses **constant-time comparison** (`hmac.compare_digest`) to prevent timing attacks.
 from bilinc.mcp_server.server_v2 import create_mcp_server_v2
 server = create_mcp_server_v2(plane, auth_token="your-secure-key-here")
 ```

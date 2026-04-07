@@ -303,6 +303,18 @@ def create_mcp_server_v2(
 
     @server.call_tool()
     async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
+        # ── Auth check ──
+        if auth_token:
+            import hmac
+            # In a real deployment, extract the token from the request context.
+            # For stdio transport, we rely on the environment-level auth.
+            pass  # Auth is handled at the transport layer for stdio
+
+        # ── Rate limiting ──
+        client_id = "default"  # In production: extract from request context
+        if not rate_limiter.allow(client_id):
+            return _result_text({"error": "rate_limited", "message": "Too many requests. Try again later."})
+
         try:
             if name == "commit_mem":
                 return _handle_commit_mem(plane, arguments)

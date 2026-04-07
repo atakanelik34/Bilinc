@@ -30,7 +30,7 @@ class StatePlane:
     """Phase 2: Full brain-inspired agent memory with verification."""
     
     def __init__(self, backend=None, working_memory=None, max_working_slots=8,
-                 enable_verification=True, enable_audit=True):
+                 enable_verification=False, enable_audit=False):
         self.backend = backend
         self.working_memory = working_memory or WorkingMemory(max_slots=max_working_slots)
         self.estimator = ConfidenceEstimator()
@@ -49,9 +49,10 @@ class StatePlane:
         self.health = HealthCheck(state_plane=self)
     
     async def init(self):
+        """Initialize persistent backend. Required only when using SQLite/PostgreSQL."""
         if self.backend:
             await self.backend.init()
-        if self.enable_audit:
+        if self.enable_audit and self.audit:
             await self.audit.init()
     
     async def commit(self, key, value, memory_type=MemoryType.EPISODIC,
@@ -80,7 +81,7 @@ class StatePlane:
             evicted = self.working_memory.put(entry)
             if evicted and self.backend:
                 await self.backend.save(evicted)
-                if self.enable_audit:
+                if self.enable_audit and self.audit:
                     self.audit.log(OpType.CONSOLIDATE, evicted.key,
                                    before_value=evicted.to_dict(), metadata={"auto_evicted": True})
         else:
@@ -88,7 +89,7 @@ class StatePlane:
                 await self.backend.save(entry)
         
         # Audit log
-        if self.enable_audit:
+        if self.enable_audit and self.audit:
             self.audit.log(OpType.CREATE, key, after_value=entry.to_dict())
         
         self._ops_count += 1
@@ -162,7 +163,7 @@ class StatePlane:
         if ready and self.backend:
             for e in ready:
                 await self.backend.save(e)
-                if self.enable_audit:
+                if self.enable_audit and self.audit:
                     self.audit.log(OpType.CONSOLIDATE, e.key,
                                    before_value={"type": "working"}, after_value=e.to_dict())
                 count += 1
