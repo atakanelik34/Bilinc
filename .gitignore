@@ -1,19 +1,19 @@
-# Env & secrets
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+*.egg
+
+# Build
+build/
+dist/
+*.whl
+*.tar.gz
+
+# DB
+*.db
+
+# IDE
+.venv/
+venv/
 .env
-*.env
-*.pem
-*.key
-
-# Fabric (agent-specific, not for sharing)
-fabric/
-
-# Hermes config (has tokens)
-.hermes/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Editor
-.vscode/
-.idea/

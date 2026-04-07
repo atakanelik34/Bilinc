@@ -41,21 +41,21 @@ clean = InputValidator.sanitize_for_kg("<script>alert('xss')</script>RealNode")
 | Value Size | 1MB | Reject commit |
 | Audit Log | 1,000,000 entries | Rotation recommended |
 
-## MCP Auth (Planned)
+## MCP Auth
 
 API key authentication is **planned but not yet enforced** in the stdio transport.
 For production HTTP deployments, use a reverse proxy with token validation.
+
+When the transport supports it, authentication uses **constant-time comparison** (`hmac.compare_digest`) to prevent timing attacks.
 
 ```bash
 export STATEMEL_API_KEY="your-secure-key-here"
 ```
 
-When enabled, authentication uses **constant-time comparison** (`hmac.compare_digest`) to prevent timing attacks.
+```python
 from bilinc.mcp_server.server_v2 import create_mcp_server_v2
 server = create_mcp_server_v2(plane, auth_token="your-secure-key-here")
 ```
-
-Authentication uses **constant-time comparison** (`hmac.compare_digest`) to prevent timing attacks.
 
 ## Rate Limiting
 
@@ -85,5 +85,5 @@ The audit trail includes:
 1. **Always validate keys**: Use `InputValidator.validate_key()` for user-provided keys.
 2. **Enable audit in production**: `enable_audit=True` for compliance.
 3. **Set appropriate API keys**: Rotate `STATEMEL_API_KEY` periodically.
-4. **Monitor metrics**: Use `/health` endpoint to detect anomalies.
+4. **Monitor metrics**: Use `plane.health.check()` to detect anomalies.
 5. **Backup database**: Regular SQLite/PostgreSQL backups for persistent storage.

@@ -181,6 +181,28 @@ class PostgresBackend(StorageBackend):
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM synaptic_entries ORDER BY importance DESC, created_at DESC")
             return [self._row_to_entry(r) for r in rows]
+    async def load_by_type(self, memory_type: Any, limit: int = 100) -> List[MemoryEntry]:
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM synaptic_entries WHERE memory_type = $1 ORDER BY importance DESC, created_at DESC LIMIT $2",
+                memory_type.value if hasattr(memory_type, 'value') else str(memory_type),
+                limit
+            )
+            return [self._row_to_entry(r) for r in rows]
+    async def load_by_type(self, memory_type, limit=100):
+        """Load entries by memory type."""
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM synaptic_entries WHERE memory_type = $1 ORDER BY importance DESC, created_at DESC LIMIT $2",
+                memory_type.value if hasattr(memory_type, 'value') else str(memory_type),
+                limit
+            )
+            return [self._row_to_entry(r) for r in rows]
+
     async def get_stats(self) -> Dict[str, Any]:
         if not self._initialized:
             await self.init()
