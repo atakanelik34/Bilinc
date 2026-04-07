@@ -869,7 +869,7 @@ def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]
 
 
 def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List[TextContent]:
-    status = {"tool": "status", "version": "0.4.0a1"}
+    status = {"tool": "status", "version": "1.0.0"}
 
     # AGM stats
     if hasattr(plane, "agm_engine") and plane.agm_engine:

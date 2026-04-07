@@ -129,7 +129,7 @@ Operational statistics for all components (AGM, Knowledge Graph, Belief Sync, Wo
 ```json
 {
   "tool": "status",
-  "version": "0.4.0a1",
+  "version": "1.0.0",
   "agm": {
     "beliefs": 42,
     "operations": 164,

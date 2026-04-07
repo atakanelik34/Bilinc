@@ -2,7 +2,7 @@
 
 All notable changes to Bilinc.
 
-## [Unreleased] — v1.0.0 (In Development)
+## [1.0.0] — 2026-04-08
 
 ### Added
 - **Phase 4: MCP Server v2** — 12 tools (commit_mem, recall, forget, revise, status, verify, consolidate, snapshot, diff, rollback, query_graph, contradictions)
