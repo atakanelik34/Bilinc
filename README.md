@@ -5,7 +5,7 @@
 [![PyPI](https://img.shields.io/pypi/v/bilinc)](https://pypi.org/project/bilinc/)
 [![Tests](https://img.shields.io/badge/tests-124%20passed-brightgreen)](https://github.com/atakanelik34/Bilinc/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)
+![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)
 
 > **Remember less. Stay correct longer.**
 > *Neuro-Symbolic Memory That Learns What to Forget.*
