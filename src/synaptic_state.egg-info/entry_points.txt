@@ -1,2 +1,0 @@
-[console_scripts]
-synaptic = synaptic_state.cli.main:main

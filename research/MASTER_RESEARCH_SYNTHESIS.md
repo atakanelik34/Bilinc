@@ -1,4 +1,4 @@
-# SynapticAI — Master Research Synthesis
+# Bilinc — Master Research Synthesis
 > 3 Araştırma Raporunun Birleştirilmiş Analizi
 > Kaynaklar: OpenRouter Internal Subagents (x3), ChatGPT Deep Research, Grok 4.20 Expert Think
 > Tarih: 5 Nisan 2026
@@ -29,8 +29,8 @@ AI Agent Memory, LLM'lerin geçmiş etkileşimleri, kararları, kullanıcı terc
 | Agent Orchestration | $4.7B | $5.6B | $8.0B | $11.0B | ~22% |
 | **Memory-Specific** | $0.3B | $0.55B | $0.95B | **$1.6B** | ~45% |
 
-**SynapticAI SAM:** $0.36B - $1.44B (2027)
-**SynapticAI SOM:** $3.6M - $57.6M (2027)
+**Bilinc SAM:** $0.36B - $1.44B (2027)
+**Bilinc SOM:** $3.6M - $57.6M (2027)
 
 ### Pazarı Şekillendiren Trendler (Ortak Görüş)
 1. **Context window artışı** (1M-2M token standart) → Commodity memory'yi öldürür, stateful memory'yi güçlendirir

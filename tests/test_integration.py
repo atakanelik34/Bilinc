@@ -2,15 +2,15 @@
 import sys, os, json, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from synaptic_state import StatePlane
-from synaptic_state.core.models import MemoryType
-from synaptic_state.integrations.cross_tool import CrossToolTranslator, ToolFormat
-from synaptic_state.adaptive.policy import ContextBudgetPolicy, BudgetState, BudgetAction
+from bilinc import StatePlane
+from bilinc.core.models import MemoryType
+from bilinc.integrations.cross_tool import CrossToolTranslator, ToolFormat
+from bilinc.adaptive.policy import ContextBudgetPolicy, BudgetState, BudgetAction
 
 
 class TestCrossTool:
     def test_import_claude_md(self):
-        plane = StatePlane()
+        plane = StatePlane(backend=None, enable_verification=False, enable_audit=False)
         translator = CrossToolTranslator(plane)
         
         content = """# CLAUDE.md\n## Rules\n- Use 2-space tabs\n\n## Instructions\nRun tests before commit\n"""
@@ -23,9 +23,9 @@ class TestCrossTool:
         os.unlink(path)
     
     def test_export_to_mcp(self):
-        plane = StatePlane()
-        plane.commit(key="pref_theme", value="dark", memory_type="semantic")
-        plane.commit(key="rule_tabs", value="2-space tabs", memory_type="symbolic")
+        plane = StatePlane(backend=None, enable_verification=False, enable_audit=False)
+        plane.commit_sync(key="pref_theme", value="dark", memory_type=MemoryType.WORKING)
+        plane.commit_sync(key="rule_tabs", value="2-space tabs", memory_type=MemoryType.WORKING)
         
         translator = CrossToolTranslator(plane)
         output = translator.export_to_tool("", ToolFormat.MCP)
@@ -34,7 +34,7 @@ class TestCrossTool:
         assert len(data) >= 2
     
     def test_import_export_roundtrip(self):
-        plane = StatePlane()
+        plane = StatePlane(backend=None, enable_verification=False, enable_audit=False)
         translator = CrossToolTranslator(plane)
         
         # Write Claude file
@@ -45,6 +45,9 @@ class TestCrossTool:
         
         keys = translator.import_from_tool(path, ToolFormat.CLAUDE_CODE)
         assert len(keys) > 0
+        
+        # Verify entries are in working memory
+        assert plane.working_memory.count > 0
         
         # Export to MCP
         mcp_output = translator.export_to_tool("", ToolFormat.MCP)

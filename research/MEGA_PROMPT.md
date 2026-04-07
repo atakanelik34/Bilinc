@@ -1,7 +1,7 @@
 # SYNAPTIC AI — MEGA PROMT (v1.0.0)
 **"Context Control Plane for Long-Running AI Agents"**
 
-> Bu doküman, SynapticAI'in sıfırdan kodlanması için gerekli **tüm** teknik kararları, mimari prensipleri, dosya yapısını ve implementasyon detaylarını içerir.
+> Bu doküman, Bilinc'in sıfırdan kodlanması için gerekli **tüm** teknik kararları, mimari prensipleri, dosya yapısını ve implementasyon detaylarını içerir.
 > 3 araştırma raporu (ChatGPT Deep Research, Subagent Trio, Grok 4.20) ve Neo'nun analizinin sentezidir.
 > Bu promptu bir LLM'e veya kendine verdiğinde, **kelimesi kelimesine** uygulaman gerekir.
 
@@ -359,4 +359,4 @@ synaptic health                   # Diagnostics: store size, index health, stale
 > **NOT:** Bu doküman canlıdır. Code yazıldıkça güncellenmelidir. İlk PR'dan sonra v1.1.0'a revize edilecektir.
 
 **Son Güncelleme:** 5 Nisan 2026
-**Yazar:** Neo (SynapticAI Architect)
+**Yazar:** Neo (Bilinc Architect)

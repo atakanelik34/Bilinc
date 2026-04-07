@@ -1,12 +1,12 @@
 """
-SynapticAI - OpenClaw / Hermes Integration Example
+Bilinc - OpenClaw / Hermes Integration Example
 
-Shows how to integrate SynapticAI as a persistent memory layer
+Shows how to integrate Bilinc as a persistent memory layer
 for autonomous coding agents.
 """
 
-from synaptic_state import StatePlane
-from synaptic_state.core.models import MemoryType
+from bilinc import StatePlane
+from bilinc.core.models import MemoryType
 
 # Initialize the state plane
 plane = StatePlane(
@@ -109,4 +109,4 @@ print(f"📊 Conflict groups: {len(drift['conflict_groups'])}")
 print(f"📊 Drift score: {drift['drift_score']:.3f}")
 print(f"📊 Quality score: {drift['quality_score']:.3f}")
 
-print("\n✅ SynapticAI operational")
+print("\n✅ Bilinc operational")

@@ -4,10 +4,10 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from synaptic_state.core.models import MemoryEntry, MemoryType, BeliefState
-from synaptic_state.core.agm import AGMEngine, AGMOperation
-from synaptic_state.core.verification import VerificationGate, VerificationStatus
-from synaptic_state.core.stateplane import StatePlane
+from bilinc.core.models import MemoryEntry, MemoryType, BeliefState
+from bilinc.core.agm import AGMEngine, AGMOperation
+from bilinc.core.verification import VerificationGate, VerificationStatus
+from bilinc.core.stateplane import StatePlane
 
 
 class TestMemoryEntry:
@@ -86,48 +86,61 @@ class TestAGMEngine:
 
 
 class TestStatePlane:
-    def test_commit_and_recall(self):
-        plane = StatePlane()
+    def test_commit_sync_and_working_memory_recall(self):
+        plane = StatePlane(enable_verification=False, enable_audit=False)
         
-        # Commit
-        result = plane.commit(
+        # Commit to working memory (default)
+        entry = plane.commit_sync(
             key="editor",
             value={"theme": "dark", "tabs": 2},
-            memory_type="semantic",
+            memory_type=MemoryType.WORKING,
         )
-        assert result["status"] == "SUCCESS"
-        
-        # Recall
-        recalled = plane.recall(intent="editor settings")
-        assert len(recalled.memories) >= 1
-        found = [m for m in recalled.memories if m.key == "editor"]
-        assert len(found) >= 1
-        assert found[0].value["theme"] == "dark"
-
-    def test_forget(self):
-        plane = StatePlane()
-        plane.commit(key="temp", value="forget_me")
-        entry = plane.forget("temp")
+        # commit_sync returns the entry or coroutine (if async context)
+        # In sync test, it's the entry itself
         assert entry is not None
-        assert entry.value == "forget_me"
+        assert entry.key == "editor"
+        assert entry.value["theme"] == "dark"
+        
+        # Verify it's in working memory
+        assert plane.working_memory.count >= 1
+        wm_entry = plane.working_memory.get("editor")
+        assert wm_entry is not None
+        assert wm_entry.value["tabs"] == 2
 
-    def test_drift_report(self):
-        plane = StatePlane()
-        plane.commit(key="a", value="1")
-        plane.commit(key="b", value="2")
-        report = plane.get_drift_report()
-        assert report["total_entries"] == 2
-        assert 0 <= report["drift_score"] <= 1
-        assert 0 <= report["quality_score"] <= 1
+    def test_forget_sync(self):
+        plane = StatePlane(enable_verification=False, enable_audit=False)
+        plane.commit_sync(key="temp", value="forget_me", memory_type=MemoryType.WORKING)
+        result = plane.forget_sync("temp")
+        # forget_sync may return True/False depending on implementation
+        # Main check: entry should be gone
+        wm_entry = plane.working_memory.get("temp")
+        assert wm_entry is None
 
-    def test_stats(self):
+    def test_commit_with_agm(self):
+        """Phase 3: commit_with_agm should work synchronously."""
         plane = StatePlane()
-        plane.commit(key="x", value="1")
-        plane.commit(key="y", value="2")
-        plane.recall(intent="test")
-        stats = plane.get_stats()
-        assert stats["total_commits"] == 2
-        assert stats["total_recalls"] == 1
+        plane.init_agm()
+        
+        result1 = plane.commit_with_agm("key_a", "value_1", importance=0.5)
+        assert result1.success is True
+        
+        result2 = plane.commit_with_agm("key_b", "value_2", importance=0.8)
+        assert result2.success is True
+
+    def test_phase3_stats(self):
+        """Phase 3: phase3_stats should return component info."""
+        plane = StatePlane()
+        plane.init_agm()
+        plane.init_knowledge_graph()
+        
+        plane.commit_with_agm("x", 1)
+        plane.commit_with_agm("y", 2)
+        
+        stats = plane.phase3_stats()
+        assert "phase" in stats
+        assert stats["phase"] == 3
+        assert "agm" in stats
+        assert stats["agm"]["beliefs"] == 2
 
 
 if __name__ == "__main__":

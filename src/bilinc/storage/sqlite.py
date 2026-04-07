@@ -1,0 +1,190 @@
+"""
+SQLite storage backend for Bilinc.
+
+Local-first, zero-setup persistence for Bilinc memory.
+Supports all 5 brain-mimetic memory types with typed tables.
+"""
+from __future__ import annotations
+
+import json
+import sqlite3
+import time
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.storage.backend import StorageBackend
+
+
+class SQLiteBackend(StorageBackend):
+    """
+    SQLite-backed persistent storage.
+    - Single 'memories' table with JSON column for values
+    - Indexed by key, memory_type, importance, current_strength
+    - WAL mode for concurrent reads
+    """
+    
+    def __init__(self, db_path: str = "bilinc.db"):
+        self.db_path = Path(db_path).expanduser()
+        self._conn = None
+    
+    def _get_conn(self):
+        if self._conn is None:
+            raise RuntimeError("Backend not initialized. Call .init() first.")
+        return self._conn
+    
+    async def init(self) -> None:
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(self.db_path))
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS memories (
+                id TEXT PRIMARY KEY,
+                key TEXT UNIQUE NOT NULL,
+                memory_type TEXT NOT NULL,
+                value TEXT,
+                metadata TEXT DEFAULT '{}',
+                ccs_dimensions TEXT DEFAULT '{}',
+                source TEXT DEFAULT '',
+                session_id TEXT DEFAULT '',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                last_accessed REAL DEFAULT 0.0,
+                access_count INTEGER DEFAULT 0,
+                valid_at REAL,
+                invalid_at REAL,
+                ttl REAL,
+                is_verified INTEGER DEFAULT 0,
+                verification_score REAL DEFAULT 0.0,
+                verification_method TEXT DEFAULT '',
+                importance REAL DEFAULT 1.0,
+                decay_rate REAL DEFAULT 0.01,
+                current_strength REAL DEFAULT 1.0,
+                conflict_id TEXT,
+                superseded_by TEXT
+            )
+        """)
+        
+        for idx_name, col in [
+            ("idx_type", "memory_type"), ("idx_key", "key"),
+            ("idx_strength", "current_strength"), ("idx_importance", "importance"),
+        ]:
+            self._conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON memories ({col})")
+        self._conn.commit()
+    
+    async def save(self, entry: MemoryEntry) -> bool:
+        c = self._get_conn()
+        entry.last_accessed = time.time()
+        entry.access_count += 1
+        entry.updated_at = time.time()
+        c.execute("""
+            INSERT INTO memories (id, key, memory_type, value, metadata, ccs_dimensions,
+                source, session_id, created_at, updated_at,
+                last_accessed, access_count, valid_at, invalid_at, ttl,
+                is_verified, verification_score, verification_method,
+                importance, decay_rate, current_strength, conflict_id, superseded_by)
+            VALUES (:id, :key, :memory_type, :value, :metadata, :ccs,
+                :source, :session_id, :created_at, :updated_at,
+                :last_accessed, :access_count, :valid_at, :invalid_at, :ttl,
+                :is_verified, :verification_score, :verification_method,
+                :importance, :decay_rate, :current_strength, :conflict_id, :superseded_by)
+            ON CONFLICT(key) DO UPDATE SET
+                memory_type=:memory_type, value=:value, metadata=:metadata, ccs_dimensions=:ccs,
+                updated_at=:updated_at, last_accessed=:last_accessed,
+                access_count=:access_count,
+                is_verified=:is_verified, verification_score=:verification_score,
+                verification_method=:verification_method,
+                importance=:importance, decay_rate=:decay_rate,
+                current_strength=:current_strength,
+                conflict_id=:conflict_id, superseded_by=:superseded_by
+        """, {
+            "id": entry.id, "key": entry.key, "memory_type": entry.memory_type.value,
+            "value": json.dumps(entry.value) if entry.value is not None else None,
+            "metadata": json.dumps(entry.metadata), "ccs": json.dumps(entry.ccs_dimensions),
+            "source": entry.source, "session_id": entry.session_id,
+            "created_at": entry.created_at, "updated_at": entry.updated_at,
+            "last_accessed": entry.last_accessed, "access_count": entry.access_count,
+            "valid_at": entry.valid_at, "invalid_at": entry.invalid_at, "ttl": entry.ttl,
+            "is_verified": int(entry.is_verified),
+            "verification_score": entry.verification_score,
+            "verification_method": entry.verification_method,
+            "importance": entry.importance, "decay_rate": entry.decay_rate,
+            "current_strength": entry.current_strength,
+            "conflict_id": entry.conflict_id, "superseded_by": entry.superseded_by,
+        })
+        c.commit()
+        return True
+    
+    async def load(self, key: str) -> Optional[MemoryEntry]:
+        row = self._get_conn().execute("SELECT * FROM memories WHERE key = ?", (key,)).fetchone()
+        return self._row_to_entry(row) if row else None
+    
+    async def load_by_type(self, memory_type: MemoryType, limit: int = 100) -> List[MemoryEntry]:
+        rows = self._get_conn().execute(
+            "SELECT * FROM memories WHERE memory_type = ? ORDER BY importance DESC LIMIT ?",
+            (memory_type.value, limit)
+        ).fetchall()
+        return [self._row_to_entry(r) for r in rows]
+    
+    async def load_high_priority(self, limit: int = 50) -> List[MemoryEntry]:
+        rows = self._get_conn().execute("""
+            SELECT * FROM memories WHERE (invalid_at IS NULL OR invalid_at > ?)
+              AND current_strength > 0.1
+            ORDER BY importance * current_strength DESC LIMIT ?
+        """, (time.time(), limit)).fetchall()
+        return [self._row_to_entry(r) for r in rows]
+    
+
+    async def load_stale(self):
+        import time
+        now = time.time()
+        rows = self._get_conn().execute("""
+            SELECT * FROM memories WHERE invalid_at IS NOT NULL AND invalid_at < ? OR current_strength < 0.1
+            ORDER BY current_strength ASC
+        """, (now,)).fetchall()
+        from bilinc.core.models import MemoryEntry
+        return [self._row_to_entry(r) for r in rows]
+
+    async def delete(self, key: str) -> bool:
+        r = self._get_conn().execute("DELETE FROM memories WHERE key = ?", (key,))
+        self._get_conn().commit()
+        return r.rowcount > 0
+    
+    async def list_all(self) -> List[MemoryEntry]:
+        rows = self._get_conn().execute("SELECT * FROM memories ORDER BY created_at DESC").fetchall()
+        return [self._row_to_entry(r) for r in rows]
+    
+    async def count_by_type(self) -> Dict[str, int]:
+        rows = self._get_conn().execute("SELECT memory_type, COUNT(*) as cnt FROM memories GROUP BY memory_type")
+        return {r["memory_type"]: r["cnt"] for r in rows}
+    
+    async def stats(self) -> Dict:
+        c = self._get_conn()
+        total = c.execute("SELECT COUNT(*) as cnt FROM memories").fetchone()["cnt"]
+        by_type = await self.count_by_type()
+        db_size = self.db_path.stat().st_size if self.db_path.exists() else 0
+        return {"total_entries": total, "by_type": by_type, "db_size_bytes": db_size, "db_path": str(self.db_path)}
+    
+    async def close(self) -> None:
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+    
+    def _row_to_entry(self, row: sqlite3.Row) -> MemoryEntry:
+        return MemoryEntry(
+            id=row["id"], memory_type=MemoryType(row["memory_type"]),
+            key=row["key"], value=json.loads(row["value"]) if row["value"] is not None else None,
+            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+            ccs_dimensions=json.loads(row["ccs_dimensions"]) if row["ccs_dimensions"] else {},
+            source=row["source"] or "", session_id=row["session_id"] or "",
+            created_at=row["created_at"], updated_at=row["updated_at"],
+            last_accessed=row["last_accessed"], access_count=row["access_count"],
+            valid_at=row["valid_at"], invalid_at=row["invalid_at"], ttl=row["ttl"],
+            is_verified=bool(row["is_verified"]), verification_score=row["verification_score"],
+            verification_method=row["verification_method"] or "",
+            importance=row["importance"], decay_rate=row["decay_rate"],
+            current_strength=row["current_strength"],
+            conflict_id=row["conflict_id"], superseded_by=row["superseded_by"],
+        )

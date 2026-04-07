@@ -3,12 +3,12 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "synaptic-state"
-version = "0.1.0"
+name = "bilinc"
+version = "1.0.0a1"
 description = "Verifiable State Plane for Autonomous Agents"
 readme = "README.md"
 license = {text = "MIT"}
-authors = [{name = "SynapticAI Team"}]
+authors = [{name = "Bilinc Team"}]
 requires-python = ">=3.9"
 keywords = [
     "ai-agent-memory",
@@ -52,7 +52,7 @@ server = [
 ]
 
 [project.scripts]
-synaptic = "synaptic_state.cli.main:main"
+synaptic = "bilinc.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

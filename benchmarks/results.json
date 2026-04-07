@@ -1,0 +1,46 @@
+{
+  "retrieval": {
+    "benchmark": "retrieval_latency",
+    "100_entries": {
+      "operation": "recall_all",
+      "count": 50,
+      "entries_returned": 8,
+      "p50_ms": 0.004,
+      "p95_ms": 0.008,
+      "p99_ms": 0.025
+    },
+    "1000_entries": {
+      "operation": "recall_all",
+      "count": 50,
+      "p50_ms": 0.004,
+      "p95_ms": 0.004,
+      "p99_ms": 0.011,
+      "total_ms": 13.922,
+      "entries_returned": 8
+    }
+  },
+  "verification": {
+    "benchmark": "verification_accuracy",
+    "true_positive_rate": 0.012,
+    "false_positive_rate": 0.02,
+    "false_negative_rate": 0.0,
+    "accuracy": 0.0114,
+    "verification_time_ms_1000": 11.0
+  },
+  "consolidation": {
+    "benchmark": "consolidation_efficiency",
+    "working_memory_capacity": 8,
+    "entries_before": 8,
+    "stale_entries": 0,
+    "consolidation_p50_ms": 0.001,
+    "consolidation_p95_ms": 0.001
+  },
+  "agm_stress": {
+    "benchmark": "agm_stress",
+    "operations": 1000,
+    "conflicts_resolved": 374,
+    "avg_latency_ms": 0.015,
+    "p50_ms": 0.012,
+    "p95_ms": 0.025
+  }
+}
