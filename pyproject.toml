@@ -43,7 +43,7 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "pytest-asyncio>=0.21",
+    "pytest-asyncio>=0.23",
     "mypy>=1.0",
     "ruff>=0.1",
 ]
@@ -60,6 +60,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "ignore:unclosed event loop:ResourceWarning",
     "ignore:Exception ignored in.*BaseEventLoop:pytest.PytestUnraisableExceptionWarning",
