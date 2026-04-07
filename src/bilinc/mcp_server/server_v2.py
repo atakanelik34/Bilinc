@@ -303,7 +303,13 @@ def create_mcp_server_v2(
 
     @server.call_tool()
     async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
-        # ── Auth check ──
+        # ── Auth check (placeholder — not enforced in stdio transport) ──
+        # For HTTP transport: extract bearer token and validate against auth_token.
+        # For stdio: auth is handled at the process/environment level.
+        if auth_token:
+            pass  # TODO: Implement request-level auth validation for HTTP transport
+
+        # ── Rate limiting ──
         if auth_token:
             import hmac
             # In a real deployment, extract the token from the request context.
