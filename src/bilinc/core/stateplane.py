@@ -13,6 +13,7 @@ Integrates:
 """
 from __future__ import annotations
 
+import logging
 import time, json
 from typing import Any, Dict, List, Optional
 from bilinc.core.models import MemoryEntry, MemoryType
@@ -24,6 +25,10 @@ from bilinc.core.audit import AuditTrail, OpType
 from bilinc.storage.backend import StorageBackend
 from bilinc.observability.metrics import MetricsCollector
 from bilinc.observability.health import HealthCheck
+from bilinc.observability.logging import log_event
+
+
+logger = logging.getLogger(__name__)
 
 
 class StatePlane:
@@ -41,59 +46,152 @@ class StatePlane:
         self.enable_verification = enable_verification
         self.enable_audit = enable_audit
         self.verifier = StateVerifier() if enable_verification else None
-        self.audit = AuditTrail() if enable_audit else None
+        self.audit = self._build_audit_trail() if enable_audit else None
         self._ops_count = 0
 
-        # Observability (Phase 5)
+        # Observability (Phase 4)
         self.metrics = MetricsCollector()
         self.health = HealthCheck(state_plane=self)
+
+    def _build_audit_trail(self) -> AuditTrail:
+        """Bind the audit trail to the persistence layer when possible."""
+        if self.backend and hasattr(self.backend, "audit_db_path"):
+            return AuditTrail(db_path=self.backend.audit_db_path)
+        return AuditTrail()
+
+    @staticmethod
+    def _entry_to_state(entry: MemoryEntry) -> Dict[str, Any]:
+        return entry.to_dict()
+
+    async def _restore_backend_entry(self, entry: MemoryEntry) -> bool:
+        if self.backend and hasattr(self.backend, "restore"):
+            return await self.backend.restore(entry)
+        return await self.backend.save(entry)
+
+    async def _persistent_state(self) -> Dict[str, Dict[str, Any]]:
+        if not self.backend:
+            return {}
+        entries = await self.backend.list_all()
+        return {entry.key: self._entry_to_state(entry) for entry in entries}
+
+    def _backend_name(self) -> str:
+        if self.backend is None:
+            return "in_memory"
+        name = self.backend.__class__.__name__
+        return name[:-7].lower() if name.endswith("Backend") else name.lower()
+
+    def _record_success(self, operation: str, start_time: float, **fields: Any) -> None:
+        elapsed = (time.perf_counter() - start_time) * 1000
+        self.metrics.record_operation(operation, elapsed)
+        self.health.update_gauge_on_metrics(self.metrics)
+        log_event(
+            logger,
+            "info",
+            "stateplane_operation",
+            operation=operation,
+            status="success",
+            backend=self._backend_name(),
+            latency_ms=round(elapsed, 3),
+            **fields,
+        )
+
+    def _record_failure(self, operation: str, start_time: float, error: Exception, **fields: Any) -> None:
+        elapsed = (time.perf_counter() - start_time) * 1000
+        self.metrics.increment("backend_errors_total")
+        self.metrics.increment(f"{operation}_failures_total")
+        self.metrics.record_latency(f"{operation}_latency_ms", elapsed)
+        self.health.update_gauge_on_metrics(self.metrics)
+        log_event(
+            logger,
+            "error",
+            "stateplane_operation",
+            operation=operation,
+            status="failed",
+            backend=self._backend_name(),
+            latency_ms=round(elapsed, 3),
+            error_type=type(error).__name__,
+            error=str(error),
+            **fields,
+        )
     
     async def init(self):
         """Initialize persistent backend. Required only when using SQLite/PostgreSQL."""
-        if self.backend:
-            await self.backend.init()
-        if self.enable_audit and self.audit:
-            await self.audit.init()
+        start_time = time.perf_counter()
+        try:
+            if self.backend:
+                await self.backend.init()
+            if self.enable_audit and self.audit:
+                await self.audit.init()
+            self._record_success("init", start_time)
+        except Exception as exc:
+            self._record_failure("init", start_time, exc)
+            raise
     
     async def commit(self, key, value, memory_type=MemoryType.EPISODIC,
                      verify=False, importance=1.0, metadata=None):
+        start_time = time.perf_counter()
         entry = MemoryEntry(key=key, value=value, memory_type=memory_type,
                            importance=importance, metadata=metadata or {})
         entry.decay_rate = memory_type.default_decay_rate
-        
-        # Verification pre-check
-        if self.enable_verification and self.verifier and entry.value is not None:
-            entries_data = [{"key": key, "value": value, "memory_type": memory_type.value,
-                           "importance": importance, "is_verified": False,
-                           "current_strength": 1.0, "verification_score": 0.0}]
-            results = self.verifier.verify_state(entries_data)
-            failed = [r for r in results if not r.valid]
-            if failed:
-                entry.is_verified = False
-                entry.verification_score = 0.0
-                entry.metadata["verification_failed"] = [r.rule_name for r in failed]
+        previous_entry = None
+
+        try:
+            # Verification pre-check
+            if self.enable_verification and self.verifier and entry.value is not None:
+                entries_data = [{"key": key, "value": value, "memory_type": memory_type.value,
+                               "importance": importance, "is_verified": False,
+                               "current_strength": 1.0, "verification_score": 0.0}]
+                results = self.verifier.verify_state(entries_data)
+                failed = [r for r in results if not r.valid]
+                if failed:
+                    entry.is_verified = False
+                    entry.verification_score = 0.0
+                    entry.metadata["verification_failed"] = [r.rule_name for r in failed]
+                else:
+                    entry.is_verified = True
+                    entry.verification_score = 0.8
+
+            # Store entry
+            if memory_type == MemoryType.WORKING:
+                previous_entry = self.working_memory.get(key)
+                evicted = self.working_memory.put(entry)
+                if evicted and self.backend:
+                    await self.backend.save(evicted)
+                    if self.enable_audit and self.audit:
+                        self.audit.log(OpType.CONSOLIDATE, evicted.key,
+                                       before_value=evicted.to_dict(), metadata={"auto_evicted": True})
             else:
-                entry.is_verified = True
-                entry.verification_score = 0.8
-        
-        # Store entry
-        if memory_type == MemoryType.WORKING:
-            evicted = self.working_memory.put(entry)
-            if evicted and self.backend:
-                await self.backend.save(evicted)
-                if self.enable_audit and self.audit:
-                    self.audit.log(OpType.CONSOLIDATE, evicted.key,
-                                   before_value=evicted.to_dict(), metadata={"auto_evicted": True})
-        else:
-            if self.backend:
-                await self.backend.save(entry)
-        
-        # Audit log
-        if self.enable_audit and self.audit:
-            self.audit.log(OpType.CREATE, key, after_value=entry.to_dict())
-        
-        self._ops_count += 1
-        return entry
+                if self.backend:
+                    previous_entry = await self.backend.load(key)
+                    await self.backend.save(entry)
+
+            # Audit log
+            if self.enable_audit and self.audit:
+                op_type = OpType.UPDATE if previous_entry else OpType.CREATE
+                self.audit.log(
+                    op_type,
+                    key,
+                    before_value=previous_entry.to_dict() if previous_entry else None,
+                    after_value=entry.to_dict(),
+                )
+
+            self._ops_count += 1
+            self._record_success(
+                "commit",
+                start_time,
+                key=key,
+                memory_type=memory_type.value if hasattr(memory_type, "value") else str(memory_type),
+            )
+            return entry
+        except Exception as exc:
+            self._record_failure(
+                "commit",
+                start_time,
+                exc,
+                key=key,
+                memory_type=memory_type.value if hasattr(memory_type, "value") else str(memory_type),
+            )
+            raise
     
     def commit_sync(self, key, value, memory_type=MemoryType.EPISODIC,
                     verify=False, importance=1.0, metadata=None):
@@ -113,7 +211,6 @@ class StatePlane:
 
         # 3. Execute
         import asyncio
-        start_time = time.perf_counter()
         effective_memory_type = memory_type
         if self.backend is None and memory_type != MemoryType.WORKING:
             effective_memory_type = MemoryType.WORKING
@@ -128,31 +225,44 @@ class StatePlane:
             return asyncio.run(
                 self.commit(key, value, effective_memory_type, verify, importance, metadata)
             )
-        finally:
-            if hasattr(self, 'metrics'):
-                elapsed = (time.perf_counter() - start_time) * 1000
-                self.metrics.increment("commits_total")
-                self.metrics.record_latency("commit_latency_ms", elapsed)
-            if hasattr(self, 'health'):
-                self.health.update_gauge_on_metrics(self.metrics)
     
     def recall_all_sync(self):
         """Synchronous recall of all entries from working memory. For in-memory/test use."""
         return self.working_memory.get_all()
     
     async def recall(self, key=None, memory_type=None, limit=50):
-        results = []
-        if key:
-            wm = self.working_memory.get(key)
-            if wm: results.append(wm)
-        if self.backend:
-            if key and not results:
-                p = await self.backend.load(key)
-                if p: results.append(p)
-            elif memory_type:
-                results.extend(await self.backend.load_by_type(memory_type, limit=limit))
-        self._ops_count += 1
-        return results
+        start_time = time.perf_counter()
+        try:
+            results = []
+            if key:
+                wm = self.working_memory.get(key)
+                if wm:
+                    results.append(wm)
+            if self.backend:
+                if key and not results:
+                    p = await self.backend.load(key)
+                    if p:
+                        results.append(p)
+                elif memory_type:
+                    results.extend(await self.backend.load_by_type(memory_type, limit=limit))
+            self._ops_count += 1
+            self._record_success(
+                "recall",
+                start_time,
+                key=key,
+                memory_type=memory_type.value if hasattr(memory_type, "value") else memory_type,
+                result_count=len(results),
+            )
+            return results
+        except Exception as exc:
+            self._record_failure(
+                "recall",
+                start_time,
+                exc,
+                key=key,
+                memory_type=memory_type.value if hasattr(memory_type, "value") else memory_type,
+            )
+            raise
     
     async def recall_all_working(self):
         return self.working_memory.get_all()
@@ -169,61 +279,149 @@ class StatePlane:
                 count += 1
         return count
     
-    async def diff(self, timestamp_a: float, timestamp_b: float) -> Dict[str, List[str]]:
-        """Get diff between two timestamps using audit trail."""
-        if not self.enable_audit or not self.audit:
-            return {"added": [], "modified": [], "removed": []}
-        
-        history = self.audit.get_history(limit=1000)
-        state_a = {}
-        state_b = {}
-        
-        for entry in history:
-            if entry.timestamp <= timestamp_a:
-                if entry.op_type in ("create", "update"):
-                    state_a[entry.key] = json.loads(entry.after_value) if entry.after_value else None
-                elif entry.op_type == "delete":
-                    state_a.pop(entry.key, None)
-            if entry.timestamp <= timestamp_b:
-                if entry.op_type in ("create", "update"):
-                    state_b[entry.key] = json.loads(entry.after_value) if entry.after_value else None
-                elif entry.op_type == "delete":
-                    state_b.pop(entry.key, None)
-        
-        all_keys = set(list(state_a.keys()) + list(state_b.keys()))
-        added = [k for k in all_keys if k in state_b and k not in state_a]
-        removed = [k for k in all_keys if k in state_a and k not in state_b]
-        modified = [k for k in all_keys if k in state_a and k in state_b and state_a[k] != state_b[k]]
-        
-        return {"added": added, "modified": modified, "removed": removed}
-    
-    async def rollback(self, target_timestamp: float) -> int:
-        """Rollback state to a previous point in time."""
-        if not self.enable_audit or not self.audit:
-            return 0
-        
-        restored_state = self.audit.get_state_at(target_timestamp)
-        restored_count = 0
-        
-        # Restore each key
-        for key, state_info in restored_state.items():
-            if state_info.get("restored"):
-                continue
-            if state_info.get("value") is not None and self.backend:
+    async def diff(self, timestamp_a: float, timestamp_b: float) -> Dict[str, Any]:
+        """Return a reconstructable diff between two timestamps using the audit trail."""
+        start_time = time.perf_counter()
+        try:
+            if not self.enable_audit or not self.audit:
+                result = {
+                    "timestamp_a": timestamp_a,
+                    "timestamp_b": timestamp_b,
+                    "added": [],
+                    "modified": [],
+                    "removed": [],
+                    "counts": {"added": 0, "modified": 0, "removed": 0},
+                }
+                self._record_success("diff", start_time, added=0, modified=0, removed=0)
+                return result
+
+            state_a = self.audit.get_state_at(timestamp_a)
+            state_b = self.audit.get_state_at(timestamp_b)
+            all_keys = set(list(state_a.keys()) + list(state_b.keys()))
+            added = [
+                {"key": key, "after": state_b[key]}
+                for key in sorted(all_keys) if key in state_b and key not in state_a
+            ]
+            removed = [
+                {"key": key, "before": state_a[key]}
+                for key in sorted(all_keys) if key in state_a and key not in state_b
+            ]
+            modified = [
+                {"key": key, "before": state_a[key], "after": state_b[key]}
+                for key in sorted(all_keys)
+                if key in state_a and key in state_b and state_a[key] != state_b[key]
+            ]
+
+            result = {
+                "timestamp_a": timestamp_a,
+                "timestamp_b": timestamp_b,
+                "added": added,
+                "modified": modified,
+                "removed": removed,
+                "counts": {
+                    "added": len(added),
+                    "modified": len(modified),
+                    "removed": len(removed),
+                },
+            }
+            self._record_success(
+                "diff",
+                start_time,
+                added=len(added),
+                modified=len(modified),
+                removed=len(removed),
+            )
+            return result
+        except Exception as exc:
+            self._record_failure("diff", start_time, exc)
+            raise
+
+    async def rollback(self, target_timestamp: float) -> Dict[str, Any]:
+        """Restore persistent state to the exact state recorded at the target timestamp."""
+        start_time = time.perf_counter()
+        try:
+            if not self.backend or not self.enable_audit or not self.audit:
+                raise NotImplementedError("Rollback requires persistent storage with audit trail enabled.")
+
+            target_state = self.audit.get_state_at(target_timestamp)
+            current_state = await self._persistent_state()
+
+            deleted_keys = []
+            created_keys = []
+            updated_keys = []
+
+            for key in sorted(set(current_state.keys()) - set(target_state.keys())):
                 existing = await self.backend.load(key)
+                await self.backend.delete(key)
+                self.working_memory.remove(key)
+                if self.enable_audit and self.audit:
+                    self.audit.log(
+                        OpType.DELETE,
+                        key,
+                        before_value=existing.to_dict() if existing else current_state[key],
+                        metadata={"rollback": True, "target_timestamp": target_timestamp},
+                    )
+                deleted_keys.append(key)
+
+            for key, target_entry_dict in target_state.items():
+                existing = await self.backend.load(key)
+                if existing and existing.to_dict() == target_entry_dict:
+                    continue
+
+                restored_entry = MemoryEntry.from_dict(target_entry_dict)
+                await self._restore_backend_entry(restored_entry)
+                self.working_memory.remove(key)
+
+                if self.enable_audit and self.audit:
+                    op_type = OpType.UPDATE if existing else OpType.CREATE
+                    self.audit.log(
+                        op_type,
+                        key,
+                        before_value=existing.to_dict() if existing else None,
+                        after_value=restored_entry.to_dict(),
+                        metadata={"rollback": True, "target_timestamp": target_timestamp},
+                    )
+
                 if existing:
-                    existing.value = state_info["value"]
-                    existing.updated_at = time.time()
-                    await self.backend.save(existing)
-                    restored_count += 1
-        
-        if self.enable_audit:
-            self.audit.log(OpType.ROLLBACK, "__system",
-                          before_value={"target": target_timestamp},
-                          after_value={"restored_count": restored_count},
-                          metadata={"restored_keys": list(restored_state.keys())})
-        
-        return restored_count
+                    updated_keys.append(key)
+                else:
+                    created_keys.append(key)
+
+            if self.enable_audit and self.audit:
+                self.audit.log(
+                    OpType.ROLLBACK,
+                    "__system",
+                    before_value={"target_timestamp": target_timestamp},
+                    after_value={
+                        "created": created_keys,
+                        "updated": updated_keys,
+                        "deleted": deleted_keys,
+                    },
+                    metadata={"target_timestamp": target_timestamp},
+                )
+
+            result = {
+                "target_timestamp": target_timestamp,
+                "created": created_keys,
+                "updated": updated_keys,
+                "deleted": deleted_keys,
+                "counts": {
+                    "created": len(created_keys),
+                    "updated": len(updated_keys),
+                    "deleted": len(deleted_keys),
+                },
+            }
+            self._record_success(
+                "rollback",
+                start_time,
+                created=len(created_keys),
+                updated=len(updated_keys),
+                deleted=len(deleted_keys),
+            )
+            return result
+        except Exception as exc:
+            self._record_failure("rollback", start_time, exc, target_timestamp=target_timestamp)
+            raise
     
     async def verify(self, key: str) -> Dict[str, Any]:
         """Full verification of a single entry + audit trail."""
@@ -265,22 +463,33 @@ class StatePlane:
         return result
     
     async def snapshot(self) -> Dict[str, Any]:
-        """Create a verifiable state snapshot."""
-        total = 0
-        by_type = {}
-        if self.backend:
-            total = (await self.backend.stats()).get("total_entries", 0)
-            by_type = (await self.backend.stats()).get("by_type", {})
-        
-        return {
-            "timestamp": time.time(),
-            "total_entries": total,
-            "by_type": by_type,
-            "working_memory_count": self.working_memory.count,
-            "root_hash": self.audit.get_root_hash() if self.enable_audit else None,
-            "integrity": self.audit.verify_integrity() if self.enable_audit else None,
-            "ops_count": self._ops_count,
-        }
+        """Create a verifiable snapshot of the current state."""
+        start_time = time.perf_counter()
+        try:
+            total = 0
+            by_type = {}
+            entries = {}
+            if self.backend:
+                backend_stats = await self.backend.stats()
+                total = backend_stats.get("total_entries", 0) or backend_stats.get("total", 0)
+                by_type = backend_stats.get("by_type", {})
+                entries = await self._persistent_state()
+
+            result = {
+                "timestamp": time.time(),
+                "total_entries": total,
+                "by_type": by_type,
+                "entries": entries,
+                "working_memory_count": self.working_memory.count,
+                "root_hash": self.audit.get_root_hash() if self.enable_audit else None,
+                "integrity": self.audit.verify_integrity() if self.enable_audit else None,
+                "ops_count": self._ops_count,
+            }
+            self._record_success("snapshot", start_time, total_entries=total)
+            return result
+        except Exception as exc:
+            self._record_failure("snapshot", start_time, exc)
+            raise
     
     def forget_sync(self, key):
         """Synchronous wrapper for forget."""
@@ -288,13 +497,27 @@ class StatePlane:
         return asyncio.run(self.forget(key))
 
     async def forget(self, key):
-        self.working_memory.remove(key)
-        result = False
-        if self.backend:
-            result = await self.backend.delete(key)
-        if self.enable_audit:
-            self.audit.log(OpType.FORGET, key, metadata={"deleted": result})
-        return result
+        start_time = time.perf_counter()
+        try:
+            wm_entry = self.working_memory.get(key)
+            self.working_memory.remove(key)
+            result = False
+            existing = None
+            if self.backend:
+                existing = await self.backend.load(key)
+                result = await self.backend.delete(key)
+            if self.enable_audit:
+                self.audit.log(
+                    OpType.FORGET,
+                    key,
+                    before_value=existing.to_dict() if existing else (wm_entry.to_dict() if wm_entry else None),
+                    metadata={"deleted": result},
+                )
+            self._record_success("forget", start_time, key=key, removed=result)
+            return result
+        except Exception as exc:
+            self._record_failure("forget", start_time, exc, key=key)
+            raise
     
     async def route_query(self, query, entries=None):
         """Route query through System 1/2 arbiter."""
@@ -311,12 +534,17 @@ class StatePlane:
                 "root_hash": self.audit.get_root_hash(),
                 "integrity": self.audit.verify_integrity(),
             }
+        health_readiness = self.health.readiness()
         return {
             "working_memory": wm_stats,
             "backend": backend_stats,
             "audit": audit_info,
             "ops_count": self._ops_count,
             "arbiter": self.arbiter.get_stats(),
+            "health": {
+                "status": health_readiness["status"],
+                "issues": health_readiness["issues"],
+            },
         }
 
     # ── Phase 3 Integrations ─────────────────────────────────
@@ -346,18 +574,23 @@ class StatePlane:
         Commit a memory entry and auto-apply AGM revision.
         If AGM engine is not initialized, falls back to basic storage.
         """
-        entry = MemoryEntry(
-            key=key, value=value, memory_type=MemoryType(memory_type),
-            importance=importance,
-        )
-        if hasattr(self, "agm_engine") and self.agm_engine:
-            result = self.agm_engine.revise(entry)
-            # Also ingest into knowledge graph if available
-            if hasattr(self, "knowledge_graph") and self.knowledge_graph:
-                self.knowledge_graph.ingest_memory_entry(entry)
-            return result
-        # Fallback: no AGM — just return the entry
-        return entry
+        start_time = time.perf_counter()
+        try:
+            entry = MemoryEntry(
+                key=key, value=value, memory_type=MemoryType(memory_type),
+                importance=importance,
+            )
+            if hasattr(self, "agm_engine") and self.agm_engine:
+                result = self.agm_engine.revise(entry)
+                if hasattr(self, "knowledge_graph") and self.knowledge_graph:
+                    self.knowledge_graph.ingest_memory_entry(entry)
+                self._record_success("commit", start_time, key=key, memory_type=memory_type, mode="agm")
+                return result
+            self._record_success("commit", start_time, key=key, memory_type=memory_type, mode="fallback")
+            return entry
+        except Exception as exc:
+            self._record_failure("commit", start_time, exc, key=key, memory_type=memory_type, mode="agm")
+            raise
 
     def query_graph(self, entity: str, max_depth: int = 2) -> Dict[str, Any]:
         """Query the knowledge graph for an entity."""

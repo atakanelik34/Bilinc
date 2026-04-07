@@ -41,23 +41,58 @@ clean = InputValidator.sanitize_for_kg("<script>alert('xss')</script>RealNode")
 | Value Size | 1MB | Reject commit |
 | Audit Log | 1,000,000 entries | Rotation recommended |
 
-## MCP Auth (Planned)
+## MCP Auth
 
-API key authentication is **not yet enforced** in the stdio transport.
-For production HTTP deployments, use a reverse proxy with token validation.
+Bilinc now has two distinct MCP trust models:
 
-When HTTP transport is implemented, authentication will use **constant-time comparison** (`hmac.compare_digest`) to prevent timing attacks.
+- **stdio transport**: trusted local process boundary, no request-level auth
+- **HTTP transport**: Bearer API key auth is enforced
 
-The `create_mcp_server_v2()` function accepts an `auth_token` parameter for API-key validation,
-but this is **not currently enforced** in the stdio transport.
+For HTTP deployments:
+- set `STATEMEL_API_KEY` or pass `auth_token=...`
+- send `Authorization: Bearer <token>`
+- token validation uses **constant-time comparison** (`hmac.compare_digest`)
+
+HTTP app factory:
+
+```python
+from bilinc.mcp_server.server_v2 import create_mcp_http_app
+
+app = create_mcp_http_app(auth_token="super-secret")
+```
+
+Default behavior is fail-fast:
+- if HTTP auth is not configured and `allow_unauthenticated=False`, app creation raises an error
+
+For local development only:
+
+```python
+app = create_mcp_http_app(allow_unauthenticated=True)
+```
 
 ## Rate Limiting
 
 Default: **10 requests burst, 1 request/second refill** per client.
 
+- **stdio**: single local bucket (`stdio`)
+- **HTTP authenticated**: per-token bucket using a stable token hash
+- **HTTP unauthenticated dev mode**: per-client-IP bucket
+
 ```python
 server = create_mcp_server_v2(plane, max_tokens=20, refill_rate=2.0)
 ```
+
+For HTTP:
+
+```python
+app = create_mcp_http_app(auth_token="super-secret", max_tokens=20, refill_rate=2.0)
+```
+
+HTTP error codes:
+- `401`: missing or invalid bearer token
+- `429`: rate limit exceeded
+- `400`: malformed request / validation failure
+- `500`: internal tool failure
 
 ## Audit Trail
 
@@ -78,6 +113,6 @@ The audit trail includes:
 
 1. **Always validate keys**: Use `InputValidator.validate_key()` for user-provided keys.
 2. **Enable audit in production**: `enable_audit=True` for compliance.
-3. **Set appropriate API keys**: Rotate `STATEMEL_API_KEY` periodically.
-4. **Monitor metrics**: Use `plane.health.check()` to detect anomalies.
+3. **Set appropriate API keys**: Rotate `STATEMEL_API_KEY` periodically for HTTP deployments.
+4. **Monitor health and metrics**: Use HTTP `/health` and `/metrics`, or `plane.health.readiness()` / `plane.metrics.export_prometheus()` in-process.
 5. **Backup database**: Regular SQLite/PostgreSQL backups for persistent storage.

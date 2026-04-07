@@ -58,6 +58,7 @@ Use this only at the very end. If any item below is not true, do not declare Bil
 - [ ] package artifact build/install is covered
 - [ ] integration tests run where appropriate
 - [ ] release checklist exists
+- [ ] operator runbook exists
 - [ ] versioning strategy is documented
 
 ## Documentation Validation
@@ -117,6 +118,7 @@ Verified:
 - observability minimum viable surface
 - CI and release validation
 - documentation truthfulness
+- operator runbook
 
 If any of the above is not true, do not use this declaration.
 ```

@@ -95,6 +95,7 @@ PYTHONPATH=src pytest -q tests/ -k "health or metrics or observability"
 - [ ] CI validates install from artifact or editable install
 - [ ] Postgres integration is in CI if supported
 - [ ] Release checklist exists
+- [ ] Operator runbook exists
 - [ ] Package build succeeds locally
 - [ ] Wheel install succeeds locally
 

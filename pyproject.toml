@@ -7,7 +7,7 @@ name = "bilinc"
 version = "1.0.0a1"
 description = "Verifiable State Plane for Autonomous Agents"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 authors = [{name = "Bilinc Team"}]
 requires-python = ">=3.10"
 keywords = [
@@ -24,7 +24,6 @@ keywords = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -41,11 +40,16 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "build>=1.2",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-asyncio>=0.23",
     "mypy>=1.0",
     "ruff>=0.1",
+]
+postgres = [
+    "asyncpg>=0.29",
+    "pgvector>=0.2",
 ]
 server = [
     "fastapi>=0.110",
@@ -60,6 +64,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "ignore:unclosed event loop:ResourceWarning",
     "ignore:Exception ignored in.*BaseEventLoop:pytest.PytestUnraisableExceptionWarning",

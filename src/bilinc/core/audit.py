@@ -103,23 +103,24 @@ class AuditTrail:
         data_hash = hashlib.sha256(data_str.encode()).hexdigest()
         
         # Chain with previous root
-        new_root = hashlib.sha256(f"{self._root_hash}:{data_hash}".encode()).hexdigest()
+        prev_root = self._root_hash
+        new_root = hashlib.sha256(f"{prev_root}:{data_hash}".encode()).hexdigest()
         
         cursor = self.conn.execute("""
             INSERT INTO audit_log (timestamp, op_type, key, before_value, after_value,
                                    data_hash, prev_root, root_hash, metadata)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (timestamp, op_type.value, key, before_json, after_json,
-              data_hash, self._root_hash, new_root, meta_json))
+              data_hash, prev_root, new_root, meta_json))
         self.conn.commit()
-        
+
         self._root_hash = new_root
         
         return AuditEntry(
             id=cursor.lastrowid, timestamp=timestamp,
             op_type=op_type.value, key=key,
             before_value=before_json, after_value=after_json,
-            data_hash=data_hash, prev_root=self._root_hash,
+            data_hash=data_hash, prev_root=prev_root,
             root_hash=new_root, metadata=meta_json,
         )
     
@@ -214,21 +215,15 @@ class AuditTrail:
         
         state = {}
         for r in rows:
-            if r["op_type"] in (OpType.CREATE.value, OpType.UPDATE.value):
-                state[r["key"]] = {
-                    "value": json.loads(r["after_value"]) if r["after_value"] else None,
-                    "timestamp": r["timestamp"],
-                }
-            elif r["op_type"] == OpType.DELETE.value:
+            if r["op_type"] in (
+                OpType.CREATE.value,
+                OpType.UPDATE.value,
+                OpType.CONSOLIDATE.value,
+            ):
+                state[r["key"]] = json.loads(r["after_value"]) if r["after_value"] else None
+            elif r["op_type"] in (OpType.DELETE.value, OpType.FORGET.value):
                 state.pop(r["key"], None)
-            elif r["op_type"] == OpType.ROLLBACK.value:
-                # Restore from metadata
-                meta = json.loads(r["metadata"])
-                if "restored_keys" in meta:
-                    for k in meta["restored_keys"]:
-                        if k not in state:
-                            state[k] = {"restored": True, "timestamp": r["timestamp"]}
-        
+
         return state
     
     def get_root_hash(self) -> str:
