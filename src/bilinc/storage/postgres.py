@@ -30,23 +30,31 @@ from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.storage.backend import StorageBackend
 logger = logging.getLogger(__name__)
 class PostgresBackend(StorageBackend):
-    def __init__(self, dsn: str = "postgresql://localhost/synaptic", vector_dim: int = 384):
+    SCHEMA_VERSION = 1
+
+    def __init__(self, dsn: str = "postgresql://localhost/bilinc", vector_dim: int = 384):
         self.dsn = dsn
         self.vector_dim = vector_dim
         self.pool = None
         self._initialized = False
+
     async def init(self) -> None:
         if asyncpg is None:
             raise ImportError("asyncpg is required for PostgreSQL backend: pip install asyncpg")
         self.pool = await asyncpg.create_pool(dsn=self.dsn, max_size=10)
         async with self.pool.acquire() as conn:
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             if register_vector:
                 try:
                     await register_vector(conn)
                 except Exception:
                     pass
             await conn.execute("""
-                CREATE TABLE IF NOT EXISTS synaptic_entries (
+                CREATE TABLE IF NOT EXISTS schema_version (
+                    version INTEGER PRIMARY KEY,
+                    applied_at DOUBLE PRECISION NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS bilinc_entries (
                     id TEXT PRIMARY KEY,
                     key TEXT UNIQUE NOT NULL,
                     memory_type TEXT NOT NULL DEFAULT 'episodic',
@@ -73,13 +81,20 @@ class PostgresBackend(StorageBackend):
                     embedding vector(384),
                     created_ts TIMESTAMPTZ DEFAULT NOW()
                 );
-                CREATE INDEX IF NOT EXISTS idx_synaptic_key ON synaptic_entries(key);
-                CREATE INDEX IF NOT EXISTS idx_synaptic_type ON synaptic_entries(memory_type);
-                CREATE INDEX IF NOT EXISTS idx_synaptic_strength ON synaptic_entries(current_strength);
-                CREATE INDEX IF NOT EXISTS idx_synaptic_verified ON synaptic_entries(is_verified) WHERE is_verified = true;
-                CREATE INDEX IF NOT EXISTS idx_synaptic_embedding ON synaptic_entries USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-                CREATE INDEX IF NOT EXISTS idx_synaptic_gin_metadata ON synaptic_entries USING GIN (metadata);
+                CREATE INDEX IF NOT EXISTS idx_bilinc_key ON bilinc_entries(key);
+                CREATE INDEX IF NOT EXISTS idx_bilinc_type ON bilinc_entries(memory_type);
+                CREATE INDEX IF NOT EXISTS idx_bilinc_strength ON bilinc_entries(current_strength);
+                CREATE INDEX IF NOT EXISTS idx_bilinc_verified ON bilinc_entries(is_verified) WHERE is_verified = true;
+                CREATE INDEX IF NOT EXISTS idx_bilinc_embedding ON bilinc_entries USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+                CREATE INDEX IF NOT EXISTS idx_bilinc_gin_metadata ON bilinc_entries USING GIN (metadata);
             """)
+            current = await conn.fetchrow("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
+            if current is None or current["version"] < self.SCHEMA_VERSION:
+                await conn.execute(
+                    "INSERT INTO schema_version (version, applied_at) VALUES ($1, $2)",
+                    self.SCHEMA_VERSION,
+                    time.time(),
+                )
         self._initialized = True
         logger.info("PostgreSQL backend initialized with pgvector")
     async def save(self, entry: MemoryEntry) -> bool:
@@ -93,7 +108,7 @@ class PostgresBackend(StorageBackend):
         try:
             async with self.pool.acquire() as conn:
                 await conn.execute("""
-                    INSERT INTO synaptic_entries (
+                    INSERT INTO bilinc_entries (
                         id, key, memory_type, value, metadata, ccs_dimensions,
                         source, session_id, created_at, updated_at,
                         last_accessed, access_count, valid_at, invalid_at, ttl,
@@ -136,12 +151,15 @@ class PostgresBackend(StorageBackend):
         except Exception as e:
             logger.error(f"Failed to save entry {entry.key}: {e}")
             return False
+    async def restore(self, entry: MemoryEntry) -> bool:
+        """PostgreSQL save path already preserves the provided fields."""
+        return await self.save(entry)
     async def load(self, key: str) -> Optional[MemoryEntry]:
         if not self._initialized:
             await self.init()
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM synaptic_entries WHERE key = $1", key
+                "SELECT * FROM bilinc_entries WHERE key = $1", key
             )
             if not row:
                 return None
@@ -158,7 +176,7 @@ class PostgresBackend(StorageBackend):
             SELECT *, ts_rank(
                 to_tsvector('simple', COALESCE(key, '') || ' ' || COALESCE(value, '') || ' ' || COALESCE(metadata::text, '')),
                 plainto_tsquery('simple', $1)) AS rank
-            FROM synaptic_entries
+            FROM bilinc_entries
             WHERE current_strength > 0.1 {type_filter}
             ORDER BY rank DESC, current_strength DESC
             LIMIT $2
@@ -173,13 +191,13 @@ class PostgresBackend(StorageBackend):
         if not self._initialized:
             await self.init()
         async with self.pool.acquire() as conn:
-            result = await conn.execute("DELETE FROM synaptic_entries WHERE key = $1", key)
+            result = await conn.execute("DELETE FROM bilinc_entries WHERE key = $1", key)
             return result == "DELETE 1"
     async def list_all(self) -> List[MemoryEntry]:
         if not self._initialized:
             await self.init()
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM synaptic_entries ORDER BY importance DESC, created_at DESC")
+            rows = await conn.fetch("SELECT * FROM bilinc_entries ORDER BY importance DESC, created_at DESC")
             return [self._row_to_entry(r) for r in rows]
     async def load_by_type(self, memory_type: Any, limit: int = 100) -> List[MemoryEntry]:
         """Load entries by memory type."""
@@ -187,7 +205,7 @@ class PostgresBackend(StorageBackend):
             await self.init()
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM synaptic_entries WHERE memory_type = $1 ORDER BY importance DESC, created_at DESC LIMIT $2",
+                "SELECT * FROM bilinc_entries WHERE memory_type = $1 ORDER BY importance DESC, created_at DESC LIMIT $2",
                 memory_type.value if hasattr(memory_type, 'value') else str(memory_type),
                 limit
             )
@@ -202,9 +220,24 @@ class PostgresBackend(StorageBackend):
                     COUNT(*) FILTER (WHERE is_verified) as verified,
                     COUNT(*) FILTER (WHERE current_strength < 0.3) as stale,
                     COUNT(*) FILTER (WHERE conflict_id IS NOT NULL) as conflicts
-                FROM synaptic_entries
+                FROM bilinc_entries
             """)
-            return dict(row) if row else {}
+            by_type_rows = await conn.fetch(
+                "SELECT memory_type, COUNT(*) AS cnt FROM bilinc_entries GROUP BY memory_type"
+            )
+            version_row = await conn.fetchrow(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+            )
+            stats = dict(row) if row else {}
+            return {
+                "total_entries": stats.get("total", 0),
+                "verified_entries": stats.get("verified", 0),
+                "stale_entries": stats.get("stale", 0),
+                "conflicts": stats.get("conflicts", 0),
+                "by_type": {r["memory_type"]: r["cnt"] for r in by_type_rows},
+                "schema_version": version_row["version"] if version_row else 0,
+                "dsn": self.dsn,
+            }
     def _row_to_entry(self, row) -> MemoryEntry:
         """Convert database row to MemoryEntry."""
         import json

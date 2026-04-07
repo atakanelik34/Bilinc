@@ -135,6 +135,31 @@ async def main():
 asyncio.run(main())
 ```
 
+### HTTP MCP Deployment
+
+```python
+from bilinc.mcp_server.server_v2 import create_mcp_http_app
+from bilinc import StatePlane
+
+plane = StatePlane()
+plane.init_agm()
+plane.init_knowledge_graph()
+
+app = create_mcp_http_app(
+    plane=plane,
+    auth_token="super-secret",
+)
+```
+
+Production HTTP behavior:
+- `Authorization: Bearer <token>` required by default
+- invalid/missing token -> `401`
+- rate limit exceeded -> `429`
+- `allow_unauthenticated=True` is local-dev only
+- `GET /health` exposes liveness + readiness
+- `GET /metrics` exposes Prometheus-compatible `bilinc_` metrics
+- PostgreSQL runtime support is validated in CI via the optional `postgres` extra
+
 ### Sync Across Agents
 
 ```python
@@ -164,8 +189,8 @@ sync.merge_sync("agent_alpha", "agent_beta")
 | **Phase 2: Verification** | v0.2.0 | Z3 SMT Verifier, Merkle Audit, State Diff/Rollback | 15 |
 | **Phase 3: Belief Engine** | — | AGM + DP Postulates, Knowledge Graph, Multi-Agent Sync, StatePlane Integration | 58 |
 | **Phase 4: MCP + Ecosystem** | v0.4.0a1 | MCP Server v2 (12 tools), Rate Limiter | 16 |
-| **Phase 5: Production** | — | Security Hardening, Observability, Benchmarks, Docs | 13 |
-| **Total** | | | **124 passing** |
+| **Phase 5: Production** | — | CI Artifacts, PostgreSQL Integration, Release Docs, Runbook | 13 |
+| **Total** | | | **164 passing locally + PostgreSQL integration in CI** |
 
 ## Documentation
 
@@ -173,6 +198,9 @@ sync.merge_sync("agent_alpha", "agent_beta")
 |----------|-------------|
 | [Architecture](docs/architecture.md) | 7-layer architecture, data flow, component interaction |
 | [MCP Server](docs/mcp-server.md) | 12 tool reference, security, error handling |
+| [Observability](docs/observability.md) | Health model, readiness/liveness, Prometheus metrics |
+| [Release Checklist](docs/release.md) | Build, artifact validation, publish, post-release smoke |
+| [Operator Runbook](docs/runbook.md) | HTTP deployment, env vars, probes, degraded-state troubleshooting |
 | [Security Guide](docs/security.md) | Input validation, resource limits, MCP auth, audit |
 | [CHANGELOG](CHANGELOG.md) | Full version history |
 
@@ -197,8 +225,8 @@ Bilinc combines breakthroughs from multiple research papers:
 ## Contributing
 
 Contributions welcome! Key areas:
-- Phase 5: Production v1.0 — benchmarks, observability, security hardening
-- SQLite/PostgreSQL persistent storage layer
+- Phase 5: Production v1.0 — release hardening, fresh-clone validation, operator polish
+- PostgreSQL production validation and compatibility feedback
 - Real mem0ai/Letta/Cognee adapters
 
 See `research/phase4-detail-plan.md` for the roadmap.

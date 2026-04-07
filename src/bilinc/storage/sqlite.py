@@ -22,11 +22,19 @@ class SQLiteBackend(StorageBackend):
     - Single 'memories' table with JSON column for values
     - Indexed by key, memory_type, importance, current_strength
     - WAL mode for concurrent reads
+    - Schema versioning with automatic migrations
     """
-    
+
+    SCHEMA_VERSION = 1
+
     def __init__(self, db_path: str = "bilinc.db"):
         self.db_path = Path(db_path).expanduser()
         self._conn = None
+
+    @property
+    def audit_db_path(self) -> str:
+        """Audit trail should live in the same SQLite file for exact state recovery."""
+        return str(self.db_path)
     
     def _get_conn(self):
         if self._conn is None:
@@ -38,7 +46,15 @@ class SQLiteBackend(StorageBackend):
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
-        
+
+        # Schema versioning table
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at REAL NOT NULL
+            )
+        """)
+
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS memories (
                 id TEXT PRIMARY KEY,
@@ -72,6 +88,15 @@ class SQLiteBackend(StorageBackend):
             ("idx_strength", "current_strength"), ("idx_importance", "importance"),
         ]:
             self._conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON memories ({col})")
+
+        # Record schema version if not already present
+        current = self._conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
+        if current is None or current["version"] < self.SCHEMA_VERSION:
+            self._conn.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+                (self.SCHEMA_VERSION, time.time())
+            )
+
         self._conn.commit()
     
     async def save(self, entry: MemoryEntry) -> bool:
@@ -79,6 +104,11 @@ class SQLiteBackend(StorageBackend):
         entry.last_accessed = time.time()
         entry.access_count += 1
         entry.updated_at = time.time()
+        return await self.restore(entry)
+
+    async def restore(self, entry: MemoryEntry) -> bool:
+        """Store an entry exactly as provided, without mutating timestamps or counters."""
+        c = self._get_conn()
         c.execute("""
             INSERT INTO memories (id, key, memory_type, value, metadata, ccs_dimensions,
                 source, session_id, created_at, updated_at,
@@ -165,7 +195,18 @@ class SQLiteBackend(StorageBackend):
         total = c.execute("SELECT COUNT(*) as cnt FROM memories").fetchone()["cnt"]
         by_type = await self.count_by_type()
         db_size = self.db_path.stat().st_size if self.db_path.exists() else 0
-        return {"total_entries": total, "by_type": by_type, "db_size_bytes": db_size, "db_path": str(self.db_path)}
+
+        # Get schema version
+        ver_row = c.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
+        schema_version = ver_row["version"] if ver_row else 0
+
+        return {
+            "total_entries": total,
+            "by_type": by_type,
+            "db_size_bytes": db_size,
+            "db_path": str(self.db_path),
+            "schema_version": schema_version,
+        }
     
     async def close(self) -> None:
         if self._conn:

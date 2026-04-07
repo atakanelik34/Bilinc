@@ -26,6 +26,37 @@ async def main():
 asyncio.run(main())
 ```
 
+### HTTP Transport (Production-Facing)
+
+```python
+from bilinc.mcp_server.server_v2 import create_mcp_http_app
+from bilinc import StatePlane
+
+plane = StatePlane()
+plane.init_agm()
+plane.init_knowledge_graph()
+
+app = create_mcp_http_app(
+    plane=plane,
+    auth_token="super-secret",
+    route_prefix="/mcp",
+)
+
+# Example:
+# uvicorn yourmodule:app --host 0.0.0.0 --port 8000
+```
+
+HTTP auth:
+- header: `Authorization: Bearer <token>`
+- missing token: `401`
+- invalid token: `401`
+- rate limit exceeded: `429`
+
+Operator endpoints:
+- `GET /health` returns `liveness` + `readiness`
+- `GET /metrics` returns Prometheus-compatible `bilinc_` metrics
+- both endpoints use the same HTTP auth and rate-limit policy as the MCP transport
+
 ## Tool Reference
 
 ### 1. commit_mem
@@ -101,7 +132,7 @@ Operational statistics for all components (AGM, Knowledge Graph, Belief Sync, Wo
   "version": "0.4.0a1",
   "agm": {
     "beliefs": 42,
-    "operations": 156,
+    "operations": 164,
     "entrenchment_keys": 38
   },
   "knowledge_graph": {
@@ -123,15 +154,31 @@ Trigger the sleep consolidation cycle (moves working memory → long-term, appli
 
 ### 8. snapshot
 
-Get a verifiable state snapshot including all beliefs, entrenchment values, and optionally full AGM operation log.
+Get a verifiable state snapshot.
+
+- In-memory mode: returns current AGM belief snapshot
+- Persistent mode: returns the exact persisted entry set, counts, root hash, and integrity information
 
 ### 9. diff
 
-Compare state between two timestamps (requires persistent storage).
+Compare state between two timestamps (requires persistent storage + audit trail).
+
+Returns:
+- `added`: keys that exist at `ts_b` but not `ts_a`
+- `removed`: keys that exist at `ts_a` but not `ts_b`
+- `modified`: keys present at both timestamps with different persisted values
+
+Each diff item includes the full before/after entry payload needed for reconstruction.
 
 ### 10. rollback
 
-Restore state to a previous timestamp (requires persistent storage).
+Restore state to a previous timestamp (requires persistent storage + audit trail).
+
+Rollback semantics:
+- keys created after the target timestamp are deleted
+- keys deleted after the target timestamp are recreated
+- keys modified after the target timestamp are restored to the target value
+- a rollback summary event is appended to the audit trail
 
 ### 11. query_graph
 
@@ -161,8 +208,10 @@ List all detected contradictions in the Knowledge Graph. Returns pairs of confli
 
 ## Security
 
-- **API Key Auth**: Optional `Authorization: Bearer` header via `STATEMEL_API_KEY` env var
+- **stdio**: trusted local process boundary, no request-level auth
+- **HTTP**: Bearer auth via `STATEMEL_API_KEY` or explicit `auth_token`
 - **Rate Limiting**: Per-client token bucket (default: 10 req burst, 1/sec refill)
+- **Health/metrics**: `GET /health`, `GET /metrics`
 - **Input Validation**: Key pattern matching, path traversal protection, XSS sanitization
 - **Resource Limits**: Max 16 working memory slots, max 50k episodic entries, max 100k KG nodes
 

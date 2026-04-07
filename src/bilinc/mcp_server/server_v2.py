@@ -11,6 +11,9 @@ Transport: stdio (default for Claude Code integration)
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -18,11 +21,18 @@ import time
 from typing import Any, Dict, List, Optional
 
 from mcp.server import Server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import Tool, TextContent
+from starlette.applications import Starlette
+from starlette.datastructures import Headers
+from starlette.requests import Request
+from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.routing import Mount, Route
 
 from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
 from bilinc.mcp_server.rate_limiter import TokenBucketLimiter
+from bilinc.observability.logging import log_event
 from bilinc.security.input_validator import InputValidator
 from bilinc.security.resource_limits import ResourceLimits
 
@@ -63,29 +73,108 @@ def _error_text(tool_name: str, error: Exception) -> List[TextContent]:
     })
 
 
-def create_mcp_server_v2(
+def _resolve_auth_token(auth_token: Optional[str]) -> Optional[str]:
+    """Canonical auth token resolution."""
+    return auth_token or os.environ.get("STATEMEL_API_KEY")
+
+
+def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
+    """Extract Bearer token from Authorization header."""
+    if not authorization:
+        return None
+    parts = authorization.strip().split()
+    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+        return None
+    return parts[1].strip()
+
+
+def _hash_client_token(token: str) -> str:
+    """Generate a stable non-reversible client identity from a bearer token."""
+    return f"token:{hashlib.sha256(token.encode()).hexdigest()[:16]}"
+
+
+def _resolve_http_client_id(token: Optional[str], scope: Dict[str, Any]) -> str:
+    """Resolve HTTP client identity from token or client IP."""
+    if token:
+        return _hash_client_token(token)
+    client = scope.get("client")
+    if client and client[0]:
+        return f"ip:{client[0]}"
+    return "anonymous"
+
+
+def _http_error(status_code: int, error: str, message: str) -> JSONResponse:
+    """Standard JSON error shape for HTTP transport."""
+    return JSONResponse(
+        {
+            "success": False,
+            "error": error,
+            "message": message,
+        },
+        status_code=status_code,
+    )
+
+
+def _increment_metric(plane: Optional[StatePlane], name: str, value: int = 1) -> None:
+    if plane is not None and hasattr(plane, "metrics"):
+        plane.metrics.increment(name, value)
+
+
+def _record_latency(plane: Optional[StatePlane], name: str, value_ms: float) -> None:
+    if plane is not None and hasattr(plane, "metrics"):
+        plane.metrics.record_latency(name, value_ms)
+
+
+def _record_http_request(
+    plane: Optional[StatePlane],
+    surface: str,
+    start_time: float,
+    status_code: int,
+) -> None:
+    elapsed = (time.perf_counter() - start_time) * 1000
+    _increment_metric(plane, "http_requests_total")
+    _increment_metric(plane, f"http_{surface}_requests_total")
+    _record_latency(plane, f"http_{surface}_latency_ms", elapsed)
+    if plane is not None and hasattr(plane, "health"):
+        plane.health.update_gauge_on_metrics(plane.metrics)
+    log_event(
+        logger,
+        "info",
+        "http_request",
+        surface=surface,
+        status_code=status_code,
+        latency_ms=round(elapsed, 3),
+    )
+
+
+def _health_http_status(readiness: Dict[str, Any]) -> int:
+    return 503 if readiness["status"] == "failed" else 200
+
+
+def _health_payload(plane: StatePlane) -> Dict[str, Any]:
+    plane.health.update_gauge_on_metrics(plane.metrics)
+    readiness = plane.health.readiness()
+    liveness = plane.health.liveness()
+    return {
+        "service": "bilinc-mcp-http",
+        "status": readiness["status"],
+        "ephemeral": readiness["ephemeral"],
+        "liveness": liveness,
+        "readiness": readiness,
+    }
+
+
+def _create_server_v2(
     plane: Optional[StatePlane] = None,
-    auth_token: Optional[str] = None,
-    max_tokens: int = 10,
-    refill_rate: float = 1.0,
+    rate_limiter: Optional[TokenBucketLimiter] = None,
+    transport_mode: str = "stdio",
 ) -> Server:
-    """
-    Create an MCP server instance exposing Bilinc v0.4.0 features.
-    
-    Args:
-        plane: StatePlane instance (creates default if None)
-        auth_token: Optional API key for server protection
-        max_tokens: Rate limit max tokens per client (default: 10)
-        refill_rate: Token refill rate per second (default: 1.0)
-    """
+    """Build the shared MCP server instance used by stdio and HTTP transports."""
     if plane is None:
         plane = StatePlane(backend=None, enable_verification=False, enable_audit=False)
         # Initialize Phase 3 components
         plane.init_agm()
         plane.init_knowledge_graph()
-
-    auth_token = auth_token or os.environ.get("STATEMEL_API_KEY")
-    rate_limiter = TokenBucketLimiter(max_tokens=max_tokens, refill_rate=refill_rate)
 
     server = Server("bilinc-v2")
 
@@ -303,69 +392,329 @@ def create_mcp_server_v2(
 
     @server.call_tool()
     async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
-        # ── Auth check (placeholder — not enforced in stdio transport) ──
-        # For HTTP transport: extract bearer token and validate against auth_token.
-        # For stdio: auth is handled at the process/environment level.
-        if auth_token:
-            pass  # TODO: Implement request-level auth validation for HTTP transport
-
-        # ── Rate limiting ──
-        if auth_token:
-            import hmac
-            # In a real deployment, extract the token from the request context.
-            # For stdio transport, we rely on the environment-level auth.
-            pass  # Auth is handled at the transport layer for stdio
-
-        # ── Rate limiting ──
-        client_id = "default"  # In production: extract from request context
-        if not rate_limiter.allow(client_id):
-            return _result_text({"error": "rate_limited", "message": "Too many requests. Try again later."})
+        start_time = time.perf_counter()
+        if rate_limiter is not None:
+            client_id = "stdio" if transport_mode == "stdio" else "transport"
+            if not rate_limiter.allow(client_id):
+                _increment_metric(plane, "rate_limit_hits_total")
+                _increment_metric(plane, "tool_rate_limit_hits_total")
+                log_event(
+                    logger,
+                    "warning",
+                    "tool_rate_limited",
+                    tool=name,
+                    transport=transport_mode,
+                    client_id=client_id,
+                )
+                return _result_text({"error": "rate_limited", "message": "Too many requests. Try again later."})
 
         try:
+            _increment_metric(plane, "tool_calls_total")
+            _increment_metric(plane, f"tool_{name}_calls_total")
             if name == "commit_mem":
-                return _handle_commit_mem(plane, arguments)
+                result = _handle_commit_mem(plane, arguments)
 
             elif name == "recall":
-                return _handle_recall(plane, arguments)
+                result = _handle_recall(plane, arguments)
 
             elif name == "forget":
-                return _handle_forget(plane, arguments)
+                result = _handle_forget(plane, arguments)
 
             elif name == "revise":
-                return _handle_revise(plane, arguments)
+                result = _handle_revise(plane, arguments)
 
             elif name == "status":
-                return _handle_status(plane)
+                result = _handle_status(plane)
 
             elif name == "verify":
-                return _handle_verify(plane, arguments)
+                result = _handle_verify(plane, arguments)
 
             elif name == "consolidate":
-                return _handle_consolidate(plane, arguments)
+                result = _handle_consolidate(plane, arguments)
 
             elif name == "snapshot":
-                return _handle_snapshot(plane, arguments)
+                if plane.backend and plane.enable_audit:
+                    snapshot = await plane.snapshot()
+                    snapshot["tool"] = "snapshot"
+                    result = _result_text(snapshot)
+                else:
+                    result = _handle_snapshot(plane, arguments)
 
             elif name == "diff":
-                return _handle_diff(plane, arguments)
+                if plane.backend and plane.enable_audit:
+                    diff = await plane.diff(arguments["ts_a"], arguments["ts_b"])
+                    diff["tool"] = "diff"
+                    result = _result_text(diff)
+                else:
+                    result = _handle_diff(plane, arguments)
 
             elif name == "rollback":
-                return _handle_rollback(plane, arguments)
+                if plane.backend and plane.enable_audit:
+                    rollback = await plane.rollback(arguments["ts"])
+                    rollback["tool"] = "rollback"
+                    result = _result_text(rollback)
+                else:
+                    result = _handle_rollback(plane, arguments)
 
             elif name == "query_graph":
-                return _handle_query_graph(plane, arguments)
+                result = _handle_query_graph(plane, arguments)
 
             elif name == "contradictions":
-                return _handle_contradictions(plane)
+                result = _handle_contradictions(plane)
 
             else:
-                return _error_text(name, ValueError(f"Unknown tool: {name}. Available tools: commit_mem, recall, forget, revise, status, verify, consolidate, snapshot, diff, rollback, query_graph, contradictions"))
+                result = _error_text(name, ValueError(f"Unknown tool: {name}. Available tools: commit_mem, recall, forget, revise, status, verify, consolidate, snapshot, diff, rollback, query_graph, contradictions"))
+
+            _record_latency(plane, "tool_call_latency_ms", (time.perf_counter() - start_time) * 1000)
+            log_event(logger, "info", "tool_call", tool=name, transport=transport_mode, status="success")
+            return result
 
         except Exception as e:
-            logger.exception(f"MCP tool error: {name}")
+            _increment_metric(plane, "backend_errors_total")
+            _increment_metric(plane, "tool_errors_total")
+            _record_latency(plane, "tool_call_latency_ms", (time.perf_counter() - start_time) * 1000)
+            log_event(
+                logger,
+                "error",
+                "tool_call",
+                tool=name,
+                transport=transport_mode,
+                status="failed",
+                error_type=type(e).__name__,
+                error=str(e),
+            )
             return _error_text(name, e)
 
     return server
+
+
+def create_mcp_server_v2(
+    plane: Optional[StatePlane] = None,
+    auth_token: Optional[str] = None,
+    max_tokens: int = 10,
+    refill_rate: float = 1.0,
+) -> Server:
+    """
+    Create an MCP server instance exposing Bilinc v0.4.0 features.
+    
+    Args:
+        plane: StatePlane instance (creates default if None)
+        auth_token: Optional API key for server protection
+        max_tokens: Rate limit max tokens per client (default: 10)
+        refill_rate: Token refill rate per second (default: 1.0)
+    """
+    if auth_token:
+        logger.info("stdio transport is trusted-local only; auth_token is ignored for request-level auth")
+    rate_limiter = TokenBucketLimiter(max_tokens=max_tokens, refill_rate=refill_rate)
+    return _create_server_v2(plane=plane, rate_limiter=rate_limiter, transport_mode="stdio")
+
+
+def create_mcp_http_app(
+    plane: Optional[StatePlane] = None,
+    auth_token: Optional[str] = None,
+    max_tokens: int = 10,
+    refill_rate: float = 1.0,
+    allow_unauthenticated: bool = False,
+    route_prefix: str = "/mcp",
+) -> Starlette:
+    """
+    Create a production-oriented HTTP MCP app with bearer auth and client-aware rate limiting.
+
+    HTTP auth is enforced by default. To allow unauthenticated local development,
+    pass allow_unauthenticated=True explicitly.
+    """
+    resolved_auth = _resolve_auth_token(auth_token)
+    if not allow_unauthenticated and not resolved_auth:
+        raise ValueError(
+            "HTTP MCP auth requires auth_token or STATEMEL_API_KEY unless allow_unauthenticated=True."
+        )
+
+    route_prefix = "/" + route_prefix.strip("/")
+    if plane is None:
+        plane = StatePlane(backend=None, enable_verification=False, enable_audit=False)
+        plane.init_agm()
+        plane.init_knowledge_graph()
+    plane.http_transport_config = {
+        "route_prefix": route_prefix,
+        "auth_required": not allow_unauthenticated,
+        "rate_limit": {"max_tokens": max_tokens, "refill_rate": refill_rate},
+    }
+
+    server = _create_server_v2(plane=plane, rate_limiter=None, transport_mode="http")
+    session_manager = StreamableHTTPSessionManager(server, json_response=True)
+    rate_limiter = TokenBucketLimiter(max_tokens=max_tokens, refill_rate=refill_rate)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette):
+        async with session_manager.run():
+            yield
+
+    async def _authorize(scope, receive, send, surface: str, start_time: float) -> Optional[str]:
+        headers = Headers(scope=scope)
+        bearer_token = _extract_bearer_token(headers.get("authorization"))
+        client_id = _resolve_http_client_id(bearer_token, scope)
+
+        if resolved_auth:
+            if bearer_token is None:
+                _increment_metric(plane, "auth_failures_total")
+                _record_http_request(plane, surface, start_time, 401)
+                log_event(
+                    logger,
+                    "warning",
+                    "http_auth_failed",
+                    surface=surface,
+                    reason="missing_bearer_token",
+                    client_id=client_id,
+                )
+                await _http_error(401, "unauthorized", "Missing Authorization: Bearer token.")(scope, receive, send)
+                return None
+            if not hmac.compare_digest(bearer_token, resolved_auth):
+                _increment_metric(plane, "auth_failures_total")
+                _record_http_request(plane, surface, start_time, 401)
+                log_event(
+                    logger,
+                    "warning",
+                    "http_auth_failed",
+                    surface=surface,
+                    reason="invalid_bearer_token",
+                    client_id=client_id,
+                )
+                await _http_error(401, "unauthorized", "Invalid bearer token.")(scope, receive, send)
+                return None
+        elif not allow_unauthenticated:
+            _increment_metric(plane, "auth_failures_total")
+            _record_http_request(plane, surface, start_time, 401)
+            log_event(
+                logger,
+                "warning",
+                "http_auth_failed",
+                surface=surface,
+                reason="auth_required",
+                client_id=client_id,
+            )
+            await _http_error(401, "unauthorized", "HTTP auth is required.")(scope, receive, send)
+            return None
+
+        if not rate_limiter.allow(client_id):
+            _increment_metric(plane, "rate_limit_hits_total")
+            _record_http_request(plane, surface, start_time, 429)
+            log_event(
+                logger,
+                "warning",
+                "http_rate_limited",
+                surface=surface,
+                client_id=client_id,
+            )
+            await _http_error(429, "rate_limited", "Too many requests. Try again later.")(scope, receive, send)
+            return None
+        return client_id
+
+    def _authorize_request(request: Request, surface: str, start_time: float) -> tuple[Optional[str], Optional[JSONResponse]]:
+        headers = request.headers
+        bearer_token = _extract_bearer_token(headers.get("authorization"))
+        client_id = _resolve_http_client_id(bearer_token, request.scope)
+
+        if resolved_auth:
+            if bearer_token is None:
+                _increment_metric(plane, "auth_failures_total")
+                _record_http_request(plane, surface, start_time, 401)
+                log_event(
+                    logger,
+                    "warning",
+                    "http_auth_failed",
+                    surface=surface,
+                    reason="missing_bearer_token",
+                    client_id=client_id,
+                )
+                return None, _http_error(401, "unauthorized", "Missing Authorization: Bearer token.")
+            if not hmac.compare_digest(bearer_token, resolved_auth):
+                _increment_metric(plane, "auth_failures_total")
+                _record_http_request(plane, surface, start_time, 401)
+                log_event(
+                    logger,
+                    "warning",
+                    "http_auth_failed",
+                    surface=surface,
+                    reason="invalid_bearer_token",
+                    client_id=client_id,
+                )
+                return None, _http_error(401, "unauthorized", "Invalid bearer token.")
+        elif not allow_unauthenticated:
+            _increment_metric(plane, "auth_failures_total")
+            _record_http_request(plane, surface, start_time, 401)
+            log_event(
+                logger,
+                "warning",
+                "http_auth_failed",
+                surface=surface,
+                reason="auth_required",
+                client_id=client_id,
+            )
+            return None, _http_error(401, "unauthorized", "HTTP auth is required.")
+
+        if not rate_limiter.allow(client_id):
+            _increment_metric(plane, "rate_limit_hits_total")
+            _record_http_request(plane, surface, start_time, 429)
+            log_event(
+                logger,
+                "warning",
+                "http_rate_limited",
+                surface=surface,
+                client_id=client_id,
+            )
+            return None, _http_error(429, "rate_limited", "Too many requests. Try again later.")
+        return client_id, None
+
+    async def http_transport(scope, receive, send):
+        start_time = time.perf_counter()
+        client_id = await _authorize(scope, receive, send, "mcp", start_time)
+        if client_id is None:
+            return
+
+        await session_manager.handle_request(scope, receive, send)
+        _record_http_request(plane, "mcp", start_time, 200)
+        log_event(logger, "info", "http_mcp_request", client_id=client_id, status_code=200)
+
+    async def health_endpoint(request: Request) -> JSONResponse:
+        start_time = time.perf_counter()
+        client_id, error_response = _authorize_request(request, "health", start_time)
+        if error_response is not None:
+            return error_response
+
+        payload = _health_payload(plane)
+        status_code = _health_http_status(payload["readiness"])
+        _record_http_request(plane, "health", start_time, status_code)
+        log_event(
+            logger,
+            "info",
+            "health_check",
+            client_id=client_id,
+            readiness_status=payload["readiness"]["status"],
+            liveness_status=payload["liveness"]["status"],
+            status_code=status_code,
+        )
+        return JSONResponse(payload, status_code=status_code)
+
+    async def metrics_endpoint(request: Request) -> PlainTextResponse:
+        start_time = time.perf_counter()
+        client_id, error_response = _authorize_request(request, "metrics", start_time)
+        if error_response is not None:
+            return PlainTextResponse(error_response.body.decode(), status_code=error_response.status_code)
+
+        plane.health.update_gauge_on_metrics(plane.metrics)
+        output = plane.metrics.export_prometheus()
+        _record_http_request(plane, "metrics", start_time, 200)
+        log_event(logger, "info", "metrics_scrape", client_id=client_id, status_code=200)
+        return PlainTextResponse(output, media_type="text/plain; version=0.0.4")
+
+    return Starlette(
+        routes=[
+            Route("/health", endpoint=health_endpoint, methods=["GET"]),
+            Route("/metrics", endpoint=metrics_endpoint, methods=["GET"]),
+            Mount(route_prefix, app=http_transport),
+        ],
+        lifespan=lifespan,
+    )
 
 
 # ─── Handler Functions (sync, called from async handlers) ─────────
@@ -552,6 +901,11 @@ def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List[TextC
             "slots_used": plane.working_memory.count,
             "capacity": plane.working_memory.max_slots,
         }
+
+    status["health"] = {
+        "liveness": plane.health.liveness()["status"],
+        "readiness": plane.health.readiness()["status"],
+    }
 
     return _result_text(status)
 
