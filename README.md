@@ -1,4 +1,4 @@
-# Bilinc
+# <img src="https://raw.githubusercontent.com/atakanelik34/Bilinc/main/bil.inc.jpg" width="48" align="left" width="48" align="center"> Bilinc
 
 ## Verifiable State Plane for Autonomous Agents
 
