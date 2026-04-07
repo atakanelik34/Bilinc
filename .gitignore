@@ -2,13 +2,15 @@
 __pycache__/
 *.pyc
 *.egg-info/
-*.egg
 
 # Build
 build/
 dist/
 *.whl
 *.tar.gz
+
+# Testing
+.pytest_cache/
 
 # DB
 *.db

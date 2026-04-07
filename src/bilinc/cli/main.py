@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Bilinc CLI
+Bilinc CLI — Stateless in-memory memory operations.
+
+Note: Each command invocation creates a new in-memory StatePlane.
+Data is NOT persisted between commands. Use the Python API with a
+SQLite/PostgreSQL backend for persistent storage.
 
 Usage:
   bilinc commit --key USER_PREF --value '{"tabs": 2}'
@@ -17,6 +21,18 @@ from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
 import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+
+
+def _parse_value(val: str):
+    """Parse value as JSON if possible, otherwise treat as plain string."""
+    if val.startswith('{') or val.startswith('['):
+        try:
+            return json.loads(val)
+        except json.JSONDecodeError as e:
+            print(json.dumps({"error": f"Invalid JSON input: {e}", "value": val}, indent=2),
+                  file=sys.stderr)
+            sys.exit(1)
+    return val
 
 def main():
     parser = argparse.ArgumentParser(description="Bilinc CLI")
@@ -48,7 +64,7 @@ def main():
     plane.init_knowledge_graph()
     
     if args.command == "commit":
-        value = json.loads(args.value) if args.value.startswith(('{', '[')) else args.value
+        value = _parse_value(args.value)
         result = plane.commit_with_agm(
             key=args.key,
             value=value,
