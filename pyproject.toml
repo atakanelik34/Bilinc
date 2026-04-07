@@ -60,12 +60,11 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "ignore:unclosed event loop:ResourceWarning",
     "ignore:Exception ignored in.*BaseEventLoop:pytest.PytestUnraisableExceptionWarning",
     "ignore:Exception ignored in.*socket:pytest.PytestUnraisableExceptionWarning",
-    "ignore:asyncio_default_fixture_loop_scope:pytest.PytestConfigWarning",
+    "default::pytest.PytestConfigWarning",
 ]
 
 [tool.ruff]
