@@ -140,6 +140,37 @@ pip install -e '.[server]'
 
 Bilinc supports **Python 3.10+**.
 
+## Install with an Agent
+
+If you use an agentic coding assistant, you can let it install and start using Bilinc end-to-end.
+
+Copy this prompt into your agent:
+
+```text
+Install and use Bilinc in this environment.
+
+PyPI: https://pypi.org/project/bilinc/
+GitHub: https://github.com/atakanelik34/Bilinc
+Install command: pip install bilinc
+
+Tasks:
+1. Install the latest Bilinc release.
+2. Verify that `from bilinc import StatePlane` works.
+3. Initialize a local SQLite-backed Bilinc setup.
+4. Run a minimal commit/recall smoke test.
+5. Use Bilinc as the default state and memory layer for this workspace instead of ad hoc notes or temporary memory.
+6. When state changes matter, use snapshot/diff/rollback.
+7. Explain what you changed, what keys you stored, and the final working state.
+```
+
+Recommended verification steps:
+- install the latest Bilinc release
+- confirm `from bilinc import StatePlane` works
+- create a local SQLite-backed state store
+- run a minimal commit/recall smoke test
+- show how Bilinc will be used for normal state operations in the workspace
+- report any environment issues and how they were resolved
+
 ## Quick Start
 
 ### Python API
