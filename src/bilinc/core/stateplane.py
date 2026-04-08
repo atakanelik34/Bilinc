@@ -13,6 +13,7 @@ Integrates:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time, json
 from typing import Any, Dict, List, Optional
@@ -80,6 +81,34 @@ class StatePlane:
         name = self.backend.__class__.__name__
         return name[:-7].lower() if name.endswith("Backend") else name.lower()
 
+    def _apply_entry_verification(self, entry: MemoryEntry) -> MemoryEntry:
+        """Apply the current verification policy to an entry in-place."""
+        if not self.enable_verification or not self.verifier or entry.value is None:
+            return entry
+
+        entries_data = [{
+            "key": entry.key,
+            "value": entry.value,
+            "memory_type": entry.memory_type.value,
+            "importance": entry.importance,
+            "is_verified": False,
+            "current_strength": entry.current_strength,
+            "verification_score": 0.0,
+        }]
+        results = self.verifier.verify_state(entries_data)
+        failed = [r for r in results if not r.valid]
+        if failed:
+            entry.is_verified = False
+            entry.verification_score = 0.0
+            entry.verification_method = ""
+            entry.metadata["verification_failed"] = [r.rule_name for r in failed]
+        else:
+            entry.is_verified = True
+            entry.verification_score = 0.8
+            entry.verification_method = "state_verifier"
+            entry.metadata.pop("verification_failed", None)
+        return entry
+
     def _record_success(self, operation: str, start_time: float, **fields: Any) -> None:
         elapsed = (time.perf_counter() - start_time) * 1000
         self.metrics.record_operation(operation, elapsed)
@@ -137,19 +166,7 @@ class StatePlane:
 
         try:
             # Verification pre-check
-            if self.enable_verification and self.verifier and entry.value is not None:
-                entries_data = [{"key": key, "value": value, "memory_type": memory_type.value,
-                               "importance": importance, "is_verified": False,
-                               "current_strength": 1.0, "verification_score": 0.0}]
-                results = self.verifier.verify_state(entries_data)
-                failed = [r for r in results if not r.valid]
-                if failed:
-                    entry.is_verified = False
-                    entry.verification_score = 0.0
-                    entry.metadata["verification_failed"] = [r.rule_name for r in failed]
-                else:
-                    entry.is_verified = True
-                    entry.verification_score = 0.8
+            self._apply_entry_verification(entry)
 
             # Store entry
             if memory_type == MemoryType.WORKING:
@@ -574,12 +591,25 @@ class StatePlane:
         Commit a memory entry and auto-apply AGM revision.
         If AGM engine is not initialized, falls back to basic storage.
         """
+        if self.backend:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(
+                    self.commit_with_agm_async(
+                        key,
+                        value,
+                        memory_type=memory_type,
+                        importance=importance,
+                    )
+                )
         start_time = time.perf_counter()
         try:
             entry = MemoryEntry(
                 key=key, value=value, memory_type=MemoryType(memory_type),
                 importance=importance,
             )
+            self._apply_entry_verification(entry)
             if hasattr(self, "agm_engine") and self.agm_engine:
                 result = self.agm_engine.revise(entry)
                 if hasattr(self, "knowledge_graph") and self.knowledge_graph:
@@ -590,6 +620,78 @@ class StatePlane:
             return entry
         except Exception as exc:
             self._record_failure("commit", start_time, exc, key=key, memory_type=memory_type, mode="agm")
+            raise
+
+    async def commit_with_agm_async(self, key: str, value: Any, memory_type: str = "semantic",
+                                    importance: float = 1.0) -> Any:
+        """
+        Async variant of commit_with_agm that keeps backend, verification, AGM,
+        knowledge graph, and audit trail synchronized.
+        """
+        start_time = time.perf_counter()
+        try:
+            entry = MemoryEntry(
+                key=key,
+                value=value,
+                memory_type=MemoryType(memory_type),
+                importance=importance,
+            )
+            self._apply_entry_verification(entry)
+
+            if not hasattr(self, "agm_engine") or not self.agm_engine:
+                if self.backend:
+                    previous_entry = await self.backend.load(key)
+                    await self.backend.save(entry)
+                    if self.enable_audit and self.audit:
+                        op_type = OpType.UPDATE if previous_entry else OpType.CREATE
+                        self.audit.log(
+                            op_type,
+                            key,
+                            before_value=previous_entry.to_dict() if previous_entry else None,
+                            after_value=entry.to_dict(),
+                        )
+                self._ops_count += 1
+                self._record_success("commit", start_time, key=key, memory_type=memory_type, mode="fallback")
+                return entry
+
+            previous_entry = await self.backend.load(key) if self.backend else None
+            result = self.agm_engine.revise(entry)
+            winning_entry = self.agm_engine.belief_state.get_belief(key)
+
+            if winning_entry and hasattr(self, "knowledge_graph") and self.knowledge_graph:
+                self.knowledge_graph.ingest_memory_entry(winning_entry)
+
+            if self.backend and winning_entry:
+                await self.backend.save(winning_entry)
+
+                if self.enable_audit and self.audit:
+                    previous_state = previous_entry.to_dict() if previous_entry else None
+                    next_state = winning_entry.to_dict()
+                    if previous_state != next_state:
+                        op_type = OpType.UPDATE if previous_entry else OpType.CREATE
+                        self.audit.log(
+                            op_type,
+                            key,
+                            before_value=previous_state,
+                            after_value=next_state,
+                            metadata={
+                                "agm_success": result.success,
+                                "conflicts_resolved": result.conflicts_resolved,
+                            },
+                        )
+
+            self._ops_count += 1
+            self._record_success(
+                "commit",
+                start_time,
+                key=key,
+                memory_type=memory_type,
+                mode="agm_persistent",
+                agm_success=result.success if hasattr(result, "success") else True,
+            )
+            return result
+        except Exception as exc:
+            self._record_failure("commit", start_time, exc, key=key, memory_type=memory_type, mode="agm_persistent")
             raise
 
     def query_graph(self, entity: str, max_depth: int = 2) -> Dict[str, Any]:

@@ -1,5 +1,6 @@
 """SQLite integration tests for Bilinc persistent storage."""
 import asyncio
+import json
 import os
 import tempfile
 import time
@@ -10,6 +11,13 @@ import pytest
 
 from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.mcp_server.server_v2 import (
+    _handle_commit_mem,
+    _handle_forget,
+    _handle_recall,
+    _handle_revise,
+    _handle_verify,
+)
 from bilinc.storage.sqlite import SQLiteBackend
 
 
@@ -34,6 +42,10 @@ def _make_backend(path: str) -> SQLiteBackend:
     b = SQLiteBackend(db_path=path)
     _run(b.init())
     return b
+
+
+def _parse_mcp_result(result):
+    return json.loads(result[0].text)
 
 
 # ── Backend Init Tests ─────────────────────────────────
@@ -271,4 +283,75 @@ class TestStatePlaneWithSQLite:
         restored = _run(plane.recall(key="delete_later"))[0]
         assert restored.value == "keep"
         assert _run(plane.recall(key="added_later")) == []
+        _run(b.close())
+
+    def test_commit_mem_persists_and_recall_falls_back_to_backend(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane = StatePlane(backend=b, enable_verification=True, enable_audit=True)
+        plane.init_agm()
+        plane.init_knowledge_graph()
+        _run(plane.init())
+
+        commit_result = _parse_mcp_result(_run(_handle_commit_mem(plane, {
+            "key": "server_info",
+            "value": "host=prod.db port=5432 engine=postgresql",
+            "memory_type": "semantic",
+            "importance": 0.8,
+        })))
+        assert commit_result["success"] is True
+
+        stored = _run(b.load("server_info"))
+        assert stored is not None
+        assert stored.is_verified is True
+
+        # Simulate a fresh process with the same backend but without hydrated AGM state.
+        fresh_plane = StatePlane(backend=b, enable_verification=True, enable_audit=True)
+        fresh_plane.init_agm()
+        fresh_plane.init_knowledge_graph()
+        _run(fresh_plane.init())
+
+        recall_result = _parse_mcp_result(_run(_handle_recall(fresh_plane, {"key": "server_info"})))
+        assert recall_result["count"] == 1
+        assert recall_result["entries"][0]["key"] == "server_info"
+        assert recall_result["entries"][0]["value"] == "host=prod.db port=5432 engine=postgresql"
+
+        verify_result = _parse_mcp_result(_run(_handle_verify(fresh_plane, {"key": "server_info"})))
+        assert verify_result["exists"] is True
+        assert verify_result["is_verified"] is True
+
+        _run(b.close())
+
+    def test_revise_and_forget_keep_backend_in_sync(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane = StatePlane(backend=b, enable_verification=True, enable_audit=True)
+        plane.init_agm()
+        plane.init_knowledge_graph()
+        _run(plane.init())
+
+        _parse_mcp_result(_run(_handle_commit_mem(plane, {
+            "key": "deploy_mode",
+            "value": "staging",
+            "memory_type": "semantic",
+            "importance": 0.4,
+        })))
+
+        revise_result = _parse_mcp_result(_run(_handle_revise(plane, {
+            "key": "deploy_mode",
+            "value": "production",
+            "importance": 0.9,
+            "strategy": "importance",
+        })))
+        assert revise_result["success"] is True
+
+        stored = _run(b.load("deploy_mode"))
+        assert stored is not None
+        assert stored.value == "production"
+
+        forget_result = _parse_mcp_result(_run(_handle_forget(plane, {
+            "key": "deploy_mode",
+            "reason": "cleanup",
+        })))
+        assert forget_result["removed"] is True
+        assert _run(b.load("deploy_mode")) is None
+
         _run(b.close())
