@@ -31,6 +31,7 @@ from starlette.routing import Mount, Route
 
 from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
+from bilinc.core.audit import OpType
 from bilinc.mcp_server.rate_limiter import TokenBucketLimiter
 from bilinc.observability.logging import log_event
 from bilinc.security.input_validator import InputValidator
@@ -412,22 +413,22 @@ def _create_server_v2(
             _increment_metric(plane, "tool_calls_total")
             _increment_metric(plane, f"tool_{name}_calls_total")
             if name == "commit_mem":
-                result = _handle_commit_mem(plane, arguments)
+                result = await _handle_commit_mem(plane, arguments)
 
             elif name == "recall":
-                result = _handle_recall(plane, arguments)
+                result = await _handle_recall(plane, arguments)
 
             elif name == "forget":
-                result = _handle_forget(plane, arguments)
+                result = await _handle_forget(plane, arguments)
 
             elif name == "revise":
-                result = _handle_revise(plane, arguments)
+                result = await _handle_revise(plane, arguments)
 
             elif name == "status":
-                result = _handle_status(plane)
+                result = await _handle_status(plane)
 
             elif name == "verify":
-                result = _handle_verify(plane, arguments)
+                result = await _handle_verify(plane, arguments)
 
             elif name == "consolidate":
                 result = _handle_consolidate(plane, arguments)
@@ -719,7 +720,7 @@ def create_mcp_http_app(
 
 # ─── Handler Functions (sync, called from async handlers) ─────────
 
-def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     try:
         key = InputValidator.validate_key(args["key"])
         value = InputValidator.validate_value(args["value"])
@@ -744,7 +745,10 @@ def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[TextCont
                 "error": f"Working memory full (max {ResourceLimits.LIMITS['max_entries'][MemoryType.WORKING]})"
             })
 
-    result = plane.commit_with_agm(key, value, memory_type=memory_type, importance=importance)
+    if hasattr(plane, "commit_with_agm_async"):
+        result = await plane.commit_with_agm_async(key, value, memory_type=memory_type, importance=importance)
+    else:
+        result = plane.commit_with_agm(key, value, memory_type=memory_type, importance=importance)
 
     # AGMResult or MemoryEntry
     if hasattr(result, "success"):
@@ -770,33 +774,54 @@ def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[TextCont
         })
 
 
-def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+async def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     key = args.get("key")
     memory_type = args.get("memory_type")
     limit = args.get("limit", 20)
     min_strength = args.get("min_strength", 0.0)
 
-    entries = []
-    # Try AGM engine first
+    entries_by_key = {}
+
+    # Start from persistent backend when available.
+    if plane.backend:
+        backend_entries = []
+        if key:
+            backend_entries = await plane.recall(key=key)
+        elif memory_type:
+            backend_entries = await plane.recall(memory_type=MemoryType(memory_type), limit=limit)
+        elif hasattr(plane.backend, "list_all"):
+            backend_entries = await plane.backend.list_all()
+
+        for entry in backend_entries:
+            if entry.current_strength < min_strength:
+                continue
+            entries_by_key[entry.key] = entry
+
+    # Overlay AGM beliefs as the freshest truth when initialized.
     if hasattr(plane, "agm_engine") and plane.agm_engine:
         beliefs = plane.agm_engine.belief_state.get_all_beliefs()
-        for e in beliefs:
-            if key and e.key != key:
+        for entry in beliefs:
+            if key and entry.key != key:
                 continue
-            if memory_type and e.memory_type.value != memory_type:
+            if memory_type and entry.memory_type.value != memory_type:
                 continue
-            if e.current_strength < min_strength:
+            if entry.current_strength < min_strength:
                 continue
-            entries.append(e)
-    # Fallback: check working memory
-    elif hasattr(plane, "working_memory"):
-        for slot in plane.working_memory.entries:
+            entries_by_key[entry.key] = entry
+
+    # Include working memory entries when present.
+    if hasattr(plane, "working_memory"):
+        for slot in plane.working_memory.get_all():
             if key and slot.key != key:
                 continue
-            entries.append(slot)
+            if memory_type and slot.memory_type.value != memory_type:
+                continue
+            if slot.current_strength < min_strength:
+                continue
+            entries_by_key[slot.key] = slot
 
     # Apply limit
-    entries = entries[:limit]
+    entries = list(entries_by_key.values())[:limit]
 
     return _result_text({
         "tool": "recall",
@@ -805,19 +830,30 @@ def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]
     })
 
 
-def _handle_forget(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+async def _handle_forget(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     key = args["key"]
     reason = args.get("reason", "manual")
 
     removed = False
+    existing_backend = await plane.backend.load(key) if plane.backend else None
+    existing_belief = None
+
     # Remove from AGM
     if hasattr(plane, "agm_engine") and plane.agm_engine:
+        existing_belief = plane.agm_engine.belief_state.get_belief(key)
         result = plane.agm_engine.contract(key)
         removed = result.success
-    # Remove from working memory
-    elif hasattr(plane, "working_memory"):
+    if hasattr(plane, "working_memory"):
         plane.working_memory.remove(key)
-        removed = True
+    if plane.backend:
+        removed = await plane.backend.delete(key) or removed
+    if plane.enable_audit and plane.audit and (existing_backend or existing_belief):
+        plane.audit.log(
+            OpType.FORGET,
+            key,
+            before_value=(existing_backend.to_dict() if existing_backend else existing_belief.to_dict()),
+            metadata={"reason": reason, "deleted": removed},
+        )
 
     return _result_text({
         "tool": "forget",
@@ -827,7 +863,7 @@ def _handle_forget(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]
     })
 
 
-def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     from bilinc.adaptive.agm_engine import ConflictStrategy
     from bilinc.core.models import MemoryEntry
 
@@ -853,8 +889,32 @@ def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]
             "hint": "Call plane.init_agm() before using revise",
         })
 
+    previous_entry = await plane.backend.load(key) if plane.backend else None
     entry = MemoryEntry(key=key, value=value, importance=importance, memory_type=MemoryType.SEMANTIC)
+    if hasattr(plane, "_apply_entry_verification"):
+        plane._apply_entry_verification(entry)
     result = plane.agm_engine.revise(entry, strategy=strategy)
+    winning_entry = plane.agm_engine.belief_state.get_belief(key)
+
+    if result.success and winning_entry and hasattr(plane, "knowledge_graph") and plane.knowledge_graph:
+        plane.knowledge_graph.ingest_memory_entry(winning_entry)
+
+    if plane.backend and result.success and winning_entry:
+        await plane.backend.save(winning_entry)
+        if plane.enable_audit and plane.audit:
+            previous_state = previous_entry.to_dict() if previous_entry else None
+            next_state = winning_entry.to_dict()
+            if previous_state != next_state:
+                plane.audit.log(
+                    OpType.UPDATE if previous_entry else OpType.CREATE,
+                    key,
+                    before_value=previous_state,
+                    after_value=next_state,
+                    metadata={
+                        "revision_strategy": strategy.value,
+                        "conflicts_resolved": result.conflicts_resolved,
+                    },
+                )
 
     return _result_text({
         "tool": "revise",
@@ -868,8 +928,8 @@ def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]
     })
 
 
-def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List[TextContent]:
-    status = {"tool": "status", "version": "1.0.0"}
+async def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List[TextContent]:
+    status = {"tool": "status", "version": "1.0.1"}
 
     # AGM stats
     if hasattr(plane, "agm_engine") and plane.agm_engine:
@@ -902,6 +962,9 @@ def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List[TextC
             "capacity": plane.working_memory.max_slots,
         }
 
+    if plane.backend:
+        status["backend"] = await plane.backend.stats()
+
     status["health"] = {
         "liveness": plane.health.liveness()["status"],
         "readiness": plane.health.readiness()["status"],
@@ -910,28 +973,41 @@ def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List[TextC
     return _result_text(status)
 
 
-def _handle_verify(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+async def _handle_verify(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     key = args["key"]
 
     if hasattr(plane, "agm_engine") and plane.agm_engine:
         entry = plane.agm_engine.belief_state.get_belief(key)
-        if entry is None:
-            return _result_text({"tool": "verify", "key": key, "exists": False})
-        return _result_text({
-            "tool": "verify",
-            "key": key,
-            "exists": True,
-            "is_verified": entry.is_verified,
-            "verification_score": entry.verification_score,
-            "verification_method": entry.verification_method,
-            "entrenchment": plane.agm_engine.get_entrenchment(key),
-            "strength": entry.current_strength,
-        })
+        if entry is not None:
+            return _result_text({
+                "tool": "verify",
+                "key": key,
+                "exists": True,
+                "is_verified": entry.is_verified,
+                "verification_score": entry.verification_score,
+                "verification_method": entry.verification_method,
+                "entrenchment": plane.agm_engine.get_entrenchment(key),
+                "strength": entry.current_strength,
+            })
+
+    if plane.backend:
+        entry = await plane.backend.load(key)
+        if entry is not None:
+            return _result_text({
+                "tool": "verify",
+                "key": key,
+                "exists": True,
+                "is_verified": entry.is_verified,
+                "verification_score": entry.verification_score,
+                "verification_method": entry.verification_method,
+                "entrenchment": plane.agm_engine.get_entrenchment(key) if hasattr(plane, "agm_engine") and plane.agm_engine else None,
+                "strength": entry.current_strength,
+            })
 
     return _result_text({
         "tool": "verify",
         "key": key,
-        "error": "AGM engine not initialized",
+        "exists": False,
     })
 
 

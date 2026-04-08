@@ -1,8 +1,8 @@
 """
 Tests for MCP Server v2 (Step 4.1).
 
-All MCP tool handlers are sync functions called from async MCP SDK wrappers.
-We test the handlers directly — no async needed.
+The SDK wrappers are async, but these tests still exercise the internal handlers
+directly through a small sync helper so the suite stays easy to read.
 
 Covering:
 1. commit/recall roundtrip
@@ -13,6 +13,7 @@ Covering:
 6. Error handling for invalid inputs
 """
 
+import asyncio
 import json
 import pytest
 
@@ -46,6 +47,8 @@ def plane():
 def _call(handler, plane, args=None):
     """Call a handler and parse the TextContent JSON response."""
     result = handler(plane, args or {})
+    if asyncio.iscoroutine(result):
+        result = asyncio.run(result)
     return json.loads(result[0].text)
 
 

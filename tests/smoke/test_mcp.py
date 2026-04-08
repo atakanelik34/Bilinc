@@ -3,6 +3,7 @@
 Verifies that create_mcp_server_v2() initializes and
 the core tool handlers work correctly.
 """
+import asyncio
 import json
 import pytest
 from bilinc.core.stateplane import StatePlane
@@ -25,8 +26,16 @@ def plane():
     return p
 
 
+def _run(result):
+    """Run async handlers in sync smoke tests."""
+    if asyncio.iscoroutine(result):
+        return asyncio.run(result)
+    return result
+
+
 def _text(result):
     """Extract JSON from TextContent response."""
+    result = _run(result)
     return json.loads(result[0].text)
 
 
@@ -79,7 +88,7 @@ class TestMCPCommit:
 
 class TestMCPRecall:
     def test_recall_existing(self, plane):
-        _handle_commit_mem(plane, {"key": "recall_test", "value": "hello"})
+        _run(_handle_commit_mem(plane, {"key": "recall_test", "value": "hello"}))
         result = _handle_recall(plane, {"key": "recall_test"})
         data = _text(result)
         assert data["count"] >= 1
@@ -94,7 +103,7 @@ class TestMCPRecall:
 
 class TestMCPRevise:
     def test_revise_conflict(self, plane):
-        _handle_commit_mem(plane, {"key": "db_host", "value": "localhost", "importance": 0.3})
+        _run(_handle_commit_mem(plane, {"key": "db_host", "value": "localhost", "importance": 0.3}))
         result = _handle_revise(plane, {
             "key": "db_host",
             "value": "prod.internal",
@@ -117,11 +126,11 @@ class TestMCPStatus:
 
 class TestMCPQueryGraph:
     def test_query_graph_after_commit(self, plane):
-        _handle_commit_mem(plane, {
+        _run(_handle_commit_mem(plane, {
             "key": "entity_test",
             "value": "Company Bilinc builds AI in San Francisco",
             "memory_type": "semantic",
-        })
+        }))
         result = _handle_query_graph(plane, {"entity": "entity_test", "max_depth": 1})
         data = _text(result)
         assert data["tool"] == "query_graph"

@@ -2,6 +2,17 @@
 
 All notable changes to Bilinc.
 
+## [1.0.1] — 2026-04-08
+
+### Fixed
+- `commit_mem` via MCP now persists AGM-backed writes to SQLite/PostgreSQL instead of only mutating in-process belief state
+- `recall` now falls back to the persistent backend, so fresh server processes can still see previously committed memories
+- `revise` and `forget` now keep backend state synchronized with AGM changes
+- `verify` now checks persistent entries even when AGM state has not yet been hydrated
+
+### Added
+- Regression coverage for persistent MCP commit/recall and backend synchronization after revise/forget
+
 ## [1.0.0] — 2026-04-08
 
 ### Added
