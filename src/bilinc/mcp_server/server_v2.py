@@ -504,7 +504,7 @@ def _create_server_v2(
                     snapshot["tool"] = "snapshot"
                     result = _result_text(snapshot)
                 else:
-                    result = _handle_snapshot(plane, arguments)
+                    result = await _handle_snapshot(plane, arguments)
 
             elif name == "diff":
                 if plane.backend and plane.enable_audit:
@@ -512,7 +512,7 @@ def _create_server_v2(
                     diff["tool"] = "diff"
                     result = _result_text(diff)
                 else:
-                    result = _handle_diff(plane, arguments)
+                    result = await _handle_diff(plane, arguments)
 
             elif name == "rollback":
                 if plane.backend and plane.enable_audit:
@@ -520,7 +520,7 @@ def _create_server_v2(
                     rollback["tool"] = "rollback"
                     result = _result_text(rollback)
                 else:
-                    result = _handle_rollback(plane, arguments)
+                    result = await _handle_rollback(plane, arguments)
 
             elif name == "query_graph":
                 result = _handle_query_graph(plane, arguments)
@@ -822,7 +822,16 @@ async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[Te
 
     # Commit with AGM
     if hasattr(plane, "commit_with_agm_async"):
-        result = await plane.commit_with_agm_async(key, value, memory_type=memory_type, importance=importance)
+        result = await plane.commit_with_agm_async(
+            key,
+            value,
+            memory_type=memory_type,
+            importance=importance,
+            metadata=metadata,
+            source=source,
+            session_id=session_id,
+            ttl=ttl,
+        )
     else:
         result = plane.commit_with_agm(key, value, memory_type=memory_type, importance=importance)
 
@@ -905,7 +914,7 @@ async def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
 
     # Backend fallback for fresh process / persistent mode
     if not entries and getattr(plane, "backend", None):
-        backend_entries = _run_coro_sync(plane.backend.list_all())
+        backend_entries = await plane.backend.list_all()
         for e in backend_entries:
             if key and e.key != key:
                 continue
@@ -918,10 +927,25 @@ async def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
     # Apply limit
     entries = list(entries_by_key.values())[:limit]
 
+    if canonical_only:
+        entries = [e for e in entries if bool((e.metadata or {}).get("canonical", False))]
+    if exclude_session_summaries:
+        entries = [e for e in entries if not str(e.key).startswith("hermes_session::")]
+
+    entry_payloads = []
+    for entry in entries:
+        payload = _json_safe(entry)
+        if not isinstance(payload, dict):
+            payload = {"key": getattr(entry, "key", ""), "value": payload}
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            payload["metadata"] = {}
+        entry_payloads.append(payload)
+
     return _result_text({
         "tool": "recall",
-        "count": len(entries),
-        "entries": [_json_safe(e) for e in entries],
+        "count": len(entry_payloads),
+        "entries": entry_payloads,
     })
 
 
@@ -950,16 +974,12 @@ async def _handle_forget(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
             metadata={"reason": reason, "deleted": removed},
         )
 
-    backend_removed = False
-    if getattr(plane, "backend", None):
-        backend_removed = bool(_run_coro_sync(plane.backend.delete(key)))
-
     return _result_text({
         "tool": "forget",
         "key": key,
         "reason": reason,
         "removed": removed,
-        "backend_removed": backend_removed,
+        "backend_removed": removed,
     })
 
 
@@ -1066,9 +1086,9 @@ async def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List
     if getattr(plane, "backend", None):
         try:
             if hasattr(plane.backend, "stats"):
-                status["backend"] = _run_coro_sync(plane.backend.stats())
+                status["backend"] = await plane.backend.stats()
             elif hasattr(plane.backend, "get_stats"):
-                status["backend"] = _run_coro_sync(plane.backend.get_stats())
+                status["backend"] = await plane.backend.get_stats()
         except Exception as exc:
             status["backend"] = {"error": str(exc)}
 
@@ -1130,7 +1150,7 @@ def _handle_consolidate(plane: StatePlane, args: Dict[str, Any]) -> List[TextCon
     })
 
 
-def _handle_snapshot(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+async def _handle_snapshot(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     include_audit = args.get("include_audit", False)
 
     snapshot = {
@@ -1162,7 +1182,7 @@ def _handle_snapshot(plane: StatePlane, args: Dict[str, Any]) -> List[TextConten
 
     if getattr(plane, "backend", None):
         try:
-            snap = _run_coro_sync(plane.snapshot())
+            snap = await plane.snapshot()
             snapshot["backend_snapshot"] = snap
         except Exception as exc:
             snapshot["backend_snapshot_error"] = str(exc)
@@ -1170,7 +1190,7 @@ def _handle_snapshot(plane: StatePlane, args: Dict[str, Any]) -> List[TextConten
     return _result_text(snapshot)
 
 
-def _handle_diff(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+async def _handle_diff(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     ts_a = args.get("ts_a")
     ts_b = args.get("ts_b")
     if ts_a is None or ts_b is None:
@@ -1185,13 +1205,13 @@ def _handle_diff(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
             "success": False,
             "error": "persistent backend or audit trail required",
         })
-    data = _run_coro_sync(plane.diff(float(ts_a), float(ts_b)))
+    data = await plane.diff(float(ts_a), float(ts_b))
     data["tool"] = "diff"
     data["success"] = True
     return _result_text(data)
 
 
-def _handle_rollback(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+async def _handle_rollback(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     ts = args.get("ts")
     if ts is None:
         return _result_text({"tool": "rollback", "success": False, "error": "ts is required"})
@@ -1201,12 +1221,27 @@ def _handle_rollback(plane: StatePlane, args: Dict[str, Any]) -> List[TextConten
             "success": False,
             "error": "persistent backend or audit trail required",
         })
-    restored = _run_coro_sync(plane.rollback(float(ts)))
+    try:
+        restored = await plane.rollback(float(ts))
+    except Exception as exc:
+        return _result_text({
+            "tool": "rollback",
+            "success": False,
+            "target_ts": float(ts),
+            "error": "rollback_failed",
+            "message": str(exc),
+        })
+    if isinstance(restored, dict):
+        counts = restored.get("counts") or {}
+        restored_count = int(counts.get("created", 0)) + int(counts.get("updated", 0)) + int(counts.get("deleted", 0))
+    else:
+        restored_count = int(restored)
     return _result_text({
         "tool": "rollback",
         "success": True,
-        "restored_count": restored,
+        "restored_count": restored_count,
         "target_ts": float(ts),
+        "details": restored if isinstance(restored, dict) else None,
     })
 
 

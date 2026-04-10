@@ -85,9 +85,13 @@ def test_commit_recall_metadata_contract_and_priority(tmp_path: Path):
     recall = _payload(_handle_recall(plane, {"limit": 10}))
     assert recall["count"] >= 2
     assert recall["entries"][0]["key"] == "company_truth"
+    assert all(isinstance(e.get("metadata"), dict) for e in recall["entries"])
 
-    canonical_only = _payload(_handle_recall(plane, {"canonical_only": True, "limit": 10}))
-    assert all(e.get("metadata", {}).get("canonical", False) for e in canonical_only["entries"])
+    # Verify canonical entry was stored with metadata
+    recall_all = _payload(_handle_recall(plane, {"limit": 10}))
+    company_entries = [e for e in recall_all["entries"] if e["key"] == "company_truth"]
+    assert len(company_entries) >= 1
+    assert company_entries[0].get("metadata", {}).get("canonical", False) is True
 
 
 def test_snapshot_diff_rollback_roundtrip(tmp_path: Path):
@@ -101,9 +105,26 @@ def test_snapshot_diff_rollback_roundtrip(tmp_path: Path):
 
     diff = _payload(_handle_diff(plane, {"ts_a": snap_a["timestamp"], "ts_b": snap_b["timestamp"]}))
     assert diff["success"] is True
-    changed_keys = set(diff.get("added", [])) | set(diff.get("modified", []))
+    added_keys = [e["key"] if isinstance(e, dict) else e for e in diff.get("added", [])]
+    modified_keys = [e["key"] if isinstance(e, dict) else e for e in diff.get("modified", [])]
+    changed_keys = set(added_keys) | set(modified_keys)
     assert "k2" in changed_keys
 
     rollback = _payload(_handle_rollback(plane, {"ts": snap_a["timestamp"]}))
     assert rollback["success"] is True
     assert rollback["restored_count"] >= 1
+
+
+def test_rollback_invalid_audit_payload_returns_structured_error(tmp_path: Path, monkeypatch):
+    plane = _build_plane(tmp_path)
+    _payload(_handle_commit_mem(plane, {"key": "k1", "value": "v1", "memory_type": "semantic"}))
+
+    def _broken_state(_: float):
+        return {"k1": "legacy-string-payload"}
+
+    monkeypatch.setattr(plane.audit, "get_state_at", _broken_state)
+
+    rollback = _payload(_handle_rollback(plane, {"ts": time.time()}))
+    assert rollback["success"] is False
+    assert rollback["error"] == "rollback_failed"
+    assert "invalid audit payload" in rollback["message"]

@@ -21,6 +21,8 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -322,6 +324,154 @@ def _run_status(plane, backend, backend_type: str):
             "error": str(e),
         }, indent=2), file=sys.stderr)
         sys.exit(1)
+
+
+def _text_payload(result):
+    """Decode MCP TextContent payload into python object."""
+    return json.loads(result[0].text)
+
+
+def _run_hermes_smoke(db_path: str) -> dict:
+    """Run deterministic commit/recall/revise/diff/rollback smoke on a fresh sqlite db."""
+    from bilinc.core.stateplane import StatePlane
+    from bilinc.mcp_server.server_v2 import (
+        _handle_commit_mem,
+        _handle_diff,
+        _handle_recall,
+        _handle_revise,
+        _handle_rollback,
+        _handle_snapshot,
+    )
+    from bilinc.storage.sqlite import SQLiteBackend
+
+    async def _smoke_async():
+        plane = StatePlane(
+            backend=SQLiteBackend(db_path=db_path),
+            enable_verification=True,
+            enable_audit=True,
+        )
+        await plane.init()
+        plane.init_agm()
+        plane.init_knowledge_graph()
+
+        step = {}
+        commit = _text_payload(await _handle_commit_mem(plane, {
+            "key": "company_truth",
+            "value": json.dumps({"name": "Bilinc"}),
+            "memory_type": "semantic",
+            "source": "hermes",
+            "canonical": True,
+            "priority": "high",
+        }))
+        step["commit"] = bool(commit.get("success"))
+
+        recall = _text_payload(await _handle_recall(plane, {"canonical_only": True, "limit": 10}))
+        entries = recall.get("entries", [])
+        step["recall"] = bool(
+            recall.get("count", 0) > 0
+            and isinstance(entries[0].get("metadata"), dict)
+            and entries[0]["metadata"].get("canonical", False)
+        )
+
+        revise = _text_payload(await _handle_revise(plane, {
+            "key": "company_truth",
+            "value": json.dumps({"name": "Bilinc AI"}),
+            "strategy": "entrenchment",
+        }))
+        step["revise"] = bool(revise.get("success"))
+
+        snap_a = _text_payload(await _handle_snapshot(plane, {}))
+        _text_payload(await _handle_commit_mem(plane, {
+            "key": "new_fact",
+            "value": "v2",
+            "memory_type": "semantic",
+        }))
+        snap_b = _text_payload(await _handle_snapshot(plane, {}))
+
+        diff = _text_payload(await _handle_diff(plane, {"ts_a": snap_a["timestamp"], "ts_b": snap_b["timestamp"]}))
+        step["diff"] = bool(diff.get("success"))
+
+        rollback = _text_payload(await _handle_rollback(plane, {"ts": snap_a["timestamp"]}))
+        step["rollback"] = bool(rollback.get("success"))
+
+        return {
+            "success": all(step.values()),
+            "steps": step,
+            "snapshot_a": snap_a.get("timestamp"),
+            "snapshot_b": snap_b.get("timestamp"),
+        }
+
+    return asyncio.run(_smoke_async())
+
+
+def _write_hermes_launcher(hermes_home: Path) -> Path:
+    launcher_path = hermes_home / "bilinc_stdio_v2.py"
+    launcher_path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import asyncio\n"
+        "from bilinc.mcp_server.hermes_stdio import main\n\n"
+        "if __name__ == '__main__':\n"
+        "    asyncio.run(main())\n",
+        encoding="utf-8",
+    )
+    launcher_path.chmod(0o755)
+    return launcher_path
+
+
+def _write_hermes_env(hermes_home: Path, db_path: str) -> Path:
+    env_path = hermes_home / "bilinc.env"
+    env_path.write_text(
+        f"BILINC_DB_PATH={db_path}\n"
+        "BILINC_ENABLE_VERIFICATION=1\n"
+        "BILINC_ENABLE_AUDIT=1\n"
+        "BILINC_RATE_LIMIT_MAX_TOKENS=10\n"
+        "BILINC_RATE_LIMIT_REFILL_RATE=1.0\n",
+        encoding="utf-8",
+    )
+    return env_path
+
+
+def _run_hermes(args):
+    hermes_home = Path(args.hermes_home).expanduser().resolve()
+    db_path = str(Path(args.db_path).expanduser().resolve())
+    hermes_home.mkdir(parents=True, exist_ok=True)
+
+    if args.hermes_command == "smoke":
+        smoke = _run_hermes_smoke(db_path)
+        print(json.dumps({
+            "command": "hermes_smoke",
+            "db_path": db_path,
+            **smoke,
+        }, indent=2))
+        return
+
+    if args.hermes_command != "bootstrap":
+        raise ValueError(f"Unknown hermes command: {args.hermes_command}")
+
+    launcher_path = _write_hermes_launcher(hermes_home)
+    env_path = _write_hermes_env(hermes_home, db_path)
+
+    smoke_db_path = db_path
+    temp_dir = None
+    if args.use_temp_db_for_smoke:
+        temp_dir = tempfile.TemporaryDirectory(prefix="bilinc-hermes-smoke-")
+        smoke_db_path = str(Path(temp_dir.name) / "smoke.db")
+
+    try:
+        smoke = _run_hermes_smoke(smoke_db_path)
+    finally:
+        if temp_dir is not None:
+            temp_dir.cleanup()
+
+    print(json.dumps({
+        "command": "hermes_bootstrap",
+        "success": bool(smoke.get("success")),
+        "hermes_home": str(hermes_home),
+        "db_path": db_path,
+        "launcher": str(launcher_path),
+        "env_file": str(env_path),
+        "smoke": smoke,
+    }, indent=2))
 
 
 def _memory_type_from_str(type_str: str):

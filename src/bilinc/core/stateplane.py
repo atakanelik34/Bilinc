@@ -64,6 +64,20 @@ class StatePlane:
     def _entry_to_state(entry: MemoryEntry) -> Dict[str, Any]:
         return entry.to_dict()
 
+    @staticmethod
+    def _coerce_audit_state_entry(key: str, raw_state: Any) -> MemoryEntry:
+        """
+        Convert an audit state payload into a MemoryEntry.
+        Raises ValueError for malformed/legacy payloads that are not reconstructable.
+        """
+        if not isinstance(raw_state, dict):
+            raise ValueError(f"invalid audit payload for key '{key}': expected object")
+        state = dict(raw_state)
+        state.setdefault("key", key)
+        if "memory_type" not in state:
+            raise ValueError(f"invalid audit payload for key '{key}': missing memory_type")
+        return MemoryEntry.from_dict(state)
+
     async def _restore_backend_entry(self, entry: MemoryEntry) -> bool:
         if self.backend and hasattr(self.backend, "restore"):
             return await self.backend.restore(entry)
@@ -386,7 +400,7 @@ class StatePlane:
                 if existing and existing.to_dict() == target_entry_dict:
                     continue
 
-                restored_entry = MemoryEntry.from_dict(target_entry_dict)
+                restored_entry = self._coerce_audit_state_entry(key, target_entry_dict)
                 await self._restore_backend_entry(restored_entry)
                 self.working_memory.remove(key)
 
@@ -640,15 +654,16 @@ class StatePlane:
                 if hasattr(self, "knowledge_graph") and self.knowledge_graph:
                     self.knowledge_graph.ingest_memory_entry(entry)
 
+                previous_entry = await self.backend.load(key) if self.backend else None
                 if self.backend and result.success:
                     await self.backend.save(entry)
 
                 if self.enable_audit and self.audit:
                     self.audit.log(
-                        OpType.CREATE,
+                        OpType.UPDATE if previous_entry else OpType.CREATE,
                         key,
-                        before_value=None,
-                        after_value=entry.value,
+                        before_value=previous_entry.to_dict() if previous_entry else None,
+                        after_value=entry.to_dict(),
                     )
 
                 duration = time.perf_counter() - start_time
