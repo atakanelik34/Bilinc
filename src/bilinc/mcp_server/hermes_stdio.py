@@ -42,7 +42,6 @@ async def _build_server():
         auth_token=auth_token,
         max_tokens=max_tokens,
         refill_rate=refill_rate,
-        transport_mode="stdio",
     )
 
 
