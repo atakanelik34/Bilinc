@@ -343,7 +343,7 @@ Expected result:
 
 ## Phase Progress
 
-Available MCP tools: (feat: complete Hermes public integration pack and prod-strict MCP policy)
+Available MCP tools:
 
 HTTP behavior:
 
@@ -361,7 +361,7 @@ HTTP behavior:
 | [Security Guide](docs/security.md) | Input validation, resource limits, MCP auth, audit |
 | [CHANGELOG](CHANGELOG.md) | Full version history |
 
-Available MCP tools: (feat: complete Hermes public integration pack and prod-strict MCP policy)
+Available MCP tools:
 
 - `commit_mem`
 - `recall`

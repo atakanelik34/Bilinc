@@ -368,7 +368,7 @@ class StatePlane:
             updated_keys = []
 
             for key in sorted(set(current_state.keys()) - set(target_state.keys())):
- (feat: complete Hermes public integration pack and prod-strict MCP policy)
+
                 existing = await self.backend.load(key)
                 await self.backend.delete(key)
                 self.working_memory.remove(key)
@@ -440,7 +440,7 @@ class StatePlane:
         except Exception as exc:
             self._record_failure("rollback", start_time, exc, target_timestamp=target_timestamp)
             raise
- (feat: complete Hermes public integration pack and prod-strict MCP policy)
+
     
     async def verify(self, key: str) -> Dict[str, Any]:
         """Full verification of a single entry + audit trail."""
@@ -591,90 +591,94 @@ class StatePlane:
                         importance: float = 1.0, metadata: Optional[Dict[str, Any]] = None,
                         source: str = "", session_id: str = "", ttl: Optional[float] = None) -> Any:
         """
-        Commit a memory entry and auto-apply AGM revision.
-        If AGM engine is not initialized, falls back to basic storage.
+        Sync wrapper for commit_with_agm. Auto-detects event loop and delegates.
         """
-entry = MemoryEntry(
-        key=key,
-        value=value,
-        memory_type=MemoryType(memory_type) if isinstance(memory_type, str) else memory_type,
-        importance=importance,
-    )
-    # Hermes metadata contract
-    if metadata:
-        entry.metadata.update(metadata)
-    if source:
-        entry.source = source
-    if session_id:
-        entry.session_id = session_id
-    if ttl is not None:
-        entry.ttl = float(ttl)
-        entry.invalid_at = time.time() + float(ttl)
-    
-    # Persist entry first
-    if self.backend:
         try:
             asyncio.get_running_loop()
+            # We're in an async context - can't use asyncio.run
+            # Return a placeholder; callers should use commit_with_agm_async directly
+            return {"success": False, "error": "Use commit_with_agm_async in async context", "key": key}
         except RuntimeError:
             return asyncio.run(
-                self.commit_with_agm_async(
+                self.commit_with_agm_async(key, value, memory_type=memory_type,
+                    importance=importance, metadata=metadata,
+                    source=source, session_id=session_id, ttl=ttl)
+            )
+
+    async def commit_with_agm_async(self, key: str, value: Any, memory_type: str = "semantic",
+                        importance: float = 1.0, metadata: Optional[Dict[str, Any]] = None,
+                        source: str = "", session_id: str = "", ttl: Optional[float] = None) -> Any:
+        """
+        Async commit with AGM revision and Hermes metadata support.
+        """
+        entry = MemoryEntry(
+            key=key,
+            value=value,
+            memory_type=MemoryType(memory_type) if isinstance(memory_type, str) else memory_type,
+            importance=importance,
+        )
+        # Hermes metadata contract
+        if metadata:
+            entry.metadata.update(metadata)
+        if source:
+            entry.source = source
+        if session_id:
+            entry.session_id = session_id
+        if ttl is not None:
+            entry.ttl = float(ttl)
+            entry.invalid_at = time.time() + float(ttl)
+
+        start_time = time.perf_counter()
+        try:
+            if self.enable_audit and self.audit:
+                self.audit.log(
+                    OpType.COMMIT,
                     key,
-                    value,
-                    memory_type=memory_type,
-                    importance=importance,
+                    before_value=None,
+                    after_value=entry.value,
                 )
-            )
-    start_time = time.perf_counter()
-    try:
-        if self.enable_audit and self.audit:
-            self.audit.log(
-                OpType.COMMIT,
-                key,
-                before_value=None,
-                after_value=entry.value,
-            )
 
-        # AGM revision
-        result = self.agm_engine.revise(BeliefState(
-            key=entry.key,
-            value=entry.value,
-            confidence=entry.importance,
-            timestamp=entry.created_at,
-        ))
+            # AGM revision
+            result = self.agm_engine.revise(BeliefState(
+                key=entry.key,
+                value=entry.value,
+                confidence=entry.importance,
+                timestamp=entry.created_at,
+            ))
 
-        if not result.success:
-            return {"success": False, "error": result.reason, "key": key}
+            if not result.success:
+                return {"success": False, "error": result.reason, "key": key}
 
-        # Update entry from AGM result
-        if result.merged_state:
-            entry.value = result.merged_state.value
-            entry.importance = result.merged_state.confidence
+            # Update entry from AGM result
+            if result.merged_state:
+                entry.value = result.merged_state.value
+                entry.importance = result.merged_state.confidence
 
-        # Persist
-        if self.backend:
-            await self.backend.save(entry)
+            # Persist
+            if self.backend:
+                await self.backend.save(entry)
 
-        # Knowledge graph
-        if self.knowledge_graph:
-            self.knowledge_graph.ingest_memory_entry(entry)
+            # Knowledge graph
+            if self.knowledge_graph:
+                self.knowledge_graph.ingest_memory_entry(entry)
 
-        # Metrics
-        duration = time.perf_counter() - start_time
-        if self._metrics:
-            self._metrics.record("commit_with_agm_duration", duration)
-            self._metrics.increment("commit_with_agm_total")
+            # Metrics
+            duration = time.perf_counter() - start_time
+            if self._metrics:
+                self._metrics.record("commit_with_agm_duration", duration)
+                self._metrics.increment("commit_with_agm_total")
 
-        return {
-            "success": True,
-            "key": key,
-            "value": entry.value,
-            "revision_method": result.method.value if result.method else "direct",
-            "duration": duration,
-        }
-    except Exception as e:
-        if self._metrics:
-            self._metrics.increment("commit_with_agm_errors")
-        return {"success": False, "error": str(e), "key": key} (feat: complete Hermes public integration pack and prod-strict MCP policy)
+            return {
+                "success": True,
+                "key": key,
+                "value": entry.value,
+                "revision_method": result.method.value if result.method else "direct",
+                "duration": duration,
+            }
+        except Exception as e:
+            if self._metrics:
+                self._metrics.increment("commit_with_agm_errors")
+            return {"success": False, "error": str(e), "key": key}
 
     def _persist_entry_sync(self, entry: MemoryEntry) -> bool:
         """Persist a MemoryEntry to backend if one exists."""

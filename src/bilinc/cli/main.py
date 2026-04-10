@@ -16,19 +16,6 @@ Usage:
   bilinc status
 """
 
-    hermes = sub.add_parser("hermes", help="Hermes integration commands")
-    hermes_sub = hermes.add_subparsers(dest="hermes_command", required=True)
-
-    p_bootstrap = hermes_sub.add_parser("bootstrap", help="Bootstrap Bilinc for Hermes")
-    p_bootstrap.add_argument("--hermes-home", default="~/.hermes", help="Hermes home directory")
-    p_bootstrap.add_argument("--db-path", default="~/bilinc.db", help="Database path")
-    p_bootstrap.add_argument("--use-temp-db-for-smoke", action="store_true", help="Use temp DB for smoke test")
-
-    p_smoke = hermes_sub.add_parser("smoke", help="Run Hermes smoke test")
-    p_smoke.add_argument("--hermes-home", default="~/.hermes")
-    p_smoke.add_argument("--db-path", default="~/bilinc.db")
- (feat: complete Hermes public integration pack and prod-strict MCP policy)
-
 import argparse
 import asyncio
 import json
@@ -37,7 +24,7 @@ import sys
 
 import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
- (feat: complete Hermes public integration pack and prod-strict MCP policy)
+
 
 
 def _parse_value(val: str):
@@ -112,6 +99,19 @@ def main():
     # Status
     sub.add_parser("status", help="Show operational statistics")
 
+    # Hermes
+    hermes = sub.add_parser("hermes", help="Hermes integration commands")
+    hermes_sub = hermes.add_subparsers(dest="hermes_command", required=True)
+
+    p_bootstrap = hermes_sub.add_parser("bootstrap", help="Bootstrap Bilinc for Hermes")
+    p_bootstrap.add_argument("--hermes-home", default="~/.hermes", help="Hermes home directory")
+    p_bootstrap.add_argument("--db-path", default="~/bilinc.db", help="Database path")
+    p_bootstrap.add_argument("--use-temp-db-for-smoke", action="store_true", help="Use temp DB for smoke test")
+
+    p_smoke = hermes_sub.add_parser("smoke", help="Run Hermes smoke test")
+    p_smoke.add_argument("--hermes-home", default="~/.hermes")
+    p_smoke.add_argument("--db-path", default="~/bilinc.db")
+
     args = parser.parse_args()
 
     # Resolve backend
@@ -133,9 +133,12 @@ def main():
     elif args.command == "status":
         _run_status(plane, backend, backend_type)
 
+    elif args.command == "hermes":
+        _run_hermes(args)
+
     else:
         parser.print_help()
- (feat: complete Hermes public integration pack and prod-strict MCP policy)
+
 
 
 def _create_plane(backend, backend_type: str):

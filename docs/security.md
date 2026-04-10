@@ -46,7 +46,7 @@ clean = InputValidator.sanitize_for_kg("<script>alert('xss')</script>RealNode")
 Bilinc enforces transport-specific auth behavior:
 
 - `stdio`: trusted-local mode, token optional.
-- `http`: token required; missing/invalid token returns structured `unauthorized` error. (feat: complete Hermes public integration pack and prod-strict MCP policy)
+- `http`: token required; missing/invalid token returns structured `unauthorized` error.
 
 - **stdio transport**: trusted local process boundary, no request-level auth
 - **HTTP transport**: Bearer API key auth is enforced
@@ -67,7 +67,7 @@ app = create_mcp_http_app(auth_token="super-secret")
 ```python
 from bilinc.mcp_server.server_v2 import create_mcp_server_v2
 server = create_mcp_server_v2(plane, auth_token="your-secure-key-here", transport_mode="http")
-``` (feat: complete Hermes public integration pack and prod-strict MCP policy)
+```
 
 For local development only:
 
