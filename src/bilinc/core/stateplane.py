@@ -32,6 +32,10 @@ from bilinc.observability.logging import log_event
 logger = logging.getLogger(__name__)
 
 
+class PersistenceWriteError(RuntimeError):
+    """Raised when a logical memory operation cannot be durably persisted."""
+
+
 class StatePlane:
     """Phase 2: Full brain-inspired agent memory with verification."""
     
@@ -143,7 +147,17 @@ class StatePlane:
         self.metrics.increment("backend_errors_total")
         self.metrics.increment(f"{operation}_failures_total")
         self.metrics.record_latency(f"{operation}_latency_ms", elapsed)
-        self.health.update_gauge_on_metrics(self.metrics)
+        try:
+            self.health.update_gauge_on_metrics(self.metrics)
+        except Exception as health_exc:
+            log_event(
+                logger,
+                "warning",
+                "health_update_failed",
+                operation=operation,
+                error_type=type(health_exc).__name__,
+                error=str(health_exc),
+            )
         log_event(
             logger,
             "error",
@@ -194,7 +208,11 @@ class StatePlane:
             else:
                 if self.backend:
                     previous_entry = await self.backend.load(key)
-                    await self.backend.save(entry)
+                    saved = await self.backend.save(entry)
+                    if not saved:
+                        raise PersistenceWriteError(
+                            f"persistence_write_failed: backend save returned false for key '{key}'"
+                        )
 
             # Audit log
             if self.enable_audit and self.audit:
@@ -241,21 +259,18 @@ class StatePlane:
                     raise ValueError("Working memory is full.")
 
         # 3. Execute
-        import asyncio
         effective_memory_type = memory_type
         if self.backend is None and memory_type != MemoryType.WORKING:
             effective_memory_type = MemoryType.WORKING
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                return self.commit(key, value, effective_memory_type, verify, importance, metadata)
-            return loop.run_until_complete(
-                self.commit(key, value, effective_memory_type, verify, importance, metadata)
-            )
+            asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(
                 self.commit(key, value, effective_memory_type, verify, importance, metadata)
             )
+        raise RuntimeError(
+            "commit_sync cannot be used while an event loop is running; use `await commit(...)` instead."
+        )
     
     def recall_all_sync(self):
         """Synchronous recall of all entries from working memory. For in-memory/test use."""
@@ -656,9 +671,13 @@ class StatePlane:
 
                 previous_entry = await self.backend.load(key) if self.backend else None
                 if self.backend and result.success:
-                    await self.backend.save(entry)
+                    saved = await self.backend.save(entry)
+                    if not saved:
+                        raise PersistenceWriteError(
+                            f"persistence_write_failed: backend save returned false for key '{key}'"
+                        )
 
-                if self.enable_audit and self.audit:
+                if self.enable_audit and self.audit and result.success:
                     self.audit.log(
                         OpType.UPDATE if previous_entry else OpType.CREATE,
                         key,
@@ -671,7 +690,11 @@ class StatePlane:
             else:
                 # Fallback mode
                 if self.backend:
-                    await self.backend.save(entry)
+                    saved = await self.backend.save(entry)
+                    if not saved:
+                        raise PersistenceWriteError(
+                            f"persistence_write_failed: backend save returned false for key '{key}'"
+                        )
                 duration = time.perf_counter() - start_time
                 return entry
         except Exception as exc:

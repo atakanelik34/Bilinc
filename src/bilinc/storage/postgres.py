@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import time
 import logging
+from urllib.parse import urlsplit, urlunsplit
 from typing import Any, Dict, List, Optional
 try:
     import asyncpg
@@ -29,6 +30,21 @@ except ImportError:
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.storage.backend import StorageBackend
 logger = logging.getLogger(__name__)
+
+
+def _redact_dsn(dsn: str) -> str:
+    try:
+        parsed = urlsplit(dsn)
+        if not parsed.scheme:
+            return "<redacted>"
+        host = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port else ""
+        user = parsed.username
+        auth = f"{user}:***@" if user else ""
+        netloc = f"{auth}{host}{port}"
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    except Exception:
+        return "<redacted>"
 class PostgresBackend(StorageBackend):
     SCHEMA_VERSION = 1
 
@@ -236,7 +252,7 @@ class PostgresBackend(StorageBackend):
                 "conflicts": stats.get("conflicts", 0),
                 "by_type": {r["memory_type"]: r["cnt"] for r in by_type_rows},
                 "schema_version": version_row["version"] if version_row else 0,
-                "dsn": self.dsn,
+                "dsn": _redact_dsn(self.dsn),
             }
     def _row_to_entry(self, row) -> MemoryEntry:
         """Convert database row to MemoryEntry."""

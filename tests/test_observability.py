@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import time
+
+import pytest
 
 from bilinc import StatePlane
 from bilinc.observability.health import HealthCheck
@@ -144,3 +147,28 @@ class TestHealthCheck:
         assert report["status"] == "degraded"
         assert "http_auth_disabled" in report["issues"]
         assert report["components"]["http_transport"]["status"] == "degraded"
+
+    def test_health_check_redacts_postgres_dsn(self):
+        class PostgresBackend:
+            def __init__(self):
+                self._initialized = True
+                self.pool = object()
+                self.dsn = "postgresql://bilinc:supersecret@db.internal:5432/bilinc"
+
+        plane = StatePlane(enable_verification=False, enable_audit=False)
+        plane.backend = PostgresBackend()
+
+        report = plane.health.readiness()
+        dsn = report["components"]["backend"]["dsn"]
+        assert "supersecret" not in dsn
+        assert dsn.endswith("/bilinc")
+
+    def test_init_failure_preserves_root_cause_when_backend_locked(self):
+        class LockedBackend:
+            async def init(self):
+                raise sqlite3.OperationalError("database is locked")
+
+        plane = StatePlane(backend=LockedBackend(), enable_verification=False, enable_audit=True)
+
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            asyncio.run(plane.init())

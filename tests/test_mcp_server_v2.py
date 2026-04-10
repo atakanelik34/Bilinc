@@ -268,3 +268,59 @@ class TestMCPErrorHandling:
             assert parsed["tool"] == "test_tool"
             assert parsed["error"] == "ValueError"
             assert parsed["success"] is False
+
+    def test_commit_mem_returns_structured_failure_when_persistence_write_fails(self):
+        class FailingBackend:
+            async def load(self, key):
+                return None
+
+            async def save(self, entry):
+                return False
+
+        p = StatePlane(backend=FailingBackend(), enable_verification=False, enable_audit=False)
+        p.init_agm()
+        p.init_knowledge_graph()
+
+        result = _call(_handle_commit_mem, p, {
+            "key": "persist_fail",
+            "value": "v1",
+            "memory_type": "semantic",
+        })
+
+        assert result["success"] is False
+        assert result["error"] == "persistence_write_failed"
+
+    def test_revise_returns_structured_failure_when_persistence_write_fails(self):
+        class FlakyBackend:
+            def __init__(self):
+                self._saved = {}
+
+            async def load(self, key):
+                return self._saved.get(key)
+
+            async def save(self, entry):
+                # first write succeeds (for seed commit), second write fails (for revise)
+                if entry.key in self._saved:
+                    return False
+                self._saved[entry.key] = entry
+                return True
+
+        p = StatePlane(backend=FlakyBackend(), enable_verification=False, enable_audit=False)
+        p.init_agm()
+        p.init_knowledge_graph()
+
+        seed = _call(_handle_commit_mem, p, {
+            "key": "persist_fail_revise",
+            "value": "v1",
+            "memory_type": "semantic",
+        })
+        assert seed["success"] is True
+
+        result = _call(_handle_revise, p, {
+            "key": "persist_fail_revise",
+            "value": "v2",
+            "strategy": "entrenchment",
+        })
+
+        assert result["success"] is False
+        assert result["error"] == "persistence_write_failed"

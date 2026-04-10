@@ -30,7 +30,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Mount, Route
 
-from bilinc.core.stateplane import StatePlane
+from bilinc.core.stateplane import PersistenceWriteError, StatePlane
 from bilinc.core.models import MemoryType
 from bilinc.core.audit import OpType
 from bilinc.mcp_server.rate_limiter import TokenBucketLimiter
@@ -821,19 +821,28 @@ async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[Te
             })
 
     # Commit with AGM
-    if hasattr(plane, "commit_with_agm_async"):
-        result = await plane.commit_with_agm_async(
-            key,
-            value,
-            memory_type=memory_type,
-            importance=importance,
-            metadata=metadata,
-            source=source,
-            session_id=session_id,
-            ttl=ttl,
-        )
-    else:
-        result = plane.commit_with_agm(key, value, memory_type=memory_type, importance=importance)
+    try:
+        if hasattr(plane, "commit_with_agm_async"):
+            result = await plane.commit_with_agm_async(
+                key,
+                value,
+                memory_type=memory_type,
+                importance=importance,
+                metadata=metadata,
+                source=source,
+                session_id=session_id,
+                ttl=ttl,
+            )
+        else:
+            result = plane.commit_with_agm(key, value, memory_type=memory_type, importance=importance)
+    except PersistenceWriteError as exc:
+        return _result_text({
+            "tool": "commit_mem",
+            "key": key,
+            "success": False,
+            "error": "persistence_write_failed",
+            "message": str(exc),
+        })
 
     # AGMResult or MemoryEntry
     if hasattr(result, "success"):
@@ -1020,7 +1029,17 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
         plane.knowledge_graph.ingest_memory_entry(winning_entry)
 
     if plane.backend and result.success and winning_entry:
-        await plane.backend.save(winning_entry)
+        save_ok = await plane.backend.save(winning_entry)
+        if not save_ok:
+            return _result_text({
+                "tool": "revise",
+                "key": key,
+                "strategy": strategy.value,
+                "success": False,
+                "error": "persistence_write_failed",
+                "message": f"backend save returned false for key '{key}'",
+                "conflicts_resolved": result.conflicts_resolved,
+            })
         if plane.enable_audit and plane.audit:
             previous_state = previous_entry.to_dict() if previous_entry else None
             next_state = winning_entry.to_dict()
@@ -1050,7 +1069,7 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
 
 
 async def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List[TextContent]:
-    status = {"tool": "status", "version": "1.0.1"}
+    status = {"tool": "status", "version": "1.0.4"}
 
 
     # AGM stats
