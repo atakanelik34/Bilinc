@@ -20,6 +20,8 @@ from bilinc.storage.sqlite import SQLiteBackend
 
 
 def _payload(result):
+    if asyncio.iscoroutine(result):
+        result = asyncio.run(result)
     return json.loads(result[0].text)
 
 

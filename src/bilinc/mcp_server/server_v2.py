@@ -92,6 +92,39 @@ def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
     return parts[1].strip()
 
 
+
+def _enforce_auth_policy(required_token: Optional[str], provided_token: Optional[str], transport_mode: str) -> Optional[Dict[str, Any]]:
+    """
+    Enforce auth policy:
+    - stdio: trusted-local, token optional
+    - http: token required and constant-time compared
+    """
+    if transport_mode == "stdio":
+        return None
+    if not required_token:
+        return {
+            "tool": "auth",
+            "success": False,
+            "error": "server_misconfigured",
+            "message": "HTTP transport requires auth token policy.",
+        }
+    if not provided_token:
+        return {
+            "tool": "auth",
+            "success": False,
+            "error": "unauthorized",
+            "message": "Missing auth token.",
+        }
+    if not hmac.compare_digest(str(provided_token), str(required_token)):
+        return {
+            "tool": "auth",
+            "success": False,
+            "error": "unauthorized",
+            "message": "Invalid auth token.",
+        }
+    return None
+
+
 def _hash_client_token(token: str) -> str:
     """Generate a stable non-reversible client identity from a bearer token."""
     return f"token:{hashlib.sha256(token.encode()).hexdigest()[:16]}"
@@ -167,6 +200,30 @@ def _health_payload(plane: StatePlane) -> Dict[str, Any]:
         "readiness": readiness,
     }
 
+
+
+
+def _run_coro_sync(coro):
+    """Run coroutine from sync handler contexts."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            raise RuntimeError("Cannot run sync coroutine while event loop is active.")
+        return loop.run_until_complete(coro)
+    except RuntimeError:
+        return asyncio.run(coro)
+
+
+def _build_metadata(args):
+    """Build metadata dict from MCP tool arguments, supporting Hermes contract."""
+    metadata = args.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    for field in ("source", "session_id", "canonical", "priority", "ttl"):
+        val = args.get(field)
+        if val is not None:
+            metadata[field] = val
+    return metadata
 
 def _create_server_v2(
     plane: Optional[StatePlane] = None,
@@ -763,6 +820,11 @@ async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[Te
                 "error": f"Working memory full (max {ResourceLimits.LIMITS['max_entries'][MemoryType.WORKING]})"
             })
 
+    # Commit with AGM
+    if hasattr(plane, "commit_with_agm_async"):
+        result = await plane.commit_with_agm_async(key, value, memory_type=memory_type, importance=importance)
+    else:
+        result = plane.commit_with_agm(key, value, memory_type=memory_type, importance=importance)
 
     # AGMResult or MemoryEntry
     if hasattr(result, "success"):
