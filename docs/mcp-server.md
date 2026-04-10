@@ -210,7 +210,7 @@ List all detected contradictions in the Knowledge Graph. Returns pairs of confli
 
 - **API Key Auth**:
   - `stdio` transport: trusted-local, token optional
-  - `http` transport: token required via `_auth_token` argument, validated with constant-time comparison (feat: complete Hermes public integration pack and prod-strict MCP policy)
+  - `http` transport: token required via `_auth_token` argument, validated with constant-time comparison
 - **Rate Limiting**: Per-client token bucket (default: 10 req burst, 1/sec refill)
 - **Health/metrics**: `GET /health`, `GET /metrics`
 - **Input Validation**: Key pattern matching, path traversal protection, XSS sanitization

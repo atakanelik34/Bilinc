@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import asyncio (feat: complete Hermes public integration pack and prod-strict MCP policy)
+import asyncio
 import hmac
 import json
 import logging
@@ -171,29 +171,6 @@ def _health_payload(plane: StatePlane) -> Dict[str, Any]:
 def _create_server_v2(
     plane: Optional[StatePlane] = None,
     rate_limiter: Optional[TokenBucketLimiter] = None,
-
-
-def _run_coro_sync(coro):
-    """Run coroutine from sync handler contexts."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            raise RuntimeError("Cannot run sync coroutine while event loop is active.")
-        return loop.run_until_complete(coro)
-    except RuntimeError:
-        return asyncio.run(coro)
-
-
-def _build_metadata(args):
-    """Build metadata dict from MCP tool arguments, supporting Hermes contract."""
-    metadata = args.get("metadata") or {}
-    if not isinstance(metadata, dict):
-        metadata = {}
-    for field in ("source", "session_id", "canonical", "priority", "ttl"):
-        val = args.get(field)
-        if val is not None:
-            metadata[field] = val
-    return metadata (feat: complete Hermes public integration pack and prod-strict MCP policy)
     transport_mode: str = "stdio",
 ) -> Server:
     """Build the shared MCP server instance used by stdio and HTTP transports."""
@@ -231,13 +208,11 @@ def _build_metadata(args):
                         "importance": {"type": "number", "default": 1.0, "minimum": 0.0, "maximum": 1.0,
                                        "description": "Importance weight 0.0-1.0 (affects AGM conflict resolution)"},
                         "source": {"type": "string", "default": "mcp", "description": "Source system that created this memory"},
-                        "session_id": {"type": "string", "description": "Hermes session identifier"},
-                        "canonical": {"type": "boolean", "default": True, "description": "Whether this is canonical truth"},
-                        "priority": {"type": "string", "enum": ["low", "normal", "high"], "default": "high",
-                                     "description": "Priority used for retrieval ordering"},
-                        "ttl": {"type": "number", "description": "Optional time-to-live in seconds"},
-                        "invalid_at": {"type": "number", "description": "Optional absolute invalidation unix timestamp"},
-                        "metadata": {"type": "object", "description": "Additional metadata payload"},
+                        "metadata": {"type": "object", "description": "Additional metadata dict (Hermes contract)"},
+                        "session_id": {"type": "string", "description": "Session identifier for multi-session tracking"},
+                        "canonical": {"type": "boolean", "default": False, "description": "Mark as canonical (preferred) entry"},
+                        "priority": {"type": "number", "default": 0.5, "description": "Priority for recall ordering (0.0-1.0)"},
+                        "ttl": {"type": "number", "description": "Time-to-live in seconds (optional expiry)"},
                     },
                     "required": ["key", "value"],
                 },
@@ -260,10 +235,6 @@ def _build_metadata(args):
                         "limit": {"type": "integer", "default": 20, "description": "Max entries to return"},
                         "min_strength": {"type": "number", "default": 0.0,
                                          "description": "Minimum current_strength to include"},
-                        "canonical_only": {"type": "boolean", "default": False,
-                                           "description": "Only return canonical memories"},
-                        "exclude_session_summaries": {"type": "boolean", "default": False,
-                                                      "description": "Exclude non-canonical session summary entries"},
                     },
                     "required": [],
                 },
@@ -445,7 +416,6 @@ def _build_metadata(args):
                     client_id=client_id,
                 )
                 return _result_text({"error": "rate_limited", "message": "Too many requests. Try again later."})
- (feat: complete Hermes public integration pack and prod-strict MCP policy)
 
         try:
             _increment_metric(plane, "tool_calls_total")
@@ -525,6 +495,8 @@ def _build_metadata(args):
             return _error_text(name, e)
 
     return server
+
+
 
 
 def create_mcp_server_v2(
@@ -791,39 +763,6 @@ async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[Te
                 "error": f"Working memory full (max {ResourceLimits.LIMITS['max_entries'][MemoryType.WORKING]})"
             })
 
-key = args.get("key", "")
-    value = args.get("value")
-    memory_type = args.get("memory_type", "semantic")
-    importance = args.get("importance", 0.5)
-    # Hermes metadata contract
-    metadata = _build_metadata(args)
-    source = args.get("source")
-    session_id = args.get("session_id")
-    ttl = args.get("ttl")
-
-    if hasattr(plane, "commit_with_agm_async"):
-        result = await plane.commit_with_agm_async(key, value, memory_type=memory_type, importance=importance)
-    else:
-        result = plane.commit_with_agm(key, value, memory_type=memory_type, importance=importance)
-
-    # Hermes: apply metadata to persisted entry if available
-    if result.get("success") and getattr(plane, "agm_engine", None):
-        persisted = plane.agm_engine.belief_state.get_belief(key)
-        if persisted is not None:
-            if metadata:
-                persisted.metadata.update(metadata)
-            if source:
-                persisted.source = source
-            if session_id:
-                persisted.session_id = session_id
-            if ttl is not None:
-                try:
-                    persisted.ttl = float(ttl)
-                    persisted.invalid_at = time.time() + float(ttl)
-                except (ValueError, TypeError):
-                    pass
-            if getattr(plane, "backend", None):
-                await plane.backend.save(persisted) (feat: complete Hermes public integration pack and prod-strict MCP policy)
 
     # AGMResult or MemoryEntry
     if hasattr(result, "success"):
@@ -915,7 +854,7 @@ async def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
             entries.append(e)
 
     # Apply limit
-    entries = list(entries_by_key.values())[:limit] (feat: complete Hermes public integration pack and prod-strict MCP policy)
+    entries = list(entries_by_key.values())[:limit]
 
     return _result_text({
         "tool": "recall",
@@ -1014,7 +953,7 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
                         "conflicts_resolved": result.conflicts_resolved,
                     },
                 )
- (feat: complete Hermes public integration pack and prod-strict MCP policy)
+
 
     return _result_text({
         "tool": "revise",
@@ -1030,7 +969,7 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
 
 async def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List[TextContent]:
     status = {"tool": "status", "version": "1.0.1"}
- (feat: complete Hermes public integration pack and prod-strict MCP policy)
+
 
     # AGM stats
     if hasattr(plane, "agm_engine") and plane.agm_engine:
@@ -1112,7 +1051,7 @@ async def _handle_verify(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
                 "entrenchment": plane.agm_engine.get_entrenchment(key) if hasattr(plane, "agm_engine") and plane.agm_engine else None,
                 "strength": entry.current_strength,
             })
- (feat: complete Hermes public integration pack and prod-strict MCP policy)
+
 
     return _result_text({
         "tool": "verify",
