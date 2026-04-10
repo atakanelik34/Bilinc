@@ -7,10 +7,29 @@ Provides readiness and liveness reporting for core runtime components.
 from __future__ import annotations
 
 import time
+from urllib.parse import urlsplit, urlunsplit
 from typing import Any, Dict, List
 
 
 _STATUS_SCORE = {"failed": 0, "degraded": 1, "healthy": 2}
+
+
+def _redact_dsn(dsn: str | None) -> str | None:
+    """Return DSN with credentials redacted."""
+    if not dsn:
+        return dsn
+    try:
+        parsed = urlsplit(dsn)
+        if not parsed.scheme:
+            return "<redacted>"
+        host = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port else ""
+        user = parsed.username
+        auth = f"{user}:***@" if user else ""
+        netloc = f"{auth}{host}{port}"
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    except Exception:
+        return "<redacted>"
 
 
 class HealthCheck:
@@ -78,7 +97,7 @@ class HealthCheck:
                     backend_component["ready"] = bool(
                         getattr(backend, "_initialized", False) and getattr(backend, "pool", None)
                     )
-                    backend_component["dsn"] = getattr(backend, "dsn", None)
+                    backend_component["dsn"] = _redact_dsn(getattr(backend, "dsn", None))
                     if not backend_component["ready"]:
                         backend_component["status"] = "failed"
                         blocking_issues.append("backend_uninitialized")
@@ -96,16 +115,24 @@ class HealthCheck:
                 result["components"]["audit"] = {"status": "failed", "enabled": True}
                 blocking_issues.append("audit_unavailable")
             else:
-                integrity = plane.audit.verify_integrity()
-                audit_status = "ok" if integrity.get("valid", False) else "failed"
-                result["components"]["audit"] = {
-                    "status": audit_status,
-                    "enabled": True,
-                    "integrity_valid": integrity.get("valid", False),
-                    "root_hash": plane.audit.get_root_hash(),
-                }
-                if audit_status != "ok":
-                    blocking_issues.append("audit_integrity_invalid")
+                try:
+                    integrity = plane.audit.verify_integrity()
+                    audit_status = "ok" if integrity.get("valid", False) else "failed"
+                    result["components"]["audit"] = {
+                        "status": audit_status,
+                        "enabled": True,
+                        "integrity_valid": integrity.get("valid", False),
+                        "root_hash": plane.audit.get_root_hash(),
+                    }
+                    if audit_status != "ok":
+                        blocking_issues.append("audit_integrity_invalid")
+                except Exception as exc:
+                    result["components"]["audit"] = {
+                        "status": "failed",
+                        "enabled": True,
+                        "error": str(exc),
+                    }
+                    blocking_issues.append("audit_unavailable")
         else:
             result["components"]["audit"] = {"status": "disabled", "enabled": False}
 

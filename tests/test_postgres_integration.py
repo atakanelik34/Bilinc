@@ -39,7 +39,11 @@ async def _truncate(backend: PostgresBackend) -> None:
 async def test_postgres_init_records_schema_version(backend: PostgresBackend):
     stats = await backend.stats()
     assert stats["schema_version"] == 1
-    assert stats["dsn"] == TEST_DSN
+    assert stats["dsn"].startswith("postgresql://")
+    assert TEST_DSN not in stats["dsn"]
+    if "@" in TEST_DSN and ":" in TEST_DSN.split("@")[0]:
+        leaked_password = TEST_DSN.split("@")[0].split(":", 2)[-1]
+        assert leaked_password not in stats["dsn"]
 
 
 @pytest.mark.asyncio
