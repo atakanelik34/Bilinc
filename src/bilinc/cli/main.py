@@ -28,6 +28,26 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
 
+def _structured_error_payload(exc: Exception, default_code: str, **extra):
+    message = str(exc)
+    if "database is locked" in message.lower():
+        return {
+            "success": False,
+            "error": "database_locked",
+            "message": "SQLite database is locked. Retry shortly or use a different db path.",
+            "retryable": True,
+            "details": message,
+            **extra,
+        }
+    return {
+        "success": False,
+        "error": default_code,
+        "message": message,
+        "retryable": False,
+        **extra,
+    }
+
+
 
 def _parse_value(val: str):
     """Parse value as JSON if possible, otherwise treat as plain string."""
@@ -120,7 +140,14 @@ def main():
     backend, backend_type = _resolve_backend(args.db)
 
     # Create StatePlane with persistence support
-    plane = _create_plane(backend, backend_type)
+    try:
+        plane = _create_plane(backend, backend_type)
+    except Exception as exc:
+        print(
+            json.dumps(_structured_error_payload(exc, "init_failed", command=args.command), indent=2),
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     if args.command == "commit":
         value = _parse_value(args.value)
@@ -185,11 +212,10 @@ def _run_commit(plane, backend, args, value, backend_type: str):
             "backend": backend_type,
         }, indent=2))
     except Exception as e:
-        print(json.dumps({
-            "success": False,
-            "error": str(e),
-            "key": args.key,
-        }, indent=2), file=sys.stderr)
+        print(
+            json.dumps(_structured_error_payload(e, "commit_failed", key=args.key), indent=2),
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
@@ -245,10 +271,10 @@ def _run_recall(plane, backend, args, backend_type: str):
                     "backend": backend_type,
                 }, indent=2, default=str))
     except Exception as e:
-        print(json.dumps({
-            "success": False,
-            "error": str(e),
-        }, indent=2), file=sys.stderr)
+        print(
+            json.dumps(_structured_error_payload(e, "recall_failed", key=args.key), indent=2),
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
@@ -280,11 +306,10 @@ def _run_forget(plane, backend, args, backend_type: str):
             else:
                 print(json.dumps({"error": "working_memory not initialized"}))
     except Exception as e:
-        print(json.dumps({
-            "success": False,
-            "error": str(e),
-            "key": args.key,
-        }, indent=2), file=sys.stderr)
+        print(
+            json.dumps(_structured_error_payload(e, "forget_failed", key=args.key), indent=2),
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
@@ -319,10 +344,7 @@ def _run_status(plane, backend, backend_type: str):
 
         print(json.dumps(status, indent=2, default=str))
     except Exception as e:
-        print(json.dumps({
-            "success": False,
-            "error": str(e),
-        }, indent=2), file=sys.stderr)
+        print(json.dumps(_structured_error_payload(e, "status_failed"), indent=2), file=sys.stderr)
         sys.exit(1)
 
 

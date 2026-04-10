@@ -2,6 +2,32 @@
 
 All notable changes to Bilinc.
 
+## [1.0.4] — 2026-04-10
+
+### Fixed
+- Hermes `commit_mem -> recall` contract now preserves metadata deterministically, including `canonical` and related metadata fields.
+- `recall` response contract hardened: `entries[*].metadata` is always an object (falls back to `{}` when empty).
+- `snapshot/diff/rollback` chain stabilized by fixing rollback restore path and legacy string-vs-dict audit payload mismatch.
+- Rollback restore now validates audit payload schema before reconstructing state to prevent silent corruption.
+- Invalid/legacy rollback payloads now return structured failures (`success=false`, stable `error` field) instead of runtime crashes.
+- `bilinc hermes bootstrap` smoke flow fixed for async execution and aligned with Hermes integration contract checks.
+- Hermes stdio launcher wiring corrected to use the supported MCP server v2 factory signature.
+- PostgreSQL DSN exposure closed across health/status payloads via credential redaction.
+- HTTP/observability contract hardened so secret-bearing configuration is never emitted in plain text.
+- Persistence truthfulness fixed: backend write failures now surface deterministic `persistence_write_failed` errors instead of reporting success.
+- `commit_mem` and `revise` now fail fast when durable backend save fails, preventing false-positive success + audit divergence.
+- Init failure path hardened: secondary health/audit exceptions no longer mask the original root-cause error.
+- SQLite lock handling improved with clearer structured CLI errors (`database_locked`, retryable) and retry-friendly messaging.
+- SQLite backend now configures connection timeout + `PRAGMA busy_timeout` to reduce transient lock flakiness.
+- CI workflow supply-chain hardening applied: GitHub Actions migrated from floating tags to pinned commit SHAs.
+- `commit_sync` async-loop behavior corrected to avoid un-awaited coroutine warnings; full test suite now runs warning-free for this path.
+
+### Added
+- CLI failure envelope helper for deterministic JSON errors across `commit`/`recall`/`forget`/`status`/init paths.
+- Regression tests for DSN redaction in health/status outputs.
+- Regression tests for persistence write-failure contracts (`commit_mem` and `revise`).
+- Regression tests for SQLite lock/error envelope behavior in CLI paths.
+
 ## [1.0.2] — 2026-04-10
 
 ### Added
