@@ -23,7 +23,7 @@ All notable changes to Bilinc.
 - `verify` now checks persistent entries even when AGM state has not yet been hydrated
 
 ### Added
-- Regression coverage for persistent MCP commit/recall/forget flows (feat: complete Hermes public integration pack and prod-strict MCP policy)
+- Regression coverage for persistent MCP commit/recall/forget flows
 
 ### Added
 - **Phase 4: MCP Server v2** — 12 tools (commit_mem, recall, forget, revise, status, verify, consolidate, snapshot, diff, rollback, query_graph, contradictions)
