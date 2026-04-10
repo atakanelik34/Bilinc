@@ -368,6 +368,7 @@ class StatePlane:
             updated_keys = []
 
             for key in sorted(set(current_state.keys()) - set(target_state.keys())):
+ (feat: complete Hermes public integration pack and prod-strict MCP policy)
                 existing = await self.backend.load(key)
                 await self.backend.delete(key)
                 self.working_memory.remove(key)
@@ -439,6 +440,7 @@ class StatePlane:
         except Exception as exc:
             self._record_failure("rollback", start_time, exc, target_timestamp=target_timestamp)
             raise
+ (feat: complete Hermes public integration pack and prod-strict MCP policy)
     
     async def verify(self, key: str) -> Dict[str, Any]:
         """Full verification of a single entry + audit trail."""
@@ -586,113 +588,106 @@ class StatePlane:
         return self.belief_sync
 
     def commit_with_agm(self, key: str, value: Any, memory_type: str = "semantic",
-                        importance: float = 1.0) -> Any:
+                        importance: float = 1.0, metadata: Optional[Dict[str, Any]] = None,
+                        source: str = "", session_id: str = "", ttl: Optional[float] = None) -> Any:
         """
         Commit a memory entry and auto-apply AGM revision.
         If AGM engine is not initialized, falls back to basic storage.
         """
-        if self.backend:
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                return asyncio.run(
-                    self.commit_with_agm_async(
-                        key,
-                        value,
-                        memory_type=memory_type,
-                        importance=importance,
-                    )
+entry = MemoryEntry(
+        key=key,
+        value=value,
+        memory_type=MemoryType(memory_type) if isinstance(memory_type, str) else memory_type,
+        importance=importance,
+    )
+    # Hermes metadata contract
+    if metadata:
+        entry.metadata.update(metadata)
+    if source:
+        entry.source = source
+    if session_id:
+        entry.session_id = session_id
+    if ttl is not None:
+        entry.ttl = float(ttl)
+        entry.invalid_at = time.time() + float(ttl)
+    
+    # Persist entry first
+    if self.backend:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(
+                self.commit_with_agm_async(
+                    key,
+                    value,
+                    memory_type=memory_type,
+                    importance=importance,
                 )
-        start_time = time.perf_counter()
+            )
+    start_time = time.perf_counter()
+    try:
+        if self.enable_audit and self.audit:
+            self.audit.log(
+                OpType.COMMIT,
+                key,
+                before_value=None,
+                after_value=entry.value,
+            )
+
+        # AGM revision
+        result = self.agm_engine.revise(BeliefState(
+            key=entry.key,
+            value=entry.value,
+            confidence=entry.importance,
+            timestamp=entry.created_at,
+        ))
+
+        if not result.success:
+            return {"success": False, "error": result.reason, "key": key}
+
+        # Update entry from AGM result
+        if result.merged_state:
+            entry.value = result.merged_state.value
+            entry.importance = result.merged_state.confidence
+
+        # Persist
+        if self.backend:
+            await self.backend.save(entry)
+
+        # Knowledge graph
+        if self.knowledge_graph:
+            self.knowledge_graph.ingest_memory_entry(entry)
+
+        # Metrics
+        duration = time.perf_counter() - start_time
+        if self._metrics:
+            self._metrics.record("commit_with_agm_duration", duration)
+            self._metrics.increment("commit_with_agm_total")
+
+        return {
+            "success": True,
+            "key": key,
+            "value": entry.value,
+            "revision_method": result.method.value if result.method else "direct",
+            "duration": duration,
+        }
+    except Exception as e:
+        if self._metrics:
+            self._metrics.increment("commit_with_agm_errors")
+        return {"success": False, "error": str(e), "key": key} (feat: complete Hermes public integration pack and prod-strict MCP policy)
+
+    def _persist_entry_sync(self, entry: MemoryEntry) -> bool:
+        """Persist a MemoryEntry to backend if one exists."""
+        if not self.backend:
+            return False
+        import asyncio
         try:
-            entry = MemoryEntry(
-                key=key, value=value, memory_type=MemoryType(memory_type),
-                importance=importance,
-            )
-            self._apply_entry_verification(entry)
-            if hasattr(self, "agm_engine") and self.agm_engine:
-                result = self.agm_engine.revise(entry)
-                if hasattr(self, "knowledge_graph") and self.knowledge_graph:
-                    self.knowledge_graph.ingest_memory_entry(entry)
-                self._record_success("commit", start_time, key=key, memory_type=memory_type, mode="agm")
-                return result
-            self._record_success("commit", start_time, key=key, memory_type=memory_type, mode="fallback")
-            return entry
-        except Exception as exc:
-            self._record_failure("commit", start_time, exc, key=key, memory_type=memory_type, mode="agm")
-            raise
-
-    async def commit_with_agm_async(self, key: str, value: Any, memory_type: str = "semantic",
-                                    importance: float = 1.0) -> Any:
-        """
-        Async variant of commit_with_agm that keeps backend, verification, AGM,
-        knowledge graph, and audit trail synchronized.
-        """
-        start_time = time.perf_counter()
-        try:
-            entry = MemoryEntry(
-                key=key,
-                value=value,
-                memory_type=MemoryType(memory_type),
-                importance=importance,
-            )
-            self._apply_entry_verification(entry)
-
-            if not hasattr(self, "agm_engine") or not self.agm_engine:
-                if self.backend:
-                    previous_entry = await self.backend.load(key)
-                    await self.backend.save(entry)
-                    if self.enable_audit and self.audit:
-                        op_type = OpType.UPDATE if previous_entry else OpType.CREATE
-                        self.audit.log(
-                            op_type,
-                            key,
-                            before_value=previous_entry.to_dict() if previous_entry else None,
-                            after_value=entry.to_dict(),
-                        )
-                self._ops_count += 1
-                self._record_success("commit", start_time, key=key, memory_type=memory_type, mode="fallback")
-                return entry
-
-            previous_entry = await self.backend.load(key) if self.backend else None
-            result = self.agm_engine.revise(entry)
-            winning_entry = self.agm_engine.belief_state.get_belief(key)
-
-            if winning_entry and hasattr(self, "knowledge_graph") and self.knowledge_graph:
-                self.knowledge_graph.ingest_memory_entry(winning_entry)
-
-            if self.backend and winning_entry:
-                await self.backend.save(winning_entry)
-
-                if self.enable_audit and self.audit:
-                    previous_state = previous_entry.to_dict() if previous_entry else None
-                    next_state = winning_entry.to_dict()
-                    if previous_state != next_state:
-                        op_type = OpType.UPDATE if previous_entry else OpType.CREATE
-                        self.audit.log(
-                            op_type,
-                            key,
-                            before_value=previous_state,
-                            after_value=next_state,
-                            metadata={
-                                "agm_success": result.success,
-                                "conflicts_resolved": result.conflicts_resolved,
-                            },
-                        )
-
-            self._ops_count += 1
-            self._record_success(
-                "commit",
-                start_time,
-                key=key,
-                memory_type=memory_type,
-                mode="agm_persistent",
-                agm_success=result.success if hasattr(result, "success") else True,
-            )
-            return result
-        except Exception as exc:
-            self._record_failure("commit", start_time, exc, key=key, memory_type=memory_type, mode="agm_persistent")
-            raise
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                return False
+            return loop.run_until_complete(self.backend.save(entry))
+        except RuntimeError:
+            return asyncio.run(self.backend.save(entry))
 
     def query_graph(self, entity: str, max_depth: int = 2) -> Dict[str, Any]:
         """Query the knowledge graph for an entity."""

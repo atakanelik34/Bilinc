@@ -41,9 +41,12 @@ clean = InputValidator.sanitize_for_kg("<script>alert('xss')</script>RealNode")
 | Value Size | 1MB | Reject commit |
 | Audit Log | 1,000,000 entries | Rotation recommended |
 
-## MCP Auth
+## MCP Auth Policy (Prod-Strict)
 
-Bilinc now has two distinct MCP trust models:
+Bilinc enforces transport-specific auth behavior:
+
+- `stdio`: trusted-local mode, token optional.
+- `http`: token required; missing/invalid token returns structured `unauthorized` error. (feat: complete Hermes public integration pack and prod-strict MCP policy)
 
 - **stdio transport**: trusted local process boundary, no request-level auth
 - **HTTP transport**: Bearer API key auth is enforced
@@ -61,8 +64,10 @@ from bilinc.mcp_server.server_v2 import create_mcp_http_app
 app = create_mcp_http_app(auth_token="super-secret")
 ```
 
-Default behavior is fail-fast:
-- if HTTP auth is not configured and `allow_unauthenticated=False`, app creation raises an error
+```python
+from bilinc.mcp_server.server_v2 import create_mcp_server_v2
+server = create_mcp_server_v2(plane, auth_token="your-secure-key-here", transport_mode="http")
+``` (feat: complete Hermes public integration pack and prod-strict MCP policy)
 
 For local development only:
 

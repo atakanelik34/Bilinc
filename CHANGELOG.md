@@ -2,6 +2,18 @@
 
 All notable changes to Bilinc.
 
+## [1.0.2] — 2026-04-10
+
+### Added
+- Hermes one-command bootstrap flow: `bilinc hermes bootstrap` and `bilinc hermes smoke`
+- Standard Hermes stdio launcher (`bilinc.mcp_server.hermes_stdio`)
+- Public Hermes documentation and integration contract
+- Hermes-focused CI lane and end-to-end integration tests
+
+### Changed
+- MCP `commit_mem` now supports Hermes metadata contract: `source`, `session_id`, `canonical`, `priority`, `ttl`
+- Recall ordering now prioritizes canonical and high-priority entries when canonical flag is set
+
 ## [1.0.1] — 2026-04-08
 
 ### Fixed
@@ -11,9 +23,7 @@ All notable changes to Bilinc.
 - `verify` now checks persistent entries even when AGM state has not yet been hydrated
 
 ### Added
-- Regression coverage for persistent MCP commit/recall and backend synchronization after revise/forget
-
-## [1.0.0] — 2026-04-08
+- Regression coverage for persistent MCP commit/recall/forget flows (feat: complete Hermes public integration pack and prod-strict MCP policy)
 
 ### Added
 - **Phase 4: MCP Server v2** — 12 tools (commit_mem, recall, forget, revise, status, verify, consolidate, snapshot, diff, rollback, query_graph, contradictions)
