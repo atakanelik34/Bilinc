@@ -208,12 +208,29 @@ List all detected contradictions in the Knowledge Graph. Returns pairs of confli
 
 ## Security
 
-- **stdio**: trusted local process boundary, no request-level auth
-- **HTTP**: Bearer auth via `STATEMEL_API_KEY` or explicit `auth_token`
+- **API Key Auth**:
+  - `stdio` transport: trusted-local, token optional
+  - `http` transport: token required via `_auth_token` argument, validated with constant-time comparison (feat: complete Hermes public integration pack and prod-strict MCP policy)
 - **Rate Limiting**: Per-client token bucket (default: 10 req burst, 1/sec refill)
 - **Health/metrics**: `GET /health`, `GET /metrics`
 - **Input Validation**: Key pattern matching, path traversal protection, XSS sanitization
 - **Resource Limits**: Max 16 working memory slots, max 50k episodic entries, max 100k KG nodes
+
+## Hermes Metadata Contract
+
+`commit_mem` supports Hermes-oriented fields:
+
+- `source`
+- `session_id`
+- `canonical`
+- `priority`
+- `ttl`
+- `metadata`
+
+Recall supports:
+
+- `canonical_only`
+- `exclude_session_summaries`
 
 ## Error Handling
 

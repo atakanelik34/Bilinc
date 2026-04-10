@@ -292,9 +292,58 @@ app = create_mcp_http_app(
 
 Run it with your ASGI server:
 
-```bash
-uvicorn yourmodule:app --host 0.0.0.0 --port 8000
 ```
+
+## Hermes Integration Readiness
+
+Bilinc is already strong enough to plug into Hermes, but the last mile is clearer if we separate what is done from what is still polish.
+
+### Already Done
+
+- ✅ MCP server v2 with the core memory surface
+- ✅ stdio transport compatibility for agent runtimes
+- ✅ SQLite and PostgreSQL persistence backends
+- ✅ rollback, diff, snapshot, verify, and contradiction tooling
+- ✅ cross-tool memory translation for agent clients
+- ✅ security and rate limiting support
+
+### Still Worth Polishing
+
+- ⏳ one-command Hermes bootstrap / installer
+- ⏳ Hermes-specific auth and launcher docs
+- ⏳ stricter canonical-vs-session memory priority rules
+- ⏳ an end-to-end Hermes smoke test for commit / recall / revise / rollback
+- ⏳ a short Hermes quickstart page for new users
+
+This is the shortest honest version of the current state:
+
+> **Bilinc is production-grade for MCP memory. Hermes-specific packaging is the final polish.**
+
+### Hermes Quickstart (One Command)
+
+```bash
+pip install bilinc
+bilinc hermes bootstrap --hermes-home ~/.hermes --db-path ~/bilinc.db
+```
+
+Expected result:
+
+- `~/.hermes/bilinc_stdio_v2.py` launcher exists
+- smoke checks pass for `commit/recall/revise/diff/rollback`
+- `~/.hermes/bilinc.env` contains runtime defaults
+
+### Done Definition (Public Hermes Pack)
+
+- [x] One-command Hermes bootstrap command in Bilinc CLI
+- [x] Standard server_v2-only launcher for Hermes
+- [x] Hermes metadata contract (`source`, `canonical`, `priority`, `ttl`, `session_id`)
+- [x] Prod-Strict auth policy documented (`stdio` trusted-local, HTTP token required)
+- [x] E2E smoke test for `commit/recall/revise/diff/rollback`
+- [x] Public Hermes integration docs + troubleshooting
+
+## Phase Progress
+
+Available MCP tools: (feat: complete Hermes public integration pack and prod-strict MCP policy)
 
 HTTP behavior:
 
@@ -303,7 +352,16 @@ HTTP behavior:
 - invalid token: `401`
 - rate-limited client: `429`
 
-Available MCP tools:
+| Document | Description |
+|----------|-------------|
+| [Architecture](docs/architecture.md) | 7-layer architecture, data flow, component interaction |
+| [MCP Server](docs/mcp-server.md) | 12 tool reference, security, error handling |
+| [Hermes Integration](docs/hermes-integration.md) | Bootstrap, auth modes, runtime matrix, troubleshooting |
+| [Hermes Contract](docs/hermes-integration-contract.md) | Tool order, metadata standard, priority and TTL rules |
+| [Security Guide](docs/security.md) | Input validation, resource limits, MCP auth, audit |
+| [CHANGELOG](CHANGELOG.md) | Full version history |
+
+Available MCP tools: (feat: complete Hermes public integration pack and prod-strict MCP policy)
 
 - `commit_mem`
 - `recall`

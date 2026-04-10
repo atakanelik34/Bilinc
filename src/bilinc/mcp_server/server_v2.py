@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import asyncio (feat: complete Hermes public integration pack and prod-strict MCP policy)
 import hmac
 import json
 import logging
@@ -38,6 +39,8 @@ from bilinc.security.input_validator import InputValidator
 from bilinc.security.resource_limits import ResourceLimits
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_HERMES_SESSION_TTL_SECONDS = 14 * 24 * 60 * 60
 
 
 def _json_safe(obj: Any) -> Any:
@@ -168,6 +171,29 @@ def _health_payload(plane: StatePlane) -> Dict[str, Any]:
 def _create_server_v2(
     plane: Optional[StatePlane] = None,
     rate_limiter: Optional[TokenBucketLimiter] = None,
+
+
+def _run_coro_sync(coro):
+    """Run coroutine from sync handler contexts."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            raise RuntimeError("Cannot run sync coroutine while event loop is active.")
+        return loop.run_until_complete(coro)
+    except RuntimeError:
+        return asyncio.run(coro)
+
+
+def _build_metadata(args):
+    """Build metadata dict from MCP tool arguments, supporting Hermes contract."""
+    metadata = args.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    for field in ("source", "session_id", "canonical", "priority", "ttl"):
+        val = args.get(field)
+        if val is not None:
+            metadata[field] = val
+    return metadata (feat: complete Hermes public integration pack and prod-strict MCP policy)
     transport_mode: str = "stdio",
 ) -> Server:
     """Build the shared MCP server instance used by stdio and HTTP transports."""
@@ -205,6 +231,13 @@ def _create_server_v2(
                         "importance": {"type": "number", "default": 1.0, "minimum": 0.0, "maximum": 1.0,
                                        "description": "Importance weight 0.0-1.0 (affects AGM conflict resolution)"},
                         "source": {"type": "string", "default": "mcp", "description": "Source system that created this memory"},
+                        "session_id": {"type": "string", "description": "Hermes session identifier"},
+                        "canonical": {"type": "boolean", "default": True, "description": "Whether this is canonical truth"},
+                        "priority": {"type": "string", "enum": ["low", "normal", "high"], "default": "high",
+                                     "description": "Priority used for retrieval ordering"},
+                        "ttl": {"type": "number", "description": "Optional time-to-live in seconds"},
+                        "invalid_at": {"type": "number", "description": "Optional absolute invalidation unix timestamp"},
+                        "metadata": {"type": "object", "description": "Additional metadata payload"},
                     },
                     "required": ["key", "value"],
                 },
@@ -227,6 +260,10 @@ def _create_server_v2(
                         "limit": {"type": "integer", "default": 20, "description": "Max entries to return"},
                         "min_strength": {"type": "number", "default": 0.0,
                                          "description": "Minimum current_strength to include"},
+                        "canonical_only": {"type": "boolean", "default": False,
+                                           "description": "Only return canonical memories"},
+                        "exclude_session_summaries": {"type": "boolean", "default": False,
+                                                      "description": "Exclude non-canonical session summary entries"},
                     },
                     "required": [],
                 },
@@ -408,6 +445,7 @@ def _create_server_v2(
                     client_id=client_id,
                 )
                 return _result_text({"error": "rate_limited", "message": "Too many requests. Try again later."})
+ (feat: complete Hermes public integration pack and prod-strict MCP policy)
 
         try:
             _increment_metric(plane, "tool_calls_total")
@@ -736,6 +774,14 @@ async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[Te
 
     memory_type = args.get("memory_type", "semantic")
     importance = args.get("importance", 1.0)
+    source = args.get("source", "mcp")
+    session_id = args.get("session_id", "")
+    metadata = _build_metadata(args)
+    ttl = args.get("ttl")
+    invalid_at = args.get("invalid_at")
+
+    if ttl is None and str(source).startswith("hermes_session"):
+        ttl = DEFAULT_HERMES_SESSION_TTL_SECONDS
 
     # Resource limit check
     if hasattr(plane, "working_memory") and memory_type == "working":
@@ -745,10 +791,39 @@ async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[Te
                 "error": f"Working memory full (max {ResourceLimits.LIMITS['max_entries'][MemoryType.WORKING]})"
             })
 
+key = args.get("key", "")
+    value = args.get("value")
+    memory_type = args.get("memory_type", "semantic")
+    importance = args.get("importance", 0.5)
+    # Hermes metadata contract
+    metadata = _build_metadata(args)
+    source = args.get("source")
+    session_id = args.get("session_id")
+    ttl = args.get("ttl")
+
     if hasattr(plane, "commit_with_agm_async"):
         result = await plane.commit_with_agm_async(key, value, memory_type=memory_type, importance=importance)
     else:
         result = plane.commit_with_agm(key, value, memory_type=memory_type, importance=importance)
+
+    # Hermes: apply metadata to persisted entry if available
+    if result.get("success") and getattr(plane, "agm_engine", None):
+        persisted = plane.agm_engine.belief_state.get_belief(key)
+        if persisted is not None:
+            if metadata:
+                persisted.metadata.update(metadata)
+            if source:
+                persisted.source = source
+            if session_id:
+                persisted.session_id = session_id
+            if ttl is not None:
+                try:
+                    persisted.ttl = float(ttl)
+                    persisted.invalid_at = time.time() + float(ttl)
+                except (ValueError, TypeError):
+                    pass
+            if getattr(plane, "backend", None):
+                await plane.backend.save(persisted) (feat: complete Hermes public integration pack and prod-strict MCP policy)
 
     # AGMResult or MemoryEntry
     if hasattr(result, "success"):
@@ -762,6 +837,8 @@ async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[Te
             "explanation": result.explanation_text,
             "affected_keys": result.affected_keys,
             "removed_keys": result.removed_keys,
+            "metadata": metadata,
+            "ttl": ttl,
         })
     else:
         # It's a MemoryEntry (fallback mode)
@@ -779,6 +856,8 @@ async def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
     memory_type = args.get("memory_type")
     limit = args.get("limit", 20)
     min_strength = args.get("min_strength", 0.0)
+    canonical_only = bool(args.get("canonical_only", False))
+    exclude_session_summaries = bool(args.get("exclude_session_summaries", False))
 
     entries_by_key = {}
 
@@ -823,6 +902,21 @@ async def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
     # Apply limit
     entries = list(entries_by_key.values())[:limit]
 
+    # Backend fallback for fresh process / persistent mode
+    if not entries and getattr(plane, "backend", None):
+        backend_entries = _run_coro_sync(plane.backend.list_all())
+        for e in backend_entries:
+            if key and e.key != key:
+                continue
+            if memory_type and e.memory_type.value != memory_type:
+                continue
+            if e.current_strength < min_strength:
+                continue
+            entries.append(e)
+
+    # Apply limit
+    entries = list(entries_by_key.values())[:limit] (feat: complete Hermes public integration pack and prod-strict MCP policy)
+
     return _result_text({
         "tool": "recall",
         "count": len(entries),
@@ -855,11 +949,16 @@ async def _handle_forget(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
             metadata={"reason": reason, "deleted": removed},
         )
 
+    backend_removed = False
+    if getattr(plane, "backend", None):
+        backend_removed = bool(_run_coro_sync(plane.backend.delete(key)))
+
     return _result_text({
         "tool": "forget",
         "key": key,
         "reason": reason,
         "removed": removed,
+        "backend_removed": backend_removed,
     })
 
 
@@ -915,6 +1014,7 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
                         "conflicts_resolved": result.conflicts_resolved,
                     },
                 )
+ (feat: complete Hermes public integration pack and prod-strict MCP policy)
 
     return _result_text({
         "tool": "revise",
@@ -930,6 +1030,7 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
 
 async def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List[TextContent]:
     status = {"tool": "status", "version": "1.0.1"}
+ (feat: complete Hermes public integration pack and prod-strict MCP policy)
 
     # AGM stats
     if hasattr(plane, "agm_engine") and plane.agm_engine:
@@ -961,6 +1062,14 @@ async def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List
             "slots_used": plane.working_memory.count,
             "capacity": plane.working_memory.max_slots,
         }
+    if getattr(plane, "backend", None):
+        try:
+            if hasattr(plane.backend, "stats"):
+                status["backend"] = _run_coro_sync(plane.backend.stats())
+            elif hasattr(plane.backend, "get_stats"):
+                status["backend"] = _run_coro_sync(plane.backend.get_stats())
+        except Exception as exc:
+            status["backend"] = {"error": str(exc)}
 
     if plane.backend:
         status["backend"] = await plane.backend.stats()
@@ -1003,6 +1112,7 @@ async def _handle_verify(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
                 "entrenchment": plane.agm_engine.get_entrenchment(key) if hasattr(plane, "agm_engine") and plane.agm_engine else None,
                 "strength": entry.current_strength,
             })
+ (feat: complete Hermes public integration pack and prod-strict MCP policy)
 
     return _result_text({
         "tool": "verify",
@@ -1049,22 +1159,53 @@ def _handle_snapshot(plane: StatePlane, args: Dict[str, Any]) -> List[TextConten
                 for r in agm.operation_log[-50:]  # Last 50 operations
             ]
 
+    if getattr(plane, "backend", None):
+        try:
+            snap = _run_coro_sync(plane.snapshot())
+            snapshot["backend_snapshot"] = snap
+        except Exception as exc:
+            snapshot["backend_snapshot_error"] = str(exc)
+
     return _result_text(snapshot)
 
 
 def _handle_diff(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
-    return _result_text({
-        "tool": "diff",
-        "message": "Full diff requires persistent storage. Currently in-memory.",
-        "hint": "Use 'snapshot' for current state dump, then compare externally.",
-    })
+    ts_a = args.get("ts_a")
+    ts_b = args.get("ts_b")
+    if ts_a is None or ts_b is None:
+        return _result_text({
+            "tool": "diff",
+            "success": False,
+            "error": "ts_a and ts_b are required for diff",
+        })
+    if not getattr(plane, "backend", None) and not getattr(plane, "audit", None):
+        return _result_text({
+            "tool": "diff",
+            "success": False,
+            "error": "persistent backend or audit trail required",
+        })
+    data = _run_coro_sync(plane.diff(float(ts_a), float(ts_b)))
+    data["tool"] = "diff"
+    data["success"] = True
+    return _result_text(data)
 
 
 def _handle_rollback(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
-    ts = args["ts"]
+    ts = args.get("ts")
+    if ts is None:
+        return _result_text({"tool": "rollback", "success": False, "error": "ts is required"})
+    if not getattr(plane, "backend", None) and not getattr(plane, "audit", None):
+        return _result_text({
+            "tool": "rollback",
+            "success": False,
+            "error": "persistent backend or audit trail required",
+        })
+    restored = _run_coro_sync(plane.rollback(float(ts)))
     return _result_text({
         "tool": "rollback",
-        "message": f"Rollback to {ts} is not supported in in-memory mode. Requires persistent storage (SQLite/PostgreSQL backend).",
+        "success": True,
+        "restored_count": restored,
+        "target_ts": float(ts),
     })
 
 
