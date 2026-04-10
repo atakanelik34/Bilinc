@@ -609,76 +609,60 @@ class StatePlane:
                         importance: float = 1.0, metadata: Optional[Dict[str, Any]] = None,
                         source: str = "", session_id: str = "", ttl: Optional[float] = None) -> Any:
         """
-        Async commit with AGM revision and Hermes metadata support.
+        Async variant of commit_with_agm that keeps backend, verification, AGM,
+        knowledge graph, and audit trail synchronized. Supports Hermes metadata.
         """
-        entry = MemoryEntry(
-            key=key,
-            value=value,
-            memory_type=MemoryType(memory_type) if isinstance(memory_type, str) else memory_type,
-            importance=importance,
-        )
-        # Hermes metadata contract
-        if metadata:
-            entry.metadata.update(metadata)
-        if source:
-            entry.source = source
-        if session_id:
-            entry.session_id = session_id
-        if ttl is not None:
-            entry.ttl = float(ttl)
-            entry.invalid_at = time.time() + float(ttl)
-
         start_time = time.perf_counter()
         try:
-            if self.enable_audit and self.audit:
-                self.audit.log(
-                    OpType.COMMIT,
-                    key,
-                    before_value=None,
-                    after_value=entry.value,
-                )
+            entry = MemoryEntry(
+                key=key,
+                value=value,
+                memory_type=MemoryType(memory_type) if isinstance(memory_type, str) else memory_type,
+                importance=importance,
+            )
+            # Verification
+            if hasattr(self, "_apply_entry_verification"):
+                self._apply_entry_verification(entry)
 
-            # AGM revision
-            result = self.agm_engine.revise(BeliefState(
-                key=entry.key,
-                value=entry.value,
-                confidence=entry.importance,
-                timestamp=entry.created_at,
-            ))
+            # Hermes metadata contract
+            if metadata:
+                entry.metadata.update(metadata)
+            if source:
+                entry.source = source
+            if session_id:
+                entry.session_id = session_id
+            if ttl is not None:
+                entry.ttl = float(ttl)
+                entry.invalid_at = time.time() + float(ttl)
 
-            if not result.success:
-                return {"success": False, "error": result.reason, "key": key}
+            if hasattr(self, "agm_engine") and self.agm_engine:
+                result = self.agm_engine.revise(entry)
+                if hasattr(self, "knowledge_graph") and self.knowledge_graph:
+                    self.knowledge_graph.ingest_memory_entry(entry)
 
-            # Update entry from AGM result
-            if result.merged_state:
-                entry.value = result.merged_state.value
-                entry.importance = result.merged_state.confidence
+                if self.backend and result.success:
+                    await self.backend.save(entry)
 
-            # Persist
-            if self.backend:
-                await self.backend.save(entry)
+                if self.enable_audit and self.audit:
+                    self.audit.log(
+                        OpType.CREATE,
+                        key,
+                        before_value=None,
+                        after_value=entry.value,
+                    )
 
-            # Knowledge graph
-            if self.knowledge_graph:
-                self.knowledge_graph.ingest_memory_entry(entry)
-
-            # Metrics
-            duration = time.perf_counter() - start_time
-            if self._metrics:
-                self._metrics.record("commit_with_agm_duration", duration)
-                self._metrics.increment("commit_with_agm_total")
-
-            return {
-                "success": True,
-                "key": key,
-                "value": entry.value,
-                "revision_method": result.method.value if result.method else "direct",
-                "duration": duration,
-            }
-        except Exception as e:
-            if self._metrics:
-                self._metrics.increment("commit_with_agm_errors")
-            return {"success": False, "error": str(e), "key": key}
+                duration = time.perf_counter() - start_time
+                return result
+            else:
+                # Fallback mode
+                if self.backend:
+                    await self.backend.save(entry)
+                duration = time.perf_counter() - start_time
+                return entry
+        except Exception as exc:
+            if hasattr(self, 'metrics') and self.metrics:
+                self.metrics.increment("commit_with_agm_errors")
+            raise
 
     def _persist_entry_sync(self, entry: MemoryEntry) -> bool:
         """Persist a MemoryEntry to backend if one exists."""
