@@ -8,20 +8,23 @@ import time
 import pytest
 import pytest_asyncio
 
-pytest.importorskip("asyncpg")
-pytest.importorskip("pgvector")
-
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.storage.postgres import PostgresBackend
 
 
-TEST_DSN = os.environ.get("BILINC_TEST_POSTGRES_DSN")
-if not TEST_DSN:
-    pytest.skip("BILINC_TEST_POSTGRES_DSN is not set", allow_module_level=True)
+TEST_DSN = os.environ.get("BILINC_TEST_POSTGRES_DSN") or os.environ.get("BILINC_DB_URL")
+
+
+def _require_postgres_env() -> None:
+    if not TEST_DSN:
+        pytest.skip("BILINC_TEST_POSTGRES_DSN or BILINC_DB_URL is not set")
+    pytest.importorskip("asyncpg")
+    pytest.importorskip("pgvector")
 
 
 @pytest_asyncio.fixture
 async def backend():
+    _require_postgres_env()
     backend = PostgresBackend(dsn=TEST_DSN)
     await backend.init()
     await _truncate(backend)
@@ -85,6 +88,7 @@ async def test_postgres_stats_shape_matches_contract(backend: PostgresBackend):
 
 @pytest.mark.asyncio
 async def test_postgres_persistence_across_backend_instances():
+    _require_postgres_env()
     backend_a = PostgresBackend(dsn=TEST_DSN)
     await backend_a.init()
     await _truncate(backend_a)

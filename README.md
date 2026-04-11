@@ -2,6 +2,8 @@
 
 **Verifiable state plane for autonomous agents**
 
+![Bilinc OG](assets/bilinc-og.png)
+
 [![PyPI](https://img.shields.io/pypi/v/bilinc)](https://pypi.org/project/bilinc/)
 [![CI](https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml/badge.svg)](https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
