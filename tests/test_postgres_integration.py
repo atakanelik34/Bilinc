@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from urllib.parse import urlparse
 
 import pytest
 import pytest_asyncio
@@ -44,9 +45,9 @@ async def test_postgres_init_records_schema_version(backend: PostgresBackend):
     assert stats["schema_version"] == 1
     assert stats["dsn"].startswith("postgresql://")
     assert TEST_DSN not in stats["dsn"]
-    if "@" in TEST_DSN and ":" in TEST_DSN.split("@")[0]:
-        leaked_password = TEST_DSN.split("@")[0].split(":", 2)[-1]
-        assert leaked_password not in stats["dsn"]
+    parsed = urlparse(TEST_DSN)
+    if parsed.password:
+        assert parsed.password not in stats["dsn"]
 
 
 @pytest.mark.asyncio
