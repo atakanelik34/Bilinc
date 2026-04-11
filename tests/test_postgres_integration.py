@@ -46,8 +46,9 @@ async def test_postgres_init_records_schema_version(backend: PostgresBackend):
     assert stats["dsn"].startswith("postgresql://")
     assert TEST_DSN not in stats["dsn"]
     parsed = urlparse(TEST_DSN)
-    if parsed.password:
-        assert parsed.password not in stats["dsn"]
+    if parsed.username and parsed.password:
+        assert f"{parsed.username}:{parsed.password}@" not in stats["dsn"]
+        assert f"{parsed.username}:***@" in stats["dsn"]
 
 
 @pytest.mark.asyncio
