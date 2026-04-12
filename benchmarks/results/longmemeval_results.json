@@ -1,0 +1,28 @@
+{
+  "benchmark": "LongMemEval",
+  "system": "Bilinc v1.0.4",
+  "mode": "hybrid",
+  "llm_used": false,
+  "embedding_model": "all-MiniLM-L6-v2 (ChromaDB default)",
+  "score_r5": 0.980,
+  "score_ndcg": 0.933,
+  "total_questions": 500,
+  "per_type": {
+    "knowledge-update": {"recall": 1.000, "n": 78},
+    "multi-session": {"recall": 0.992, "n": 133},
+    "single-session-user": {"recall": 1.000, "n": 70},
+    "temporal-reasoning": {"recall": 0.962, "n": 133},
+    "single-session-assistant": {"recall": 0.964, "n": 56},
+    "single-session-preference": {"recall": 0.933, "n": 30}
+  },
+  "comparison": {
+    "mem_palace_raw": 0.966,
+    "bilinc_hybrid": 0.980,
+    "mem_palace_hybrid_v2": 0.984,
+    "mem_palace_hybrid_v3_llm": 0.994,
+    "mem_palace_hybrid_v4_llm": 1.000
+  },
+  "date": "2026-04-12",
+  "machine": "GCP n1-standard-4 (4 vCPU, 15GB RAM)",
+  "runtime_minutes": 172
+}

@@ -60,6 +60,23 @@ It is designed as a **trustworthy state layer** for agents:
 - **Operator visibility**
   Bilinc exposes deployment signals through `/health` and `/metrics`.
 
+
+## Benchmark Results
+
+**LongMemEval** — 500 questions, 6 categories, R@5 metric.
+
+| System | R@5 | LLM Required |
+|--------|-----|--------------|
+| MemPalace (hybrid v4 + rerank) | 100% | Haiku |
+| MemPalace (hybrid v3 + rerank) | 99.4% | Haiku |
+| MemPalace (hybrid v2) | 98.4% | None |
+| **Bilinc (hybrid)** | **98.0%** | **None** |
+| MemPalace (raw) | 96.6% | None |
+| Mastra | 94.87% | GPT-5-mini |
+| Hindsight | 91.4% | Gemini-3 |
+
+Bilinc achieves **98.0% R@5** on LongMemEval without any LLM assistance — beating MemPalace raw (96.6%) and competitive with their hybrid v2 (98.4%). Full results and reproduction steps in [benchmarks/LONGMEMEVAL_RESULTS.md](benchmarks/LONGMEMEVAL_RESULTS.md).
+
 ## Core Capabilities
 
 - **StatePlane core**
