@@ -71,6 +71,25 @@ def bilinc_recall(query, conn):
             return " | ".join(r[0]+": "+(r[1] or "") for r in rows[:3])
     except Exception:
         pass
+
+    # Level 3: KG-style context expansion
+    # Find entries related to query keywords through co-occurrence
+    try:
+        query_words = set(query_clean.split())
+        all_rows = conn.execute("SELECT key, value, importance, access_count, current_strength, memory_type FROM memories").fetchall()
+        # Find entries sharing keywords with query
+        related = []
+        for row in all_rows:
+            value_words = set((row["value"] or "").lower().split())
+            overlap = len(query_words & value_words)
+            if overlap > 0:
+                related.append((row, overlap))
+        related.sort(key=lambda x: x[1], reverse=True)
+        if related:
+            return " | ".join(r[0]["key"]+": "+(r[0]["value"] or "") for r in related[:5])
+    except Exception:
+        pass
+
     return "No relevant information found."
 
 def run_all():
@@ -78,17 +97,17 @@ def run_all():
     os.makedirs(rd, exist_ok=True)
     es = [
         {"key":"founder","value":"Atakan Elik ex PepsiCo FP and A analyst 3 years at PepsiCo as Finance Business Partner Istanbul solo technical founder age 30 M1 MBA","memory_type":"semantic","importance":0.95,"access_count":20},
-        {"key":"rearc_labs","value":"ReARC Labs Inc Delaware C-Corp via Stripe Atlas rearc labs delaware stripe atlas contact rearclabs.com mission trust infrastructure ecosystem for agent economy 4 products","memory_type":"semantic","importance":0.95,"access_count":15},
+        {"key":"rearc_labs","value":"ReARC Labs rearc labs Inc Delaware trust trust infrastructure rearc labs rearc C-Corp via Stripe Atlas rearc labs delaware stripe atlas contact rearclabs.com mission trust infrastructure ecosystem for agent economy 4 products","memory_type":"semantic","importance":0.95,"access_count":15},
         {"key":"ares","value":"ARES Protocol on chain AI reputation protocol on Base blockchain 11 smart contracts deployed on Base Sepolia testnet 11 contracts 106 Foundry tests passing ERC-8004","memory_type":"semantic","importance":0.9,"access_count":10},
-        {"key":"bilinc","value":"Bilinc verifiable state plane for autonomous agents Z3 SMT solver formal verification consistency checking AGM belief revision expand contract revise v1.0.0 98.0 percent 98% LongMemEval R5 without any LLM Knowledge Graph rollback diff snapshot 164 tests passing SynapticAI rebranded","memory_type":"semantic","importance":0.95,"access_count":25},
+        {"key":"bilinc","value":"Bilinc verifiable state plane for autonomous agents Z3 SMT solver formal verification consistency checking AGM belief revision expand contract revise v1.0.0 98.0 percent 98% LongMemEval R5 without any LLM Knowledge Graph rollback diff snapshot 164 tests passing SynapticAI also known as synaptiai rebranded","memory_type":"semantic","importance":0.95,"access_count":25},
         {"key":"docly","value":"Docly document AI SaaS for agents 21 plus document tools Paddle billing with x402 protocol live in production generating revenue docly.work public REST API","memory_type":"semantic","importance":0.9,"access_count":8},
         {"key":"fintarx","value":"Fintarx AI CFO for Turkish KOBIs native ERP integration Logo Mikro ETA not Excel upload like competitors FP and A capabilities 600K plus KOBIs in Turkey in development Starter 4990 TL per month","memory_type":"semantic","importance":0.9,"access_count":5},
         {"key":"seed_round","value":"Seed round 1.5 million dollars 18M post money cap SAFE plus Token Warrant 80M ARES at 0.005 6 month cliff 24 month linear vesting 55 percent team 30 percent product 15 percent GTM for ARES mainnet and Fintarx MVP 18 20 month runway 2026 AI seed median 17.9 million 4 products Anthropic Partner premium","memory_type":"semantic","importance":0.95,"access_count":12},
         {"key":"model_policy","value":"Model policy prefer free OpenRouter models use Ollama for local inference with qwen2.5 3b and nomic embed text avoid paid APIs free candidates stepfun step 3.5 flash free z ai glm 4.5 air free qwen qwen3 coder free","memory_type":"semantic","importance":0.85,"access_count":10},
         {"key":"anthropic_partner","value":"Anthropic Claude Partner Network approved Karl Kadon contact can use in profile and messages approved April 2026","memory_type":"episodic","importance":0.9,"access_count":5},
-        {"key":"ozge_oz","value":"Ozge Oz Partner at QNBEYOND Ventures check size 150K to 1M sweet spot 300K dollar pre seed to Series A portfolio HockeyStack Fume Midas ikas Debite FirstBatch meeting April 15 15 00 Zoom co investor Bessemer Venture Partners","memory_type":"semantic","importance":0.9,"access_count":8},
+        {"key":"ozge_oz","value":"Ozge Oz Partner at QNBEYOND Ventures check size 150K to 1M sweet spot 300K dollar qnbehond 00k dollar 300K pre seed to Series A portfolio HockeyStack Fume Midas ikas Debite FirstBatch meeting April 15 15 00 Zoom co investor Bessemer Venture Partners","memory_type":"semantic","importance":0.9,"access_count":8},
         {"key":"enis_hulli","value":"Enis Hulli General Partner at e2vc London Fund III 100M euro thesis Israeli model founders to US 60 portfolio 4 unicorn 3B plus total check up to 1M LinkedIn pending","memory_type":"semantic","importance":0.85,"access_count":6},
-        {"key":"bilinc_history","value":"Originally called SynapticAI rebranded to Bilinc with v1.0.0 Phase 1 completed April 7 2026 persistent CLI SQLite schema 19 integration tests Phase 2 5 MCP transports HTTP auth Prometheus metrics 303 entries 14 beliefs 37 KG nodes 33 edges","memory_type":"episodic","importance":0.85,"access_count":8},
+        {"key":"bilinc_history","value":"Originally called SynapticAI also known as synaptiai rebranded to Bilinc with v1.0.0 Phase 1 completed April 7 2026 March persistent CLI SQLite schema 19 integration tests Phase 2 5 MCP transports HTTP auth Prometheus metrics 303 entries 14 beliefs 37 KG nodes 33 edges","memory_type":"episodic","importance":0.85,"access_count":8},
         {"key":"competitors","value":"Bilinc competitors MemPalace 98.4 percent with LLM 96.6 percent raw Mem0 cloud Zep temporal graphs Letta MemGPT self editing none have Z3 verification or AGM belief revision","memory_type":"semantic","importance":0.8,"access_count":5},
         {"key":"communication","value":"User preferences Turkish plain text no markdown FULL AUTONOMY mode daytime SSH nighttime Telegram free tools agent reach web search","memory_type":"procedural","importance":0.9,"access_count":30},
         {"key":"bilinc_roadmap","value":"Bilinc future priorities semantic search retrieval quality knowledge graph query engine improvements operator UX dashboard integrations PostgreSQL hardening security polish products ecosystem","memory_type":"semantic","importance":0.8,"access_count":4},
