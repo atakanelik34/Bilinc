@@ -1,0 +1,130 @@
+{
+  "benchmark": "ConvoMem",
+  "overall_score": 0.175,
+  "category_scores": {
+    "fact_recall": 0.1667,
+    "preference": 0.0,
+    "temporal": 0.0,
+    "entity_linking": 0.5,
+    "multi_hop": 0.25
+  },
+  "total_queries": 10,
+  "results": [
+    {
+      "id": "fr_001",
+      "category": "fact_recall",
+      "score": 0.0,
+      "matched": 0,
+      "total": 3,
+      "missing": [
+        "pepsico",
+        "fp&a",
+        "3 years"
+      ]
+    },
+    {
+      "id": "fr_002",
+      "category": "fact_recall",
+      "score": 0.0,
+      "matched": 0,
+      "total": 3,
+      "missing": [
+        "rearc labs",
+        "delaware",
+        "stripe atlas"
+      ]
+    },
+    {
+      "id": "fr_003",
+      "category": "fact_recall",
+      "score": 0.5,
+      "matched": 1,
+      "total": 2,
+      "missing": [
+        "base sepolia"
+      ]
+    },
+    {
+      "id": "pt_001",
+      "category": "preference",
+      "score": 0.0,
+      "matched": 0,
+      "total": 4,
+      "missing": [
+        "free",
+        "avoid",
+        "paid",
+        "ollama"
+      ]
+    },
+    {
+      "id": "pt_002",
+      "category": "preference",
+      "score": 0.0,
+      "matched": 0,
+      "total": 2,
+      "missing": [
+        "full autonomy",
+        "without asking"
+      ]
+    },
+    {
+      "id": "to_001",
+      "category": "temporal",
+      "score": 0.0,
+      "matched": 0,
+      "total": 4,
+      "missing": [
+        "phase 1",
+        "first",
+        "phase 2",
+        "after"
+      ]
+    },
+    {
+      "id": "to_002",
+      "category": "temporal",
+      "score": 0.0,
+      "matched": 0,
+      "total": 2,
+      "missing": [
+        "seed round",
+        "first"
+      ]
+    },
+    {
+      "id": "el_001",
+      "category": "entity_linking",
+      "score": 0.0,
+      "matched": 0,
+      "total": 5,
+      "missing": [
+        "\u00f6zge",
+        "qnbehond",
+        "partner",
+        "$300k",
+        "hockeystack"
+      ]
+    },
+    {
+      "id": "el_002",
+      "category": "entity_linking",
+      "score": 1.0,
+      "matched": 3,
+      "total": 3,
+      "missing": []
+    },
+    {
+      "id": "mh_001",
+      "category": "multi_hop",
+      "score": 0.25,
+      "matched": 1,
+      "total": 4,
+      "missing": [
+        "fintarx",
+        "mainnet",
+        "mvp"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,154 @@
+{
+  "benchmark": "LoCoMo",
+  "overall_score": 0.0909,
+  "category_scores": {
+    "temporal_inference": 0.0,
+    "multi_hop": 0.0,
+    "causal": 0.3333,
+    "long_range": 0.0
+  },
+  "total_queries": 11,
+  "results": [
+    {
+      "id": "ti_001",
+      "category": "temporal_inference",
+      "score": 0.0,
+      "matched": 0,
+      "total": 3,
+      "missing": [
+        "1 month",
+        "march",
+        "april"
+      ]
+    },
+    {
+      "id": "ti_002",
+      "category": "temporal_inference",
+      "score": 0.0,
+      "matched": 0,
+      "total": 4,
+      "missing": [
+        "anthropic",
+        "partner",
+        "vault",
+        "reorganization"
+      ]
+    },
+    {
+      "id": "ti_003",
+      "category": "temporal_inference",
+      "score": 0.0,
+      "matched": 0,
+      "total": 5,
+      "missing": [
+        "ares",
+        "first",
+        "bilinc",
+        "seed round",
+        "last"
+      ]
+    },
+    {
+      "id": "mh_001",
+      "category": "multi_hop",
+      "score": 0.0,
+      "matched": 0,
+      "total": 5,
+      "missing": [
+        "finance",
+        "pepsico",
+        "rearc",
+        "trust",
+        "ares"
+      ]
+    },
+    {
+      "id": "mh_002",
+      "category": "multi_hop",
+      "score": 0.0,
+      "matched": 0,
+      "total": 4,
+      "missing": [
+        "agent",
+        "infrastructure",
+        "trust",
+        "ecosystem"
+      ]
+    },
+    {
+      "id": "mh_003",
+      "category": "multi_hop",
+      "score": 0.0,
+      "matched": 0,
+      "total": 5,
+      "missing": [
+        "free",
+        "ollama",
+        "openrouter",
+        "avoid",
+        "paid"
+      ]
+    },
+    {
+      "id": "cr_001",
+      "category": "causal",
+      "score": 0.5,
+      "matched": 2,
+      "total": 4,
+      "missing": [
+        "formal",
+        "consistency"
+      ]
+    },
+    {
+      "id": "cr_002",
+      "category": "causal",
+      "score": 0.0,
+      "matched": 0,
+      "total": 4,
+      "missing": [
+        "median",
+        "4 products",
+        "anthropic",
+        "premium"
+      ]
+    },
+    {
+      "id": "cr_003",
+      "category": "causal",
+      "score": 0.5,
+      "matched": 2,
+      "total": 4,
+      "missing": [
+        "excel",
+        "unique"
+      ]
+    },
+    {
+      "id": "lr_001",
+      "category": "long_range",
+      "score": 0.0,
+      "matched": 0,
+      "total": 4,
+      "missing": [
+        "yes",
+        "98%",
+        "memory",
+        "bilinc"
+      ]
+    },
+    {
+      "id": "lr_002",
+      "category": "long_range",
+      "score": 0.0,
+      "matched": 0,
+      "total": 4,
+      "missing": [
+        "synaptiai",
+        "bilinc",
+        "rebrand",
+        "v1.0.0"
+      ]
+    }
+  ]
+}
