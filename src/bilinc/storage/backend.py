@@ -3,7 +3,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 from bilinc.core.models import MemoryEntry
-import asyncio
 class StorageBackend(ABC):
     @abstractmethod
     async def init(self) -> None: ...

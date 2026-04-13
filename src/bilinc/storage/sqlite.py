@@ -110,6 +110,7 @@ class SQLiteBackend(StorageBackend):
                     VALUES (new.rowid, new.key, COALESCE(new.value, ''));
                 END
             """)
+
         except Exception:
             pass  # FTS5 not available
 

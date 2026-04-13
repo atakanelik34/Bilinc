@@ -1,6 +1,5 @@
 """In-memory storage backend."""
 from __future__ import annotations
-import asyncio
 from typing import Dict, List, Optional
 from bilinc.core.models import MemoryEntry
 from bilinc.storage.backend import StorageBackend

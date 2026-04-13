@@ -35,7 +35,10 @@ class MetricsCollector:
     def record_latency(self, name: str, value_ms: float) -> None:
         """Record a latency observation in milliseconds."""
         with self._lock:
-            self._histograms.setdefault(name, []).append(value_ms)
+            hist = self._histograms.setdefault(name, [])
+            hist.append(value_ms)
+            if len(hist) > 10000:  # Cap to prevent OOM
+                del hist[:5000]
 
     def record_operation(self, operation: str, elapsed_ms: float) -> None:
         """Record a successful operation count and latency."""
