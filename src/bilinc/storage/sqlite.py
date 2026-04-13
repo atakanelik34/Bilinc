@@ -98,6 +98,21 @@ class SQLiteBackend(StorageBackend):
         ]:
             self._conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON memories ({col})")
 
+        # FTS5 full-text search (insert trigger only - simple and reliable)
+        try:
+            self._conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS mem_fts
+                USING fts5(key, value_text, tokenize='porter unicode61')
+            """)
+            self._conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS mem_fts_insert AFTER INSERT ON memories BEGIN
+                    INSERT OR REPLACE INTO mem_fts(rowid, key, value_text)
+                    VALUES (new.rowid, new.key, COALESCE(new.value, ''));
+                END
+            """)
+        except Exception:
+            pass  # FTS5 not available
+
         # Record schema version if not already present
         current = self._conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
         if current is None or current["version"] < self.SCHEMA_VERSION:
@@ -199,6 +214,27 @@ class SQLiteBackend(StorageBackend):
         rows = self._get_conn().execute("SELECT memory_type, COUNT(*) as cnt FROM memories GROUP BY memory_type")
         return {r["memory_type"]: r["cnt"] for r in rows}
     
+    def fts_rebuild(self):
+        """Rebuild FTS5 index from memories table. Call during consolidation."""
+        try:
+            self._conn.execute("INSERT INTO mem_fts(mem_fts) VALUES('rebuild')")
+            self._conn.commit()
+            return True
+        except Exception:
+            return False
+
+    def fts_search(self, query: str, limit: int = 10):
+        """Direct FTS5 search. Returns (rowid, key, rank) tuples."""
+        try:
+            fts_query = ' OR '.join(query.split())
+            return self._conn.execute("""
+                SELECT rowid, key, rank FROM mem_fts
+                WHERE mem_fts MATCH ?
+                ORDER BY rank LIMIT ?
+            """, (fts_query, limit)).fetchall()
+        except Exception:
+            return []
+
     async def stats(self) -> Dict:
         c = self._get_conn()
         total = c.execute("SELECT COUNT(*) as cnt FROM memories").fetchone()["cnt"]

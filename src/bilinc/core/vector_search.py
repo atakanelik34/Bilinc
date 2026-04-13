@@ -111,15 +111,30 @@ class HybridSearch:
         self.vs = vector_store
 
     def keyword_search(self, query: str, top_k: int = 10) -> List[Tuple[int, float]]:
-        """Simple keyword search using LIKE (upgrade to FTS5 later)."""
+        """FTS5 full-text search with LIKE fallback."""
         try:
-            # Search in key and value fields
+            # Try FTS5 first (porter stemming + unicode61)
+            fts_query = ' OR '.join(query.split())
+            results = self.conn.execute("""
+                SELECT rowid, rank FROM mem_fts
+                WHERE mem_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (fts_query, top_k)).fetchall()
+            if results:
+                # Normalize rank (BM25 is negative, lower = better)
+                max_rank = abs(min(r[1] for r in results)) if results else 1
+                return [(r[0], 1.0 - abs(r[1]) / max(max_rank, 1)) for r in results]
+        except Exception:
+            pass
+        # Fallback to LIKE
+        try:
             results = self.conn.execute("""
                 SELECT rowid FROM memories
-                WHERE key LIKE ? OR value_text LIKE ?
+                WHERE key LIKE ? OR value LIKE ?
                 LIMIT ?
             """, (f"%{query}%", f"%{query}%", top_k)).fetchall()
-            return [(r[0], 1.0) for r in results]
+            return [(r[0], 0.5) for r in results]
         except Exception:
             return []
 
