@@ -1,22 +1,21 @@
 {
   "benchmark": "LoCoMo",
-  "overall_score": 0.7045,
+  "overall_score": 0.858,
   "category_scores": {
-    "temporal_inference": 0.8333,
-    "multi_hop": 0.5833,
-    "causal": 0.8333,
-    "long_range": 0.5
+    "temporal_inference": 0.8958,
+    "multi_hop": 0.8333,
+    "causal": 1.0,
+    "long_range": 0.625
   },
   "total_queries": 11,
   "results": [
     {
       "id": "ti_001",
       "category": "temporal_inference",
-      "score": 0.5,
-      "matched": 2,
+      "score": 0.688,
+      "matched": 2.75,
       "total": 4,
       "missing": [
-        "1 month",
         "march"
       ]
     },
@@ -39,12 +38,10 @@
     {
       "id": "mh_001",
       "category": "multi_hop",
-      "score": 0.0,
-      "matched": 0,
+      "score": 0.5,
+      "matched": 2,
       "total": 4,
       "missing": [
-        "pepsico",
-        "finance",
         "trust",
         "rearc"
       ]
@@ -52,12 +49,10 @@
     {
       "id": "mh_002",
       "category": "multi_hop",
-      "score": 0.75,
-      "matched": 3,
+      "score": 1.0,
+      "matched": 4,
       "total": 4,
-      "missing": [
-        "ecosystem"
-      ]
+      "missing": []
     },
     {
       "id": "mh_003",
@@ -70,22 +65,18 @@
     {
       "id": "cr_001",
       "category": "causal",
-      "score": 0.75,
-      "matched": 3,
+      "score": 1.0,
+      "matched": 4,
       "total": 4,
-      "missing": [
-        "consistency"
-      ]
+      "missing": []
     },
     {
       "id": "cr_002",
       "category": "causal",
-      "score": 0.75,
-      "matched": 3,
+      "score": 1.0,
+      "matched": 4,
       "total": 4,
-      "missing": [
-        "products"
-      ]
+      "missing": []
     },
     {
       "id": "cr_003",
@@ -98,12 +89,11 @@
     {
       "id": "lr_001",
       "category": "long_range",
-      "score": 0.25,
-      "matched": 1,
+      "score": 0.5,
+      "matched": 2,
       "total": 4,
       "missing": [
         "yes",
-        "98%",
         "memory"
       ]
     },
