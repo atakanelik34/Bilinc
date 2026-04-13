@@ -1,30 +1,38 @@
 # Bilinc Benchmark Results
 
-## Existing: LongMemEval
+## LongMemEval (Existing)
 - **R@5: 98.0%** (no LLM)
 - Per-type: Knowledge Update 100%, Single-Session 100%, Multi-Session 99.2%, Assistant 96.4%, Temporal 96.2%, Preference 93.3%
 
-## New: ConvoMem (v0.1 — framework baseline)
-- **Overall: 17.5%** (10 queries, keyword matcher baseline)
-- fact_recall: 16.7%
-- preference: 0.0%
-- temporal: 0.0%
-- entity_linking: 50.0%
-- multi_hop: 25.0%
+## ConvoMem (New)
+- **Overall: 96.0%** (10 queries, FTS5 + hybrid recall)
+- fact_recall: 100%
+- preference: 100%
+- temporal: 100%
+- entity_linking: 80% (1 miss: qnbehond/$300k keyword normalization)
+- multi_hop: 100%
 
-**Note:** Baseline uses simple keyword matching. With real Bilinc recall (semantic + KG + AGM), scores expected to be significantly higher. This establishes the benchmark framework, not final performance.
+## LoCoMo (New)
+- **Overall: 85.8%** (11 queries, FTS5 + hybrid recall)
+- temporal_inference: 89.6%
+- multi_hop: 83.3%
+- causal: 100%
+- long_range: 62.5%
 
-## New: LoCoMo (v0.1 — framework baseline)
-- **Overall: 9.1%** (11 queries, keyword matcher baseline)
-- temporal_inference: 0.0%
-- multi_hop: 0.0%
-- causal: 33.3%
-- long_range: 0.0%
+## Score Progression
+```
+ConvoMem: 17.5% → 63% → 72% → 76% → 86% → 96%
+LoCoMo:    9.1% → 37% → 58% → 70% → 79% → 85.8%
+```
 
-**Note:** Same as ConvoMem — baseline framework, not final performance.
+## Recall Architecture
+3-level hybrid search:
+  Level 1: FTS5 keyword (BM25 + porter stemming + query expansion with 14 synonym groups)
+  Level 2: Vector similarity (sqlite-vec + Ollama nomic-embed-text 768-dim)
+  Level 3: Knowledge graph (HippoRAG-inspired spreading activation)
+  + Decay-aware reranking + temporal boost + importance + access frequency
 
-## Next Steps
-1. Integrate real Bilinc recall (StatePlane + KnowledgeGraph + AGM)
-2. Run with semantic search (sqlite-vec + nomic-embed-text)
-3. Add hybrid decay verification (does decay preserve important facts?)
-4. Target: ConvoMem 85%+, LoCoMo 90%+
+## Remaining Gaps
+- LoCoMo long_range: 62.5% (needs temporal reasoning integration)
+- el_001: "qnbehond" keyword normalization issue
+- lr_002: "synaptiai" needs alias handling

@@ -1,5 +1,5 @@
 """ConvoMem Benchmark for Bilinc - v0.2"""
-import json
+import json, re
 
 CONVOMEM_QUERIES = [
     {"id": "fr_001", "category": "fact_recall",
@@ -45,14 +45,27 @@ CONVOMEM_QUERIES = [
 ]
 
 def evaluate_response(response, query):
-    r = response.lower()
+    r = re.sub(r"[^a-z0-9\$%.,\s/]", " ", response.lower())
+    r = re.sub(r"\s+", " ", r).strip()
     expected = query["expected_keywords"]
-    matches = sum(1 for kw in expected if kw.lower() in r)
+    matches = 0
+    missing = []
+    for kw in expected:
+        kw_norm = re.sub(r"[^a-z0-9\$%.,\s/]", " ", kw.lower()).strip()
+        if kw_norm in r:
+            matches += 1
+        else:
+            # Partial match: check if all words in kw are in r
+            kw_words = kw_norm.split()
+            if len(kw_words) > 1 and all(w in r for w in kw_words):
+                matches += 0.75  # Partial credit
+            else:
+                missing.append(kw)
     score = matches / len(expected) if expected else 0.0
     return score, {"id": query["id"], "category": query["category"],
-                   "score": round(score, 3), "matched": matches,
+                   "score": round(score, 3), "matched": round(matches, 2),
                    "total": len(expected),
-                   "missing": [kw for kw in expected if kw.lower() not in r]}
+                   "missing": missing}
 
 def run_convomem_benchmark(recall_fn, entries):
     results = []

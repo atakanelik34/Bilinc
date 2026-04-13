@@ -1,11 +1,11 @@
 {
   "benchmark": "ConvoMem",
-  "overall_score": 0.72,
+  "overall_score": 0.96,
   "category_scores": {
-    "fact_recall": 0.3333,
+    "fact_recall": 1.0,
     "preference": 1.0,
     "temporal": 1.0,
-    "entity_linking": 0.6,
+    "entity_linking": 0.8,
     "multi_hop": 1.0
   },
   "total_queries": 10,
@@ -13,26 +13,18 @@
     {
       "id": "fr_001",
       "category": "fact_recall",
-      "score": 0.0,
-      "matched": 0,
+      "score": 1.0,
+      "matched": 3,
       "total": 3,
-      "missing": [
-        "pepsico",
-        "fp&a",
-        "3 years"
-      ]
+      "missing": []
     },
     {
       "id": "fr_002",
       "category": "fact_recall",
-      "score": 0.0,
-      "matched": 0,
+      "score": 1.0,
+      "matched": 3,
       "total": 3,
-      "missing": [
-        "rearc labs",
-        "delaware",
-        "stripe atlas"
-      ]
+      "missing": []
     },
     {
       "id": "fr_003",
@@ -77,14 +69,12 @@
     {
       "id": "el_001",
       "category": "entity_linking",
-      "score": 0.2,
-      "matched": 1,
+      "score": 0.6,
+      "matched": 3,
       "total": 5,
       "missing": [
-        "ozge",
         "qnbehond",
-        "$300k",
-        "hockeystack"
+        "$300k"
       ]
     },
     {
