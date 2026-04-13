@@ -1,153 +1,120 @@
 {
   "benchmark": "LoCoMo",
-  "overall_score": 0.0909,
+  "overall_score": 0.7045,
   "category_scores": {
-    "temporal_inference": 0.0,
-    "multi_hop": 0.0,
-    "causal": 0.3333,
-    "long_range": 0.0
+    "temporal_inference": 0.8333,
+    "multi_hop": 0.5833,
+    "causal": 0.8333,
+    "long_range": 0.5
   },
   "total_queries": 11,
   "results": [
     {
       "id": "ti_001",
       "category": "temporal_inference",
-      "score": 0.0,
-      "matched": 0,
-      "total": 3,
+      "score": 0.5,
+      "matched": 2,
+      "total": 4,
       "missing": [
         "1 month",
-        "march",
-        "april"
+        "march"
       ]
     },
     {
       "id": "ti_002",
       "category": "temporal_inference",
-      "score": 0.0,
-      "matched": 0,
-      "total": 4,
-      "missing": [
-        "anthropic",
-        "partner",
-        "vault",
-        "reorganization"
-      ]
+      "score": 1.0,
+      "matched": 3,
+      "total": 3,
+      "missing": []
     },
     {
       "id": "ti_003",
       "category": "temporal_inference",
-      "score": 0.0,
-      "matched": 0,
-      "total": 5,
-      "missing": [
-        "ares",
-        "first",
-        "bilinc",
-        "seed round",
-        "last"
-      ]
+      "score": 1.0,
+      "matched": 3,
+      "total": 3,
+      "missing": []
     },
     {
       "id": "mh_001",
       "category": "multi_hop",
       "score": 0.0,
       "matched": 0,
-      "total": 5,
+      "total": 4,
       "missing": [
-        "finance",
         "pepsico",
-        "rearc",
+        "finance",
         "trust",
-        "ares"
+        "rearc"
       ]
     },
     {
       "id": "mh_002",
       "category": "multi_hop",
-      "score": 0.0,
-      "matched": 0,
+      "score": 0.75,
+      "matched": 3,
       "total": 4,
       "missing": [
-        "agent",
-        "infrastructure",
-        "trust",
         "ecosystem"
       ]
     },
     {
       "id": "mh_003",
       "category": "multi_hop",
-      "score": 0.0,
-      "matched": 0,
-      "total": 5,
-      "missing": [
-        "free",
-        "ollama",
-        "openrouter",
-        "avoid",
-        "paid"
-      ]
+      "score": 1.0,
+      "matched": 3,
+      "total": 3,
+      "missing": []
     },
     {
       "id": "cr_001",
       "category": "causal",
-      "score": 0.5,
-      "matched": 2,
+      "score": 0.75,
+      "matched": 3,
       "total": 4,
       "missing": [
-        "formal",
         "consistency"
       ]
     },
     {
       "id": "cr_002",
       "category": "causal",
-      "score": 0.0,
-      "matched": 0,
+      "score": 0.75,
+      "matched": 3,
       "total": 4,
       "missing": [
-        "median",
-        "4 products",
-        "anthropic",
-        "premium"
+        "products"
       ]
     },
     {
       "id": "cr_003",
       "category": "causal",
-      "score": 0.5,
-      "matched": 2,
+      "score": 1.0,
+      "matched": 4,
       "total": 4,
-      "missing": [
-        "excel",
-        "unique"
-      ]
+      "missing": []
     },
     {
       "id": "lr_001",
       "category": "long_range",
-      "score": 0.0,
-      "matched": 0,
+      "score": 0.25,
+      "matched": 1,
       "total": 4,
       "missing": [
         "yes",
         "98%",
-        "memory",
-        "bilinc"
+        "memory"
       ]
     },
     {
       "id": "lr_002",
       "category": "long_range",
-      "score": 0.0,
-      "matched": 0,
+      "score": 0.75,
+      "matched": 3,
       "total": 4,
       "missing": [
-        "synaptiai",
-        "bilinc",
-        "rebrand",
-        "v1.0.0"
+        "synaptiai"
       ]
     }
   ]
