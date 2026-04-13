@@ -91,9 +91,27 @@ class MemoryEntry:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
     def apply_decay(self, elapsed_hours):
+        """Apply simple exponential decay (legacy). For hybrid decay, use apply_hybrid_decay()."""
         if self.decay_rate <= 0 or elapsed_hours <= 0:
             return self.current_strength
         self.current_strength = max(0.0, min(1.0, self.current_strength * (1 - self.decay_rate) ** elapsed_hours))
+        return self.current_strength
+
+    def apply_hybrid_decay(self, elapsed_hours, recent_accesses=0):
+        """Apply type-aware hybrid decay (exponential + power-law) with LTP protection."""
+        from bilinc.core.decay import compute_new_strength
+        days_elapsed = elapsed_hours / 24.0
+        mt = self.memory_type.value if hasattr(self.memory_type, "value") else str(self.memory_type)
+        new_strength, _ = compute_new_strength(
+            current_strength=self.current_strength,
+            memory_type=mt,
+            days_elapsed=days_elapsed,
+            importance=self.importance,
+            verification_score=self.verification_score,
+            access_count=self.access_count,
+            recent_accesses=recent_accesses,
+        )
+        self.current_strength = new_strength
         return self.current_strength
 
     def is_stale(self):
