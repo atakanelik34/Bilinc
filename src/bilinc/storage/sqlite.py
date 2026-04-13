@@ -48,6 +48,14 @@ class SQLiteBackend(StorageBackend):
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA journal_mode=WAL")
 
+        # Load sqlite-vec extension for vector search
+        try:
+            self._conn.enable_load_extension(True)
+            import sqlite_vec
+            sqlite_vec.load(self._conn)
+        except (ImportError, Exception):
+            pass  # sqlite-vec not available
+
         # Schema versioning table
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_version (
