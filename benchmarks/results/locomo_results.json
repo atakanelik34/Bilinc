@@ -1,23 +1,21 @@
 {
   "benchmark": "LoCoMo",
-  "overall_score": 0.858,
+  "overall_score": 0.9035,
   "category_scores": {
-    "temporal_inference": 0.8958,
+    "temporal_inference": 0.9792,
     "multi_hop": 0.8333,
     "causal": 1.0,
-    "long_range": 0.625
+    "long_range": 0.75
   },
   "total_queries": 11,
   "results": [
     {
       "id": "ti_001",
       "category": "temporal_inference",
-      "score": 0.688,
-      "matched": 2.75,
+      "score": 0.938,
+      "matched": 3.75,
       "total": 4,
-      "missing": [
-        "march"
-      ]
+      "missing": []
     },
     {
       "id": "ti_002",
@@ -100,12 +98,10 @@
     {
       "id": "lr_002",
       "category": "long_range",
-      "score": 0.75,
-      "matched": 3,
+      "score": 1.0,
+      "matched": 4,
       "total": 4,
-      "missing": [
-        "synaptiai"
-      ]
+      "missing": []
     }
   ]
 }

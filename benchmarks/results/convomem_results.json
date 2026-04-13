@@ -1,11 +1,11 @@
 {
   "benchmark": "ConvoMem",
-  "overall_score": 0.96,
+  "overall_score": 0.98,
   "category_scores": {
     "fact_recall": 1.0,
     "preference": 1.0,
     "temporal": 1.0,
-    "entity_linking": 0.8,
+    "entity_linking": 0.9,
     "multi_hop": 1.0
   },
   "total_queries": 10,
@@ -69,11 +69,10 @@
     {
       "id": "el_001",
       "category": "entity_linking",
-      "score": 0.6,
-      "matched": 3,
+      "score": 0.8,
+      "matched": 4,
       "total": 5,
       "missing": [
-        "qnbehond",
         "$300k"
       ]
     },
