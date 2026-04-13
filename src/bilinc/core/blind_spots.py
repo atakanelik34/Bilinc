@@ -184,3 +184,20 @@ class BlindSpotDetector:
         density = report.total_edges / max(max_edges, 1)
         bonus = min(0.2, density * 0.2)
         return max(0.0, min(1.0, 1.0 - norm_p + bonus))
+
+def detect_blind_spots_from_entries(entries, stale_days=30.0):
+    """Convenience: detect blind spots from Bilinc memory entry dicts."""
+    import time
+    nodes = [e.get("key", e.get("id", str(i))) for i, e in enumerate(entries)]
+    def get_edges(key):
+        for e in entries:
+            if e.get("key") == key or e.get("id") == key:
+                return e.get("metadata", {}).get("relations", [])
+        return []
+    def get_last_updated(key):
+        for e in entries:
+            if e.get("key") == key or e.get("id") == key:
+                return e.get("updated_at", e.get("created_at", time.time()))
+        return None
+    detector = BlindSpotDetector(stale_days=stale_days)
+    return detector.analyze(nodes, get_edges, get_last_updated)
