@@ -110,6 +110,18 @@ class SQLiteBackend(StorageBackend):
                     VALUES (new.rowid, new.key, COALESCE(new.value, ''));
                 END
             """)
+            self._conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS mem_fts_update AFTER UPDATE ON memories BEGIN
+                    DELETE FROM mem_fts WHERE rowid = old.rowid;
+                    INSERT INTO mem_fts(rowid, key, value_text)
+                    VALUES (new.rowid, new.key, COALESCE(new.value, ''));
+                END
+            """)
+            self._conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS mem_fts_delete AFTER DELETE ON memories BEGIN
+                    DELETE FROM mem_fts WHERE rowid = old.rowid;
+                END
+            """)
 
         except Exception:
             pass  # FTS5 not available
