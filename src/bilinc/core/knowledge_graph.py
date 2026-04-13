@@ -17,7 +17,10 @@ from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import networkx as nx
+try:
+    import networkx as nx
+except ImportError:
+    nx = None
 
 from bilinc.core.models import MemoryEntry, MemoryType
 
@@ -272,38 +275,35 @@ class KnowledgeGraph:
         Contradiction = same source->target pair with both
         'supports' AND 'contradicts', OR same entity with 
         conflicting property values.
+
+        Uses an index dict keyed by (source, target) pair to avoid
+        the previous O(n^2) nested scan over all edges.
         """
-        contradictions: List[Dict[str, Any]] = []
-        checked: Set[Tuple[str, str]] = set()
+        from collections import defaultdict
 
+        # Build index: O(n) single pass
+        pair_index: Dict[Tuple[str, str], List[KGEdge]] = defaultdict(list)
         for edge in self._edges:
-            pair_key = (edge.source, edge.target)
-            if pair_key in checked:
-                continue
-            checked.add(pair_key)
+            pair_index[(edge.source, edge.target)].append(edge)
 
-            # Find all edges with same source/target
-            same_pair = [
-                e for e in self._edges
-                if e.source == edge.source and e.target == edge.target
-            ]
+        contradictions: List[Dict[str, Any]] = []
 
-            # Check for direct contradiction
+        for pair_key, same_pair in pair_index.items():
             has_supports = any(e.relation_type == EdgeType.SUPPORTS for e in same_pair)
             has_contradicts = any(e.relation_type == EdgeType.CONTRADICTS for e in same_pair)
 
             if has_supports and has_contradicts:
                 contradictions.append({
                     "type": "relation_conflict",
-                    "source": edge.source,
-                    "target": edge.target,
+                    "source": pair_key[0],
+                    "target": pair_key[1],
                     "edges": [e.to_dict() for e in same_pair],
                 })
             elif has_contradicts:
                 contradictions.append({
                     "type": "direct_contradiction",
-                    "source": edge.source,
-                    "target": edge.target,
+                    "source": pair_key[0],
+                    "target": pair_key[1],
                     "edges": [e.to_dict() for e in same_pair],
                 })
 

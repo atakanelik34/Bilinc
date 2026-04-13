@@ -184,8 +184,8 @@ class StatePlane:
             self._record_failure("init", start_time, exc)
             raise
     
-    async def commit(self, key, value, memory_type=MemoryType.EPISODIC,
-                     verify=False, importance=1.0, metadata=None):
+    async def commit(self, key: str, value: Any, memory_type: MemoryType = MemoryType.EPISODIC,
+                     verify: bool = False, importance: float = 1.0, metadata: Optional[Dict[str, Any]] = None) -> MemoryEntry:
         start_time = time.perf_counter()
         entry = MemoryEntry(key=key, value=value, memory_type=memory_type,
                            importance=importance, metadata=metadata or {})
@@ -276,7 +276,7 @@ class StatePlane:
         """Synchronous recall of all entries from working memory. For in-memory/test use."""
         return self.working_memory.get_all()
     
-    async def recall(self, key=None, memory_type=None, limit=50):
+    async def recall(self, key: Optional[str] = None, memory_type: Optional[MemoryType] = None, limit: int = 50) -> List[MemoryEntry]:
         start_time = time.perf_counter()
         try:
             results = []
@@ -544,7 +544,7 @@ class StatePlane:
         import asyncio
         return asyncio.run(self.forget(key))
 
-    async def forget(self, key):
+    async def forget(self, key: str) -> bool:
         start_time = time.perf_counter()
         try:
             wm_entry = self.working_memory.get(key)

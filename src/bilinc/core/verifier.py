@@ -18,7 +18,10 @@ import logging
 from typing import Any, Dict, List, Optional, NamedTuple
 from dataclasses import dataclass
 
-import z3
+try:
+    import z3
+except ImportError:
+    z3 = None
 
 
 logger = logging.getLogger(__name__)

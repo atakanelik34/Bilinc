@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import time
 import logging
-from urllib.parse import urlsplit, urlunsplit
 from typing import Any, Dict, List, Optional
 try:
     import asyncpg
@@ -32,19 +31,7 @@ from bilinc.storage.backend import StorageBackend
 logger = logging.getLogger(__name__)
 
 
-def _redact_dsn(dsn: str) -> str:
-    try:
-        parsed = urlsplit(dsn)
-        if not parsed.scheme:
-            return "<redacted>"
-        host = parsed.hostname or ""
-        port = f":{parsed.port}" if parsed.port else ""
-        user = parsed.username
-        auth = f"{user}:***@" if user else ""
-        netloc = f"{auth}{host}{port}"
-        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
-    except Exception:
-        return "<redacted>"
+from bilinc.observability.health import _redact_dsn
 class PostgresBackend(StorageBackend):
     SCHEMA_VERSION = 1
 

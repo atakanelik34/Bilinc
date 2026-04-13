@@ -35,7 +35,7 @@ from bilinc.core.models import MemoryType
 from bilinc.core.audit import OpType
 from bilinc.mcp_server.rate_limiter import TokenBucketLimiter
 from bilinc.observability.logging import log_event
-from bilinc.security.input_validator import InputValidator
+from bilinc.security.validator import InputValidator
 from bilinc.security.resource_limits import ResourceLimits
 
 logger = logging.getLogger(__name__)
