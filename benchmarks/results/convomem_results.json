@@ -1,12 +1,12 @@
 {
   "benchmark": "ConvoMem",
-  "overall_score": 0.175,
+  "overall_score": 0.72,
   "category_scores": {
-    "fact_recall": 0.1667,
-    "preference": 0.0,
-    "temporal": 0.0,
-    "entity_linking": 0.5,
-    "multi_hop": 0.25
+    "fact_recall": 0.3333,
+    "preference": 1.0,
+    "temporal": 1.0,
+    "entity_linking": 0.6,
+    "multi_hop": 1.0
   },
   "total_queries": 10,
   "results": [
@@ -37,71 +37,52 @@
     {
       "id": "fr_003",
       "category": "fact_recall",
-      "score": 0.5,
-      "matched": 1,
+      "score": 1.0,
+      "matched": 2,
       "total": 2,
-      "missing": [
-        "base sepolia"
-      ]
+      "missing": []
     },
     {
       "id": "pt_001",
       "category": "preference",
-      "score": 0.0,
-      "matched": 0,
-      "total": 4,
-      "missing": [
-        "free",
-        "avoid",
-        "paid",
-        "ollama"
-      ]
+      "score": 1.0,
+      "matched": 3,
+      "total": 3,
+      "missing": []
     },
     {
       "id": "pt_002",
       "category": "preference",
-      "score": 0.0,
-      "matched": 0,
-      "total": 2,
-      "missing": [
-        "full autonomy",
-        "without asking"
-      ]
+      "score": 1.0,
+      "matched": 1,
+      "total": 1,
+      "missing": []
     },
     {
       "id": "to_001",
       "category": "temporal",
-      "score": 0.0,
-      "matched": 0,
-      "total": 4,
-      "missing": [
-        "phase 1",
-        "first",
-        "phase 2",
-        "after"
-      ]
+      "score": 1.0,
+      "matched": 3,
+      "total": 3,
+      "missing": []
     },
     {
       "id": "to_002",
       "category": "temporal",
-      "score": 0.0,
-      "matched": 0,
+      "score": 1.0,
+      "matched": 2,
       "total": 2,
-      "missing": [
-        "seed round",
-        "first"
-      ]
+      "missing": []
     },
     {
       "id": "el_001",
       "category": "entity_linking",
-      "score": 0.0,
-      "matched": 0,
+      "score": 0.2,
+      "matched": 1,
       "total": 5,
       "missing": [
-        "\u00f6zge",
+        "ozge",
         "qnbehond",
-        "partner",
         "$300k",
         "hockeystack"
       ]
@@ -117,14 +98,10 @@
     {
       "id": "mh_001",
       "category": "multi_hop",
-      "score": 0.25,
-      "matched": 1,
+      "score": 1.0,
+      "matched": 4,
       "total": 4,
-      "missing": [
-        "fintarx",
-        "mainnet",
-        "mvp"
-      ]
+      "missing": []
     }
   ]
 }
