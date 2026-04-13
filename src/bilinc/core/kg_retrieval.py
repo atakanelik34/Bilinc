@@ -109,7 +109,7 @@ class KGSpreadingActivation:
         """
         neighbors = []
 
-        # Try Bilinc Knowledge Graph first
+        # Try Bilinc Knowledge Graph (if table exists)
         try:
             rows = self.conn.execute("""
                 SELECT target_entity, relation_type, strength
@@ -119,7 +119,7 @@ class KGSpreadingActivation:
             for row in rows:
                 neighbors.append((row[0], row[1], row[2] if row[2] else 0.5))
         except Exception:
-            pass
+            pass  # Table does not exist yet
 
         # Fallback: check memory metadata for relations
         try:

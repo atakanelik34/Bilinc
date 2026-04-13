@@ -5,9 +5,9 @@ Provides readiness and liveness reporting for core runtime components.
 """
 
 from __future__ import annotations
+from urllib.parse import urlsplit, urlunsplit
 
 import time
-from urllib.parse import urlsplit, urlunsplit
 from typing import Any, Dict, List
 
 
