@@ -5,7 +5,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from bilinc.core.models import MemoryEntry, MemoryType, BeliefState
-from bilinc.core.agm import AGMEngine, AGMOperation
+from bilinc.adaptive.agm_engine import AGMEngine, AGMOperation
 from bilinc.core.verification import VerificationGate, VerificationStatus
 from bilinc.core.stateplane import StatePlane
 
