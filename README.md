@@ -6,7 +6,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/bilinc)](https://pypi.org/project/bilinc/)
 [![CI](https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml/badge.svg)](https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-BSL%201.1-yellow)](LICENSE)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)
 
 Bilinc manages truth state for long-running AI agents. Not just memory — verified, auditable, contradiction-resistant state.
@@ -155,6 +155,4 @@ pytest tests/ -v
 
 **Others store memories. Bilinc manages truth.**
 
-## License
-
-MIT
+## License\n\n[BSL 1.1](LICENSE)
