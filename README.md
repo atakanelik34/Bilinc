@@ -4,10 +4,13 @@
 
 ![Bilinc OG](assets/bilinc-og.png)
 
-[![PyPI](https://img.shields.io/pypi/v/bilinc)](https://pypi.org/project/bilinc/)
-[![CI](https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml/badge.svg)](https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-BSL%201.1-yellow)](LICENSE)
-![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)
+[![PyPI](https://img.shields.io/pypi/v/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7)](https://pypi.org/project/bilinc/)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7&label=downloads%2Fmo)](https://pypi.org/project/bilinc/)
+[![CI](https://github.com/ReARCLabs/Bilinc/actions/workflows/ci.yml/badge.svg?style=flat-square)](https://github.com/ReARCLabs/Bilinc/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white)](https://pypi.org/project/bilinc/)
+[![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-orange?style=flat-square)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-217%20passing-brightgreen?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![Stars](https://img.shields.io/github/stars/ReARCLabs/Bilinc?style=flat-square&logo=github&color=yellow)](https://github.com/ReARCLabs/Bilinc/stargazers)
 
 Bilinc manages truth state for long-running AI agents. Not just memory — verified, auditable, contradiction-resistant state.
 
@@ -155,4 +158,6 @@ pytest tests/ -v
 
 **Others store memories. Bilinc manages truth.**
 
-## License\n\n[BSL 1.1](LICENSE)
+## License
+
+[BSL 1.1](LICENSE) — free for personal and research use. Commercial SaaS use restricted until 2030, then Apache 2.0.
