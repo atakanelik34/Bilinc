@@ -2,17 +2,19 @@
 
 **Verifiable state plane for autonomous agents**
 
-![Bilinc OG](assets/bilinc-og.png)
+<p align="center">
+  <img src="assets/bilinc-og.png" alt="Bilinc" />
+</p>
 
-[![PyPI](https://img.shields.io/pypi/v/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7)](https://pypi.org/project/bilinc/)
-[![PyPI Downloads](https://img.shields.io/pypi/dm/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7&label=downloads%2Fmo)](https://pypi.org/project/bilinc/)
-[![CI](https://github.com/ReARCLabs/Bilinc/actions/workflows/ci.yml/badge.svg?style=flat-square)](https://github.com/ReARCLabs/Bilinc/actions/workflows/ci.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white)](https://pypi.org/project/bilinc/)
-[![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-orange?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-217%20passing-brightgreen?style=flat-square&logo=pytest&logoColor=white)](tests/)
-[![Stars](https://img.shields.io/github/stars/ReARCLabs/Bilinc?style=flat-square&logo=github&color=yellow)](https://github.com/ReARCLabs/Bilinc/stargazers)
-
-Bilinc manages truth state for long-running AI agents. Not just memory — verified, auditable, contradiction-resistant state.
+<p align="center">
+  <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/v/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7" alt="PyPI"></a>
+  <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/dm/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7&label=downloads%2Fmo" alt="Downloads"></a>
+  <a href="https://github.com/ReARCLabs/Bilinc/actions/workflows/ci.yml"><img src="https://github.com/ReARCLabs/Bilinc/actions/workflows/ci.yml/badge.svg?style=flat-square" alt="CI"></a>
+  <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-orange?style=flat-square" alt="License: BSL 1.1"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-217%20passing-brightgreen?style=flat-square&logo=pytest&logoColor=white" alt="Tests"></a>
+  <a href="https://github.com/ReARCLabs/Bilinc/stargazers"><img src="https://img.shields.io/github/stars/ReARCLabs/Bilinc?style=flat-square&logo=github&color=yellow" alt="Stars"></a>
+</p>
 
 ```bash
 pip install bilinc
@@ -20,86 +22,90 @@ pip install bilinc
 
 ---
 
-## What Bilinc Does
+Most agent memory systems are a vector store with a wrapper. Bilinc is a **state plane**: every belief is formally verified before it's stored, logically revised when it conflicts, and cryptographically audited so you can always trace what changed and why.
 
-Most agent memory systems are vector search with a wrapper. Bilinc is different:
+---
 
-- **Z3 formal verification** on every state commit (catches contradictions before they're stored)
-- **AGM belief revision** (EXPAND/CONTRACT/REVISE) resolves conflicts without silent data loss
-- **Hybrid decay model** (exponential → power-law) with LTP protection for important memories
-- **Knowledge graph** with spreading activation for multi-hop retrieval
-- **FTS5 + vector search** hybrid recall with RRF fusion
-- **Blind spot detection** finds knowledge gaps before they matter
-- **Rollback, snapshot, diff** — full state history recovery
-- **MCP server** over stdio and authenticated HTTP
+## Why Bilinc
 
-## Benchmark Results
+Long-running agents fail in predictable ways: they store contradictions they never catch, overwrite useful context with garbage, and have no way to roll back when something goes wrong.
 
-| Benchmark | Score | Details |
-|-----------|-------|---------|
-| **LongMemEval** | **98.0%** | No LLM, fully local |
-| **ConvoMem** | **98.0%** | 5 categories, real recall pipeline |
-| **LoCoMo** | **90.3%** | Temporal + causal + multi-hop |
+Bilinc fixes all three:
 
-*Score progression: ConvoMem 17.5% → 98.0%, LoCoMo 9.1% → 90.3%*
+- **Contradiction-resistant** — Z3 SMT solver checks every write before it lands. Contradictions are caught at commit time, not runtime.
+- **Logical revision** — AGM belief revision (EXPAND / CONTRACT / REVISE) resolves conflicts without silent data loss or blind overwrites.
+- **Full state history** — snapshot, diff, and rollback let any agent recover from any state.
+
+---
+
+## Features
+
+**Storage & Retrieval**
+- 5 brain-inspired memory types (Working, Episodic, Procedural, Semantic, Spatial) with per-type decay curves
+- Hybrid recall: FTS5 keyword (BM25) + vector similarity (sqlite-vec) + KG spreading activation, fused via RRF
+- Adaptive context budget allocation (ContextBudget RL) across memory types
+
+**Verification & Integrity**
+- Z3 SMT formal verification on every commit
+- AGM belief revision engine — logical EXPAND / CONTRACT / REVISE
+- Cryptographic audit trail (Merkle chain) with full provenance
+- Blind spot detection — finds knowledge gaps before they matter
+
+**Infrastructure**
+- SQLite (default, zero-dep) and PostgreSQL backends
+- MCP server v2 — 12 tools over stdio or authenticated HTTP
+- LangGraph checkpoint adapter (drop-in `BaseCheckpointSaver`)
+- Cross-tool memory translation: Claude Code ↔ Cursor ↔ VS Code ↔ OpenClaw
+- Prometheus-compatible metrics, health checks, latency tracing
+- Rate limiter, input validation, path traversal protection, MCP auth
+
+---
 
 ## Quick Start
 
 ```python
 from bilinc import StatePlane
+from bilinc.storage.sqlite import SQLiteBackend
 
-# Create a state plane
-sp = StatePlane(backend="sqlite", db_path="agent_state.db")
+backend = SQLiteBackend("agent_state.db")
+sp = StatePlane(backend=backend, enable_verification=True, enable_audit=True)
 
-# Commit a belief (auto-verified)
-sp.commit("user_preference", {
+# Commit a belief — Z3-verified before write
+sp.commit_sync("user_preference", {
     "theme": "dark",
     "language": "python"
 }, memory_type="semantic", importance=0.9)
 
-# Recall with hybrid search (FTS5 + vector + KG)
-results = sp.recall("user preference", limit=5)
+# Hybrid recall (FTS5 + vector + KG)
+results = sp.recall_all_sync("user preference", limit=5)
 
-# Check for contradictions
-from bilinc import verify
-report = verify.check_consistency(sp)
+# Snapshot → mutate → rollback
+snap = sp.snapshot_sync()
+sp.commit_sync("user_preference", {"theme": "light"})
+sp.rollback_sync(snap)
 
-# Snapshot and rollback
-snapshot = sp.snapshot()
-sp.rollback(snapshot)
+# Contradiction check
+from bilinc.core.verifier import StateVerifier
+report = StateVerifier().check(sp)
 ```
 
-## Architecture
+---
 
+## CLI
+
+```bash
+# Persist state to SQLite
+bilinc --db ./agent.db commit --key USER_PREF --value '{"theme": "dark"}'
+bilinc --db ./agent.db recall --key USER_PREF
+bilinc --db ./agent.db forget --key USER_PREF
+bilinc --db ./agent.db status
+
+# Hermes integration
+bilinc hermes bootstrap
+bilinc hermes smoke
 ```
-StatePlane (orchestrator)
-├── WorkingMemory (8 slots, PFC-inspired)
-├── SQLite Backend (persistent, FTS5, sqlite-vec)
-├── AGM Belief Revision (EXPAND/CONTRACT/REVISE)
-├── Knowledge Graph (entities + relations)
-├── Verification Gate (Z3 SMT solver)
-├── Audit Trail (full provenance)
-└── MCP Server (stdio + HTTP)
-```
 
-## Memory Types (5-type taxonomy)
-
-| Type | Decay | Use Case |
-|------|-------|----------|
-| Working | 24h half-life | Active context buffer |
-| Episodic | 7 days | Conversation events |
-| Procedural | 30 days | How-to knowledge |
-| Semantic | 180 days | Facts and entities |
-| Spatial | 90 days | Location/environment |
-
-## Hybrid Recall (3-level)
-
-```
-Query → Level 1: FTS5 keyword (BM25 + porter stemming)
-      → Level 2: Vector similarity (sqlite-vec + Ollama)
-      → Level 3: KG spreading activation (HippoRAG-inspired)
-      → RRF fusion → Decay-aware reranking → Results
-```
+---
 
 ## MCP Integration
 
@@ -111,52 +117,105 @@ Bilinc ships as an MCP server for Claude Code, Cursor, and any MCP-compatible ag
     "bilinc": {
       "command": "python",
       "args": ["-m", "bilinc.mcp_server.server_v2"],
-      "env": {"BILINC_DB_PATH": "~/bilinc.db"}
+      "env": { "BILINC_DB_PATH": "~/bilinc.db" }
     }
   }
 }
 ```
 
-**11 MCP tools:** commit_mem, recall, revise, forget, consolidate, contradictions, diff, snapshot, status, verify, query_graph
+**12 MCP tools:** `commit_mem` · `recall` · `revise` · `forget` · `consolidate` · `contradictions` · `diff` · `snapshot` · `rollback` · `status` · `verify` · `query_graph`
 
-## Modules (v1.1.0)
+---
 
-| Module | Purpose |
-|--------|---------|
-| `core/decay.py` | Hybrid decay model + LTP protection |
-| `core/blind_spots.py` | Knowledge gap detection |
-| `core/consolidation.py` | 3-stage consolidation pipeline |
-| `core/vector_search.py` | Hybrid search (FTS5 + vector + RRF) |
-| `core/kg_retrieval.py` | KG spreading activation |
-| `core/temporal.py` | Temporal reasoning (Allen's interval algebra) |
-| `storage/sqlite.py` | SQLite + FTS5 + sqlite-vec |
-| `storage/postgres.py` | PostgreSQL backend |
+## LangGraph Integration
 
-## Testing
+Use Bilinc as a verified, persistent checkpoint store for LangGraph agents:
+
+```python
+from langgraph.graph import StateGraph
+from bilinc import StatePlane
+from bilinc.storage.sqlite import SQLiteBackend
+from bilinc.integrations.langgraph import LangGraphCheckpointer
+
+sp = StatePlane(backend=SQLiteBackend("checkpoints.db"), enable_verification=True)
+checkpointer = LangGraphCheckpointer(sp)
+
+builder = StateGraph(...)
+graph = builder.compile(checkpointer=checkpointer)
+```
+
+Every checkpoint flows through Bilinc's AGM revision and Z3 verification pipeline — LangGraph state is contradiction-resistant by default.
+
+---
+
+## Benchmark Results
+
+| Benchmark | Score | Notes |
+|-----------|-------|-------|
+| **LongMemEval** | **98.0%** | Fully local, no LLM |
+| **ConvoMem** | **98.0%** | 5 categories, real recall pipeline |
+| **LoCoMo** | **90.3%** | Temporal · causal · multi-hop |
+
+*ConvoMem progression: 17.5% → 98.0%. LoCoMo: 9.1% → 90.3%*
+
+---
+
+## How Bilinc Compares
+
+| Feature | Bilinc | Mem0 | Zep | Letta |
+|---------|:------:|:----:|:---:|:-----:|
+| Z3 formal verification | ✅ | ❌ | ❌ | ❌ |
+| AGM belief revision | ✅ | ❌ | ❌ | ❌ |
+| Cryptographic audit trail | ✅ | ❌ | ❌ | ❌ |
+| Snapshot / diff / rollback | ✅ | ❌ | ❌ | ❌ |
+| Blind spot detection | ✅ | ❌ | ❌ | ❌ |
+| Hybrid decay (exp → power-law) | ✅ | ❌ | ❌ | ❌ |
+| FTS5 + vector hybrid recall | ✅ | ❌ | ✅ | ❌ |
+| Knowledge graph | ✅ | ❌ | ✅ | ❌ |
+| LangGraph checkpoint adapter | ✅ | ❌ | ✅ | ❌ |
+| MCP server | ✅ | ❌ | ❌ | ✅ |
+| Fully local (no cloud required) | ✅ | ❌ | ❌ | ✅ |
+
+**Others store memories. Bilinc manages truth.**
+
+---
+
+## Architecture
+
+```
+StatePlane (orchestrator)
+├── WorkingMemory          8 slots, PFC-inspired eviction
+├── AGM Engine             EXPAND / CONTRACT / REVISE
+├── Dual-Process Arbiter   System 1 (fast) + System 2 (deliberate)
+├── StateVerifier          Z3 SMT — contradiction gate
+├── AuditTrail             Merkle chain, full provenance
+├── KnowledgeGraph         Entities + relations, spreading activation
+├── Hybrid Recall          FTS5 → vector → KG → RRF fusion
+├── ContextBudgetRL        Adaptive token allocation by memory type
+├── Storage                SQLite (FTS5, sqlite-vec) · PostgreSQL
+└── MCP Server v2          stdio + authenticated HTTP, 12 tools
+```
+
+---
+
+## Installation
 
 ```bash
+# Core
+pip install bilinc
+
+# PostgreSQL backend
+pip install "bilinc[postgres]"
+
+# HTTP MCP server
+pip install "bilinc[server]"
+
+# Development
 pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-**217 tests passing, 0 failures.**
-
-## What Makes Bilinc Different
-
-| Feature | Bilinc | Mem0 | Zep | Letta |
-|---------|--------|------|-----|-------|
-| Z3 formal verification | ✅ | ❌ | ❌ | ❌ |
-| AGM belief revision | ✅ | ❌ | ❌ | ❌ |
-| Rollback/snapshot/diff | ✅ | ❌ | ❌ | ❌ |
-| Audit trail | ✅ | ❌ | ❌ | ❌ |
-| Hybrid decay (exp→power-law) | ✅ | ❌ | ❌ | ❌ |
-| Blind spot detection | ✅ | ❌ | ❌ | ❌ |
-| FTS5 + vector hybrid | ✅ | ❌ | ✅ | ❌ |
-| Knowledge graph | ✅ | ❌ | ✅ | ❌ |
-| MCP server | ✅ | ❌ | ❌ | ✅ |
-| Fully local (no cloud) | ✅ | ❌ | ❌ | ✅ |
-
-**Others store memories. Bilinc manages truth.**
+---
 
 ## License
 
