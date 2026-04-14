@@ -7,7 +7,10 @@ Supports all 5 brain-mimetic memory types with typed tables.
 from __future__ import annotations
 
 import json
-import sqlite3
+try:
+    import pysqlite3 as sqlite3  # macOS: has SQLITE_ENABLE_LOAD_EXTENSION
+except ImportError:
+    import sqlite3
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
