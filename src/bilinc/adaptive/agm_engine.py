@@ -120,6 +120,23 @@ class AGMEngine:
         # Vector clock for Darwiche & Pearl ordering
         self._clock: Dict[str, int] = {}
 
+    def load_beliefs_from_entries(self, entries: list) -> int:
+        """Populate AGM beliefs from a list of MemoryEntry objects.
+        Used at startup to restore beliefs from persistent backend.
+        Only loads entries with importance >= 0.5 (gate threshold).
+        Returns count of beliefs loaded."""
+        count = 0
+        for entry in entries:
+            if entry.importance < 0.5:
+                continue
+            # Use entrenchment-based expand: set entrenchment from importance
+            self._update_entrenchment(entry.key, entry.importance)
+            self.belief_state.add_belief(entry)
+            self.belief_state.revision_count += 1
+            self._tick(entry.key)
+            count += 1
+        return count
+
     # ─── Entrenchment ──────────────────────────────────────────
 
     def set_entrenchment(self, key: str, value: float) -> None:
