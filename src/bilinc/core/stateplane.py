@@ -45,6 +45,9 @@ class StatePlane:
     AUTO_CONSOLIDATE_CAPACITY_THRESHOLD = 0.8
     AUTO_CONSOLIDATE_HEAT_THRESHOLD = 0.7
     AUTO_CONSOLIDATE_MIN_HOT_ENTRIES = 1
+    SESSION_SUMMARY_MIN_EPISODES = 6
+    SESSION_SUMMARY_MIN_TOKENS = 120
+    SESSION_SUMMARY_MAX_HIGHLIGHTS = 5
     INTELLIGENT_RECALL_RRF_K = 60
     INTELLIGENT_RECALL_LEXICAL_WEIGHT = 0.4
     INTELLIGENT_RECALL_HYBRID_WEIGHT = 0.4
@@ -483,7 +486,97 @@ class StatePlane:
                     self.audit.log(OpType.CONSOLIDATE, e.key,
                                    before_value={"type": "working"}, after_value=e.to_dict())
                 count += 1
+        await self.summarize_episodic_sessions()
         return count
+
+    async def summarize_episodic_sessions(
+        self,
+        min_entries: Optional[int] = None,
+        token_threshold: Optional[int] = None,
+    ) -> List[MemoryEntry]:
+        """
+        Summarize episodic memories grouped by session into semantic memories.
+        Triggered when group size or token budget threshold is reached.
+        """
+        if not self.backend:
+            return []
+
+        min_entries = int(min_entries or self.SESSION_SUMMARY_MIN_EPISODES)
+        token_threshold = int(token_threshold or self.SESSION_SUMMARY_MIN_TOKENS)
+
+        all_entries = await self.backend.list_all()
+        episodic_entries = [
+            e for e in all_entries
+            if e.memory_type == MemoryType.EPISODIC
+            and not (isinstance(e.metadata, dict) and e.metadata.get("is_session_summary"))
+        ]
+        if not episodic_entries:
+            return []
+
+        existing_summaries = {
+            (e.metadata or {}).get("session_id")
+            for e in all_entries
+            if e.memory_type == MemoryType.SEMANTIC
+            and isinstance(e.metadata, dict)
+            and e.metadata.get("is_session_summary")
+        }
+
+        grouped: Dict[str, List[MemoryEntry]] = {}
+        for entry in episodic_entries:
+            session_id = entry.session_id or (entry.metadata or {}).get("session_id") or "__default__"
+            grouped.setdefault(session_id, []).append(entry)
+
+        created: List[MemoryEntry] = []
+        now = time.time()
+        for session_id, entries in grouped.items():
+            if session_id in existing_summaries:
+                continue
+
+            total_tokens = sum(self._estimate_tokens(e.value) for e in entries)
+            if len(entries) < min_entries and total_tokens < token_threshold:
+                continue
+
+            entries_sorted = sorted(entries, key=lambda e: (e.importance, e.created_at), reverse=True)
+            highlights = self._build_session_highlights(entries_sorted[: self.SESSION_SUMMARY_MAX_HIGHLIGHTS])
+            summary_payload = {
+                "session_id": session_id,
+                "entry_count": len(entries),
+                "token_count": total_tokens,
+                "highlights": highlights,
+            }
+            summary_entry = MemoryEntry(
+                key=f"session_summary:{session_id}:{int(now)}",
+                value=summary_payload,
+                memory_type=MemoryType.SEMANTIC,
+                source="auto_summarizer",
+                session_id=session_id if session_id != "__default__" else "",
+                importance=min(1.0, 0.5 + (0.05 * min(len(entries), 10))),
+                metadata={
+                    "is_session_summary": True,
+                    "session_id": session_id,
+                    "entry_count": len(entries),
+                    "token_count": total_tokens,
+                    "source_keys": [e.key for e in entries],
+                    "generated_at": now,
+                },
+            )
+            self._apply_entry_verification(summary_entry)
+            saved = await self.backend.save(summary_entry)
+            if not saved:
+                raise PersistenceWriteError(
+                    f"persistence_write_failed: backend save returned false for summary '{summary_entry.key}'"
+                )
+            created.append(summary_entry)
+
+            if self.enable_audit and self.audit:
+                self.audit.log(
+                    OpType.CONSOLIDATE,
+                    summary_entry.key,
+                    before_value=None,
+                    after_value=summary_entry.to_dict(),
+                    metadata={"auto_summary": True, "session_id": session_id},
+                )
+        return created
 
     def _should_auto_consolidate_working(self) -> bool:
         """Trigger consolidation when working memory is both hot and near capacity."""
@@ -584,6 +677,21 @@ class StatePlane:
             return get_conn()
         except Exception:
             return None
+
+    def _estimate_tokens(self, value: Any) -> int:
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        tokens = re.findall(r"[a-zA-Z0-9_]+", text)
+        return len(tokens)
+
+    def _build_session_highlights(self, entries: List[MemoryEntry]) -> List[str]:
+        highlights: List[str] = []
+        for entry in entries:
+            text = entry.value if isinstance(entry.value, str) else json.dumps(entry.value, ensure_ascii=False)
+            compact = " ".join(text.split())
+            if len(compact) > 180:
+                compact = compact[:177] + "..."
+            highlights.append(f"{entry.key}: {compact}")
+        return highlights
     
     async def diff(self, timestamp_a: float, timestamp_b: float) -> Dict[str, Any]:
         """Return a reconstructable diff between two timestamps using the audit trail."""
