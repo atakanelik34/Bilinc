@@ -41,6 +41,9 @@ class StatePlane:
     AUTO_RECALL_IMPORTANCE_THRESHOLD = 0.7
     AUTO_RECALL_ACCESS_COUNT_THRESHOLD = 3
     AUTO_RECALL_MAX_SLOTS = 5
+    AUTO_CONSOLIDATE_CAPACITY_THRESHOLD = 0.8
+    AUTO_CONSOLIDATE_HEAT_THRESHOLD = 0.7
+    AUTO_CONSOLIDATE_MIN_HOT_ENTRIES = 1
     
     def __init__(self, backend=None, working_memory=None, max_working_slots=8,
                  enable_verification=False, enable_audit=False):
@@ -263,6 +266,8 @@ class StatePlane:
                     if self.enable_audit and self.audit:
                         self.audit.log(OpType.CONSOLIDATE, evicted.key,
                                        before_value=evicted.to_dict(), metadata={"auto_evicted": True})
+                if self._should_auto_consolidate_working():
+                    await self.consolidate()
             else:
                 if self.backend:
                     previous_entry = await self.backend.load(key)
@@ -372,9 +377,11 @@ class StatePlane:
         return self.working_memory.get_all()
     
     async def consolidate(self):
+        if not self.backend:
+            return 0
         ready = self.working_memory.gate_to_episodic()
         count = 0
-        if ready and self.backend:
+        if ready:
             for e in ready:
                 await self.backend.save(e)
                 if self.enable_audit and self.audit:
@@ -382,6 +389,15 @@ class StatePlane:
                                    before_value={"type": "working"}, after_value=e.to_dict())
                 count += 1
         return count
+
+    def _should_auto_consolidate_working(self) -> bool:
+        """Trigger consolidation when working memory is both hot and near capacity."""
+        if not self.backend:
+            return False
+        if self.working_memory.capacity_usage < self.AUTO_CONSOLIDATE_CAPACITY_THRESHOLD:
+            return False
+        hot_entries = self.working_memory.hot_entries(threshold=self.AUTO_CONSOLIDATE_HEAT_THRESHOLD)
+        return len(hot_entries) >= self.AUTO_CONSOLIDATE_MIN_HOT_ENTRIES
     
     async def diff(self, timestamp_a: float, timestamp_b: float) -> Dict[str, Any]:
         """Return a reconstructable diff between two timestamps using the audit trail."""
