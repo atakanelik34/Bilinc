@@ -370,3 +370,38 @@ class TestStatePlaneWithSQLite:
         assert restored is not None
         assert restored.value == {"x": 1}
         _run(b2.close())
+
+    def test_entity_linking_roundtrip_with_agm_commit(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane = StatePlane(backend=b, enable_verification=False, enable_audit=True)
+        plane.init_agm()
+        plane.init_knowledge_graph()
+        _run(plane.init())
+
+        _run(
+            plane.commit_with_agm_async(
+                key="entity_mem_1",
+                value="Atakan builds Bilinc at ReARCLabs.",
+                memory_type="semantic",
+                importance=0.9,
+            )
+        )
+        _run(
+            plane.commit_with_agm_async(
+                key="entity_mem_2",
+                value="ReARCLabs uses Bilinc in production.",
+                memory_type="semantic",
+                importance=0.8,
+            )
+        )
+
+        linked = plane.knowledge_graph.query_memories_by_entity("ReARCLabs")
+        assert "entity_mem_1" in linked
+        assert "entity_mem_2" in linked
+
+        edges = plane.knowledge_graph.get_relations("entity_mem_2")
+        assert any(
+            e.get("target") == "entity_mem_1" and e.get("metadata", {}).get("cross_memory") is True
+            for e in edges
+        )
+        _run(b.close())
