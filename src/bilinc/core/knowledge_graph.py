@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import time
 import re
+from collections import defaultdict
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -112,6 +113,8 @@ class KnowledgeGraph:
         self.graph = nx.MultiDiGraph()
         self._nodes: Dict[str, KGNode] = {}
         self._edges: List[KGEdge] = []
+        self._entity_to_memories: Dict[str, Set[str]] = defaultdict(set)
+        self._memory_to_entities: Dict[str, Set[str]] = defaultdict(set)
         self._created_at = time.time()
         self._updated_at = time.time()
 
@@ -182,6 +185,73 @@ class KnowledgeGraph:
         self.graph.add_edge(source, target, **edge.to_dict())
         self._updated_at = time.time()
         return edge
+
+    def _has_relation(
+        self,
+        source: str,
+        target: str,
+        relation_type: EdgeType,
+        metadata_filter: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        for edge in self._edges:
+            if edge.source != source or edge.target != target or edge.relation_type != relation_type:
+                continue
+            if not metadata_filter:
+                return True
+            if all(edge.metadata.get(k) == v for k, v in metadata_filter.items()):
+                return True
+        return False
+
+    def _extract_entities_from_text(self, text: str) -> Set[str]:
+        capitalized = set(re.findall(r"\b[A-Z][A-Za-z0-9_-]{2,}\b", text))
+        return {
+            token
+            for token in capitalized
+            if token.lower() not in {"the", "and", "for", "that", "this", "with", "from", "have"}
+        }
+
+    def _extract_kv_pairs(self, text: str) -> List[Tuple[str, str]]:
+        return re.findall(r"([a-z_]+)\s*[=:]\s*([^,\n]+)", text)
+
+    def _index_memory_entities(self, memory_key: str, entities: Set[str]) -> None:
+        if not memory_key or not entities:
+            return
+        self._memory_to_entities[memory_key].update(entities)
+        for entity in entities:
+            self._entity_to_memories[entity].add(memory_key)
+
+    def query_memories_by_entity(self, entity: str, limit: int = 20) -> List[str]:
+        """Return memory keys linked to an entity."""
+        if not entity:
+            return []
+        keys = sorted(self._entity_to_memories.get(entity, set()))
+        return keys[: max(limit, 0)]
+
+    def memory_entities(self, memory_key: str) -> List[str]:
+        """Return entities linked to a memory key."""
+        if not memory_key:
+            return []
+        return sorted(self._memory_to_entities.get(memory_key, set()))
+
+    def compute_entity_overlap_boost(
+        self,
+        query_text: str,
+        memory_key: str,
+        boost_per_match: float = 0.2,
+        max_boost: float = 0.4,
+    ) -> float:
+        """
+        Compute retrieval boost based on entity overlap between query and memory.
+        Returns 0.0 when no overlap is found.
+        """
+        if not query_text or not memory_key:
+            return 0.0
+        query_entities = self._extract_entities_from_text(str(query_text))
+        memory_entities = self._memory_to_entities.get(memory_key, set())
+        overlap = query_entities.intersection(memory_entities)
+        if not overlap:
+            return 0.0
+        return min(max_boost, len(overlap) * boost_per_match)
 
     def remove_relation(self, source: str, target: str, relation_type: Optional[EdgeType] = None) -> bool:
         """Remove a relation between two nodes."""
@@ -323,10 +393,9 @@ class KnowledgeGraph:
 
         if entry.memory_type == MemoryType.SEMANTIC:
             text = str(entry.value)
-            # Extract entities: capitalized words, patterns
-            candidates = re.findall(r'\b[A-Z][a-z]{2,}\b', text)
-            # Also look for key-value patterns
-            kv_pairs = re.findall(r'([a-z_]+)\s*[=:]\s*([^,\n]+)', text)
+            candidates = self._extract_entities_from_text(text)
+            kv_pairs = self._extract_kv_pairs(text)
+            shared_entities = set(candidates)
 
             # Add the main entry key as an entity
             if entry.key:
@@ -340,9 +409,7 @@ class KnowledgeGraph:
                 entities_created += 1
 
             # Add capitalized words as entities
-            for cap_word in set(candidates):
-                if cap_word.lower() in ("the", "and", "for", "that", "this", "with", "from", "have"):
-                    continue
+            for cap_word in candidates:
                 self.add_entity(cap_word, NodeType.ENTITY)
                 entities_created += 1
 
@@ -355,9 +422,31 @@ class KnowledgeGraph:
             for k, v in kv_pairs:
                 self.add_entity(k, NodeType.FACT, {"value": v.strip()})
                 entities_created += 1
+                shared_entities.add(k)
                 if entry.key:
                     self.add_relation(entry.key, k, EdgeType.SUPPORTS, weight=0.8)
                     relations_created += 1
+
+            if entry.key:
+                # Cross-memory links: connect memories sharing any extracted entity.
+                linked_memories: Set[str] = set()
+                for entity_name in shared_entities:
+                    linked_memories.update(self._entity_to_memories.get(entity_name, set()))
+                linked_memories.discard(entry.key)
+
+                for other_memory_key in linked_memories:
+                    metadata = {"cross_memory": True}
+                    if not self._has_relation(entry.key, other_memory_key, EdgeType.RELATED_TO, metadata):
+                        self.add_relation(
+                            entry.key,
+                            other_memory_key,
+                            EdgeType.RELATED_TO,
+                            weight=0.6,
+                            metadata=metadata,
+                        )
+                        relations_created += 1
+
+                self._index_memory_entities(entry.key, shared_entities)
 
         return {"entities_created": entities_created, "relations_created": relations_created}
 
@@ -382,6 +471,8 @@ class KnowledgeGraph:
         self.graph = nx.MultiDiGraph()
         self._nodes = {}
         self._edges = []
+        self._entity_to_memories = defaultdict(set)
+        self._memory_to_entities = defaultdict(set)
 
         # Rebuild nodes
         for node_data in data.get("nodes", []):
@@ -395,6 +486,18 @@ class KnowledgeGraph:
             self._edges.append(edge)
             self.graph.add_edge(edge.source, edge.target, **edge.to_dict())
 
+        # Rebuild entity-memory index from explicit cross references and node metadata.
+        for source_key, node in self._nodes.items():
+            if node.node_type != NodeType.FACT:
+                continue
+            for edge in self.get_relations(source_key):
+                if edge.get("relation_type") != EdgeType.RELATED_TO.value:
+                    continue
+                target = edge.get("target")
+                if target and target in self._nodes and self._nodes[target].node_type == NodeType.ENTITY:
+                    self._memory_to_entities[source_key].add(target)
+                    self._entity_to_memories[target].add(source_key)
+
         self._created_at = data.get("stats", {}).get("created_at", time.time())
         self._updated_at = time.time()
 
@@ -404,6 +507,7 @@ class KnowledgeGraph:
         return {
             "nodes": len(self._nodes),
             "edges": len(self._edges),
+            "entity_links": sum(len(v) for v in self._entity_to_memories.values()),
             "contradictions": len(self.find_contradictions()),
             "density": nx.density(self.graph) if self.graph.number_of_nodes() > 0 else 0.0,
         }
