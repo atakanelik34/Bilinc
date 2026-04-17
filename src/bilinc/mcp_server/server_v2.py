@@ -15,10 +15,13 @@ import contextlib
 import hashlib
 import asyncio
 import hmac
+import csv
+import io
 import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from mcp.server import Server
@@ -452,6 +455,110 @@ def _create_server_v2(
                     "required": [],
                 },
             ),
+            Tool(
+                name="bilinc_recall_smart",
+                description="Advanced recall with reflection loop and adequacy scoring.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": "integer", "default": 10},
+                        "max_reflections": {"type": "integer", "default": 2},
+                        "adequacy_threshold": {"type": "number", "default": 0.55},
+                        "memory_types": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["episodic", "procedural", "semantic", "working", "spatial"]},
+                        },
+                    },
+                    "required": ["query"],
+                },
+            ),
+            Tool(
+                name="bilinc_query_analysis",
+                description="Analyze a query and produce expanded retrieval intent.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            Tool(
+                name="bilinc_event_segment",
+                description="Create or fetch event-based memory segments.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["create", "retrieve"], "default": "retrieve"},
+                        "event_id": {"type": "string"},
+                        "keys": {"type": "array", "items": {"type": "string"}},
+                        "limit": {"type": "integer", "default": 50},
+                    },
+                    "required": ["event_id"],
+                },
+            ),
+            Tool(
+                name="bilinc_summarize",
+                description="Summarize episodic sessions into semantic memories.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "min_entries": {"type": "integer"},
+                        "token_threshold": {"type": "integer"},
+                    },
+                    "required": [],
+                },
+            ),
+            Tool(
+                name="bilinc_health",
+                description="Return full health + metrics report.",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            Tool(
+                name="bilinc_benchmark",
+                description="Run lightweight in-process benchmark over recall and retrieval paths.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "default": "bilinc memory"},
+                        "iterations": {"type": "integer", "default": 5},
+                    },
+                    "required": [],
+                },
+            ),
+            Tool(
+                name="bilinc_export",
+                description="Export memories to JSON or CSV. Optional path writes backup file.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "format": {"type": "string", "enum": ["json", "csv"], "default": "json"},
+                        "path": {"type": "string"},
+                        "limit": {"type": "integer", "default": 1000},
+                    },
+                    "required": [],
+                },
+            ),
+            Tool(
+                name="bilinc_import",
+                description="Import memories from JSON or CSV payload/path.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "format": {"type": "string", "enum": ["json", "csv"], "default": "json"},
+                        "path": {"type": "string"},
+                        "data": {},
+                        "default_memory_type": {
+                            "type": "string",
+                            "enum": ["episodic", "procedural", "semantic", "working", "spatial"],
+                            "default": "semantic",
+                        },
+                    },
+                    "required": [],
+                },
+            ),
         ]
 
     # ─── Tool Handlers ─────────────────────────────────────
@@ -527,9 +634,34 @@ def _create_server_v2(
 
             elif name == "contradictions":
                 result = _handle_contradictions(plane)
+            elif name == "bilinc_recall_smart":
+                result = await _handle_bilinc_recall_smart(plane, arguments)
+            elif name == "bilinc_query_analysis":
+                result = _handle_bilinc_query_analysis(plane, arguments)
+            elif name == "bilinc_event_segment":
+                result = await _handle_bilinc_event_segment(plane, arguments)
+            elif name == "bilinc_summarize":
+                result = await _handle_bilinc_summarize(plane, arguments)
+            elif name == "bilinc_health":
+                result = await _handle_bilinc_health(plane, arguments)
+            elif name == "bilinc_benchmark":
+                result = await _handle_bilinc_benchmark(plane, arguments)
+            elif name == "bilinc_export":
+                result = await _handle_bilinc_export(plane, arguments)
+            elif name == "bilinc_import":
+                result = await _handle_bilinc_import(plane, arguments)
 
             else:
-                result = _error_text(name, ValueError(f"Unknown tool: {name}. Available tools: commit_mem, recall, forget, revise, status, verify, consolidate, snapshot, diff, rollback, query_graph, contradictions"))
+                result = _error_text(
+                    name,
+                    ValueError(
+                        "Unknown tool: "
+                        f"{name}. Available tools: commit_mem, recall, forget, revise, status, verify, "
+                        "consolidate, snapshot, diff, rollback, query_graph, contradictions, "
+                        "bilinc_recall_smart, bilinc_query_analysis, bilinc_event_segment, bilinc_summarize, "
+                        "bilinc_health, bilinc_benchmark, bilinc_export, bilinc_import"
+                    ),
+                )
 
             _record_latency(plane, "tool_call_latency_ms", (time.perf_counter() - start_time) * 1000)
             log_event(logger, "info", "tool_call", tool=name, transport=transport_mode, status="success")
@@ -611,11 +743,25 @@ def create_mcp_http_app(
     server = _create_server_v2(plane=plane, rate_limiter=None, transport_mode="http")
     session_manager = StreamableHTTPSessionManager(server, json_response=True)
     rate_limiter = TokenBucketLimiter(max_tokens=max_tokens, refill_rate=refill_rate)
+    scheduler = None
 
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette):
+        nonlocal scheduler
+        from bilinc.scheduler import BackgroundScheduler
+
         async with session_manager.run():
-            yield
+            if os.getenv("BILINC_ENABLE_SCHEDULER", "1").strip().lower() in {"1", "true", "yes", "on"}:
+                scheduler = BackgroundScheduler(plane)
+                scheduler.register_phase7_jobs()
+                tick_seconds = float(os.getenv("BILINC_SCHEDULER_TICK_SECONDS", "5.0"))
+                await scheduler.start(tick_seconds=tick_seconds)
+            try:
+                yield
+            finally:
+                if scheduler is not None:
+                    await scheduler.stop()
+                    scheduler = None
 
     async def _authorize(scope, receive, send, surface: str, start_time: float) -> Optional[str]:
         headers = Headers(scope=scope)
@@ -1309,4 +1455,313 @@ def _handle_contradictions(plane: StatePlane, args: Dict[str, Any] = None) -> Li
         "tool": "contradictions",
         "count": len(contradictions),
         "contradictions": contradictions,
+    })
+
+
+async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    query = (args.get("query") or "").strip()
+    if not query:
+        return _result_text({"tool": "bilinc_recall_smart", "success": False, "error": "query is required"})
+    limit = int(args.get("limit", 10))
+    max_reflections = int(args.get("max_reflections", 2))
+    adequacy_threshold = float(args.get("adequacy_threshold", 0.55))
+    raw_types = args.get("memory_types") or []
+    memory_types = []
+    for mt in raw_types:
+        try:
+            memory_types.append(MemoryType(mt))
+        except Exception:
+            continue
+    payload = await plane.recall_reflective(
+        query=query,
+        limit=limit,
+        max_reflections=max_reflections,
+        adequacy_threshold=adequacy_threshold,
+        memory_types=memory_types or None,
+    )
+    payload["tool"] = "bilinc_recall_smart"
+    payload["success"] = True
+    return _result_text(payload)
+
+
+def _handle_bilinc_query_analysis(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    query = (args.get("query") or "").strip()
+    if not query:
+        return _result_text({"tool": "bilinc_query_analysis", "success": False, "error": "query is required"})
+    tokens = plane._tokenize_query(query) if hasattr(plane, "_tokenize_query") else query.lower().split()
+    expanded = plane._expand_reflection_query(query) if hasattr(plane, "_expand_reflection_query") else query
+    entities = []
+    if hasattr(plane, "knowledge_graph") and plane.knowledge_graph:
+        entities = sorted(list(plane.knowledge_graph._extract_entities_from_text(query)))
+    return _result_text({
+        "tool": "bilinc_query_analysis",
+        "success": True,
+        "query": query,
+        "tokens": tokens,
+        "expanded_query": expanded,
+        "entity_candidates": entities,
+        "token_count": len(tokens),
+    })
+
+
+async def _handle_bilinc_event_segment(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    event_id = (args.get("event_id") or "").strip()
+    if not event_id:
+        return _result_text({"tool": "bilinc_event_segment", "success": False, "error": "event_id is required"})
+    action = args.get("action", "retrieve")
+    limit = int(args.get("limit", 50))
+
+    if action == "create":
+        keys = args.get("keys") or []
+        if not keys:
+            return _result_text({"tool": "bilinc_event_segment", "success": False, "error": "keys required for create"})
+        updated = 0
+        missing = []
+        for key in keys:
+            existing = await plane.backend.load(key) if plane.backend else None
+            if existing is None:
+                wm = plane.working_memory.get(key) if hasattr(plane, "working_memory") else None
+                existing = wm
+            if existing is None:
+                missing.append(key)
+                continue
+            if not isinstance(existing.metadata, dict):
+                existing.metadata = {}
+            existing.metadata["event_id"] = event_id
+            existing.metadata["event_segmented_at"] = time.time()
+            if plane.backend:
+                if hasattr(plane.backend, "restore"):
+                    await plane.backend.restore(existing)
+                else:
+                    await plane.backend.save(existing)
+            updated += 1
+        return _result_text({
+            "tool": "bilinc_event_segment",
+            "success": True,
+            "action": "create",
+            "event_id": event_id,
+            "updated": updated,
+            "missing": missing,
+        })
+
+    # retrieve
+    entries = []
+    if plane.backend:
+        entries = await plane.backend.list_all()
+    elif hasattr(plane, "working_memory"):
+        entries = plane.working_memory.get_all()
+    selected = [
+        e for e in entries
+        if isinstance(e.metadata, dict) and e.metadata.get("event_id") == event_id
+    ][:limit]
+    return _result_text({
+        "tool": "bilinc_event_segment",
+        "success": True,
+        "action": "retrieve",
+        "event_id": event_id,
+        "count": len(selected),
+        "entries": [_json_safe(e) for e in selected],
+    })
+
+
+async def _handle_bilinc_summarize(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    min_entries = args.get("min_entries")
+    token_threshold = args.get("token_threshold")
+    session_id = args.get("session_id")
+
+    summaries = await plane.summarize_episodic_sessions(
+        min_entries=min_entries if min_entries is not None else None,
+        token_threshold=token_threshold if token_threshold is not None else None,
+    )
+    if session_id:
+        summaries = [s for s in summaries if (s.metadata or {}).get("session_id") == session_id]
+    return _result_text({
+        "tool": "bilinc_summarize",
+        "success": True,
+        "count": len(summaries),
+        "summaries": [_json_safe(s) for s in summaries],
+    })
+
+
+async def _handle_bilinc_health(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    report = await plane.health_metrics_report()
+    report["tool"] = "bilinc_health"
+    report["success"] = True
+    report["phase3"] = plane.phase3_stats() if hasattr(plane, "phase3_stats") else {}
+    return _result_text(report)
+
+
+async def _handle_bilinc_benchmark(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    query = args.get("query", "bilinc memory")
+    iterations = max(1, min(20, int(args.get("iterations", 5))))
+
+    timings = {"recall_intelligent_ms": [], "recall_reflective_ms": []}
+    for _ in range(iterations):
+        t0 = time.perf_counter()
+        await plane.recall_intelligent(query, limit=10)
+        timings["recall_intelligent_ms"].append((time.perf_counter() - t0) * 1000.0)
+
+        t1 = time.perf_counter()
+        await plane.recall_reflective(query, limit=10, max_reflections=2, adequacy_threshold=0.55)
+        timings["recall_reflective_ms"].append((time.perf_counter() - t1) * 1000.0)
+
+    def _avg(xs: List[float]) -> float:
+        return round(sum(xs) / max(len(xs), 1), 3)
+
+    payload = {
+        "tool": "bilinc_benchmark",
+        "success": True,
+        "iterations": iterations,
+        "query": query,
+        "results": {
+            "recall_intelligent_avg_ms": _avg(timings["recall_intelligent_ms"]),
+            "recall_reflective_avg_ms": _avg(timings["recall_reflective_ms"]),
+        },
+        "raw": {k: [round(v, 3) for v in vals] for k, vals in timings.items()},
+    }
+    return _result_text(payload)
+
+
+def _entry_to_export_row(entry: Any) -> Dict[str, Any]:
+    as_dict = _json_safe(entry)
+    if not isinstance(as_dict, dict):
+        return {"key": str(getattr(entry, "key", "")), "value": as_dict}
+    return as_dict
+
+
+async def _handle_bilinc_export(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    export_format = args.get("format", "json")
+    limit = max(1, int(args.get("limit", 1000)))
+    path = args.get("path")
+
+    entries = []
+    if plane.backend:
+        entries = await plane.backend.list_all()
+    elif hasattr(plane, "working_memory"):
+        entries = plane.working_memory.get_all()
+    entries = entries[:limit]
+    rows = [_entry_to_export_row(e) for e in entries]
+
+    payload: Dict[str, Any] = {
+        "tool": "bilinc_export",
+        "success": True,
+        "format": export_format,
+        "count": len(rows),
+    }
+
+    if export_format == "csv":
+        columns = [
+            "key",
+            "memory_type",
+            "value",
+            "importance",
+            "current_strength",
+            "access_count",
+            "created_at",
+            "updated_at",
+            "metadata",
+        ]
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({
+                "key": row.get("key"),
+                "memory_type": row.get("memory_type"),
+                "value": json.dumps(row.get("value"), ensure_ascii=False),
+                "importance": row.get("importance"),
+                "current_strength": row.get("current_strength"),
+                "access_count": row.get("access_count"),
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+                "metadata": json.dumps(row.get("metadata", {}), ensure_ascii=False),
+            })
+        content = buffer.getvalue()
+        payload["data"] = content if not path else None
+        if path:
+            output_path = Path(path).expanduser()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(content, encoding="utf-8")
+            payload["path"] = str(output_path)
+    else:
+        payload["data"] = rows if not path else None
+        if path:
+            output_path = Path(path).expanduser()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+            payload["path"] = str(output_path)
+
+    return _result_text(payload)
+
+
+async def _handle_bilinc_import(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    import_format = args.get("format", "json")
+    source_path = args.get("path")
+    incoming = args.get("data")
+    default_memory_type = args.get("default_memory_type", "semantic")
+
+    if source_path:
+        path = Path(source_path).expanduser()
+        if not path.exists():
+            return _result_text({"tool": "bilinc_import", "success": False, "error": f"path_not_found: {path}"})
+        raw = path.read_text(encoding="utf-8")
+        if import_format == "csv":
+            incoming = list(csv.DictReader(io.StringIO(raw)))
+        else:
+            incoming = json.loads(raw)
+
+    if incoming is None:
+        return _result_text({"tool": "bilinc_import", "success": False, "error": "data or path required"})
+
+    if isinstance(incoming, dict):
+        incoming = [incoming]
+    if not isinstance(incoming, list):
+        return _result_text({"tool": "bilinc_import", "success": False, "error": "data must be list/object"})
+
+    imported = 0
+    failed = 0
+    errors = []
+
+    for idx, item in enumerate(incoming):
+        try:
+            if not isinstance(item, dict):
+                raise ValueError("row must be object")
+            key = str(item.get("key") or f"imported:{idx}")
+            raw_value = item.get("value")
+            if import_format == "csv" and isinstance(raw_value, str):
+                try:
+                    value = json.loads(raw_value)
+                except Exception:
+                    value = raw_value
+            else:
+                value = raw_value
+            mem_type = str(item.get("memory_type") or default_memory_type)
+            if plane.backend is None and mem_type != MemoryType.WORKING.value:
+                mem_type = MemoryType.WORKING.value
+            importance = float(item.get("importance", 1.0))
+            metadata = item.get("metadata", {})
+            if import_format == "csv" and isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except Exception:
+                    metadata = {}
+            await plane.commit_with_agm_async(
+                key=key,
+                value=value,
+                memory_type=mem_type,
+                importance=importance,
+                metadata=metadata if isinstance(metadata, dict) else {},
+                source="import",
+            )
+            imported += 1
+        except Exception as exc:
+            failed += 1
+            errors.append({"index": idx, "error": str(exc)})
+
+    return _result_text({
+        "tool": "bilinc_import",
+        "success": failed == 0,
+        "imported": imported,
+        "failed": failed,
+        "errors": errors[:20],
     })

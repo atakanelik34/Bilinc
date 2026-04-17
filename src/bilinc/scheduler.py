@@ -8,6 +8,13 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from bilinc.core.stateplane import StatePlane
+from bilinc.jobs import (
+    background_consolidation_job,
+    decay_pass_job,
+    entity_linking_backlog_job,
+    health_metrics_report_job,
+    kg_maintenance_job,
+)
 
 
 JobHandler = Callable[[], Awaitable[Dict[str, Any]]]
@@ -116,17 +123,16 @@ class BackgroundScheduler:
             await asyncio.sleep(tick_seconds)
 
     async def _job_background_consolidation(self) -> Dict[str, Any]:
-        consolidated = await self.state_plane.consolidate()
-        return {"consolidated": consolidated}
+        return await background_consolidation_job(self.state_plane)
 
     async def _job_decay_pass(self) -> Dict[str, Any]:
-        return await self.state_plane.apply_decay_pass(prune=True)
+        return await decay_pass_job(self.state_plane)
 
     async def _job_kg_maintenance(self) -> Dict[str, Any]:
-        return await self.state_plane.run_kg_maintenance()
+        return await kg_maintenance_job(self.state_plane)
 
     async def _job_entity_linking_backlog(self) -> Dict[str, Any]:
-        return await self.state_plane.run_entity_linking_backlog()
+        return await entity_linking_backlog_job(self.state_plane)
 
     async def _job_health_metrics_report(self) -> Dict[str, Any]:
-        return await self.state_plane.health_metrics_report()
+        return await health_metrics_report_job(self.state_plane)

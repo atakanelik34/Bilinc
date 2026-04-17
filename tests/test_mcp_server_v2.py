@@ -15,9 +15,11 @@ Covering:
 
 import asyncio
 import json
+import tempfile
 import pytest
 
 from bilinc.core.stateplane import StatePlane
+from bilinc.storage.sqlite import SQLiteBackend
 from bilinc.mcp_server.server_v2 import (
     _handle_commit_mem,
     _handle_recall,
@@ -28,6 +30,14 @@ from bilinc.mcp_server.server_v2 import (
     _handle_snapshot,
     _handle_query_graph,
     _handle_contradictions,
+    _handle_bilinc_recall_smart,
+    _handle_bilinc_query_analysis,
+    _handle_bilinc_event_segment,
+    _handle_bilinc_summarize,
+    _handle_bilinc_health,
+    _handle_bilinc_benchmark,
+    _handle_bilinc_export,
+    _handle_bilinc_import,
     _error_text,
     _json_safe,
 )
@@ -324,3 +334,92 @@ class TestMCPErrorHandling:
 
         assert result["success"] is False
         assert result["error"] == "persistence_write_failed"
+
+
+class TestPhase8Tools:
+    @pytest.fixture()
+    def phase8_plane(self):
+        with tempfile.TemporaryDirectory() as td:
+            backend = SQLiteBackend(db_path=f"{td}/phase8.db")
+            asyncio.run(backend.init())
+            p = StatePlane(backend=backend, enable_verification=False, enable_audit=True)
+            p.init_agm()
+            p.init_knowledge_graph()
+            asyncio.run(p.init())
+            yield p
+            asyncio.run(backend.close())
+
+    def test_recall_smart(self, phase8_plane: StatePlane):
+        _call(_handle_commit_mem, phase8_plane, {
+            "key": "phase8_recall",
+            "value": "Kubernetes deployment guide for Bilinc",
+            "memory_type": "semantic",
+        })
+        result = _call(_handle_bilinc_recall_smart, phase8_plane, {"query": "k8s deploy bilinc", "limit": 5})
+        assert result["tool"] == "bilinc_recall_smart"
+        assert result["success"] is True
+        assert len(result["results"]) >= 1
+
+    def test_query_analysis(self, phase8_plane: StatePlane):
+        result = _call(_handle_bilinc_query_analysis, phase8_plane, {"query": "k8s deploy bilinc"})
+        assert result["tool"] == "bilinc_query_analysis"
+        assert result["success"] is True
+        assert result["token_count"] >= 1
+        assert "expanded_query" in result
+
+    def test_event_segment_create_and_retrieve(self, phase8_plane: StatePlane):
+        _call(_handle_commit_mem, phase8_plane, {"key": "ev_a", "value": "alpha", "memory_type": "semantic"})
+        _call(_handle_commit_mem, phase8_plane, {"key": "ev_b", "value": "beta", "memory_type": "semantic"})
+
+        create_res = _call(_handle_bilinc_event_segment, phase8_plane, {
+            "action": "create",
+            "event_id": "release-1",
+            "keys": ["ev_a", "ev_b"],
+        })
+        assert create_res["success"] is True
+        assert create_res["updated"] >= 2
+
+        fetch_res = _call(_handle_bilinc_event_segment, phase8_plane, {
+            "action": "retrieve",
+            "event_id": "release-1",
+        })
+        assert fetch_res["success"] is True
+        assert fetch_res["count"] >= 2
+
+    def test_summarize_tool(self, phase8_plane: StatePlane):
+        for idx in range(6):
+            _call(_handle_commit_mem, phase8_plane, {
+                "key": f"sum_ep_{idx}",
+                "value": f"Session detail {idx} about deployment pipeline.",
+                "memory_type": "episodic",
+                "metadata": {"session_id": "s-phase8"},
+            })
+        result = _call(_handle_bilinc_summarize, phase8_plane, {"session_id": "s-phase8"})
+        assert result["tool"] == "bilinc_summarize"
+        assert result["success"] is True
+        assert result["count"] >= 1
+
+    def test_health_and_benchmark(self, phase8_plane: StatePlane):
+        health = _call(_handle_bilinc_health, phase8_plane, {})
+        assert health["tool"] == "bilinc_health"
+        assert health["success"] is True
+
+        bench = _call(_handle_bilinc_benchmark, phase8_plane, {"iterations": 2})
+        assert bench["tool"] == "bilinc_benchmark"
+        assert bench["success"] is True
+        assert bench["iterations"] == 2
+
+    def test_export_import_json_cycle(self, phase8_plane: StatePlane):
+        _call(_handle_commit_mem, phase8_plane, {"key": "exp_key", "value": {"x": 1}, "memory_type": "semantic"})
+        exported = _call(_handle_bilinc_export, phase8_plane, {"format": "json", "limit": 10})
+        assert exported["tool"] == "bilinc_export"
+        assert exported["success"] is True
+        assert exported["count"] >= 1
+        assert isinstance(exported["data"], list)
+
+        imported = _call(_handle_bilinc_import, phase8_plane, {
+            "format": "json",
+            "data": [{"key": "imp_key", "value": {"y": 2}, "memory_type": "semantic"}],
+        })
+        assert imported["tool"] == "bilinc_import"
+        assert imported["imported"] >= 1

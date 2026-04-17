@@ -13,6 +13,7 @@ from mcp.server.stdio import stdio_server
 
 from bilinc import StatePlane
 from bilinc.mcp_server.server_v2 import create_mcp_server_v2
+from bilinc.scheduler import BackgroundScheduler
 from bilinc.storage.sqlite import SQLiteBackend
 
 
@@ -49,18 +50,29 @@ async def _build_server():
         except Exception as e:
             logger.warning(f"Failed to restore AGM beliefs from backend: {e}")
 
-    return create_mcp_server_v2(
+    server = create_mcp_server_v2(
         plane=plane,
         auth_token=auth_token,
         max_tokens=max_tokens,
         refill_rate=refill_rate,
     )
+    scheduler = None
+    if _env_bool("BILINC_ENABLE_SCHEDULER", True):
+        scheduler = BackgroundScheduler(plane)
+        scheduler.register_phase7_jobs()
+        tick_seconds = float(os.getenv("BILINC_SCHEDULER_TICK_SECONDS", "5.0"))
+        await scheduler.start(tick_seconds=tick_seconds)
+    return server, scheduler
 
 
 async def main():
-    server = await _build_server()
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+    server, scheduler = await _build_server()
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(read_stream, write_stream, server.create_initialization_options())
+    finally:
+        if scheduler is not None:
+            await scheduler.stop()
 
 
 if __name__ == "__main__":
