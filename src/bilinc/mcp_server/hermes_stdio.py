@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from mcp.server.stdio import stdio_server
 
@@ -36,6 +39,15 @@ async def _build_server():
     await plane.init()
     plane.init_agm()
     plane.init_knowledge_graph()
+
+    # Restore AGM beliefs from persistent backend
+    if plane.backend and plane.agm_engine:
+        try:
+            all_entries = await plane.backend.list_all()
+            loaded = plane.agm_engine.load_beliefs_from_entries(all_entries)
+            logger.info(f"AGM beliefs restored: {loaded}/{len(all_entries)} entries loaded from {db_path}")
+        except Exception as e:
+            logger.warning(f"Failed to restore AGM beliefs from backend: {e}")
 
     return create_mcp_server_v2(
         plane=plane,
