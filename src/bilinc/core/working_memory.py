@@ -25,10 +25,12 @@ class WorkingMemory:
     
     def __init__(self, max_slots: int = 8,
                  consolidation_trigger: Optional[float] = 0.3,
-                 gate_threshold: Optional[float] = 0.5):
+                 gate_threshold: Optional[float] = 0.5,
+                 heat_gate_threshold: float = 0.7):
         self.max_slots = max_slots
         self.consolidation_trigger = consolidation_trigger
         self.gate_threshold = gate_threshold
+        self.heat_gate_threshold = heat_gate_threshold
         self._slots: Dict[str, MemoryEntry] = {}
         self._consolidation_callbacks: List[Callable] = []
     
@@ -113,14 +115,26 @@ class WorkingMemory:
     def gate_to_episodic(self) -> List[MemoryEntry]:
         """
         Gate threshold: entries above threshold are consolidated to episodic.
+        Promotion can happen by importance threshold or by heat threshold.
         Returns entries ready for consolidation.
         """
-        ready = [e for e in self._slots.values() if e.importance >= self.gate_threshold]
+        now = time.time()
+        ready = [
+            e for e in self._slots.values()
+            if self._eligible_for_promotion(e, now=now)
+        ]
         for e in ready:
             e.memory_type = MemoryType.EPISODIC
         for e in ready:
             self._slots.pop(e.key, None)
         return ready
+
+    def hot_entries(self, threshold: Optional[float] = None) -> List[MemoryEntry]:
+        """Return working-memory entries with heat above threshold."""
+        now = time.time()
+        effective_threshold = self.heat_gate_threshold if threshold is None else threshold
+        entries = [e for e in self._slots.values() if self._current_heat(e, now=now) >= effective_threshold]
+        return sorted(entries, key=lambda e: self._current_heat(e, now=now), reverse=True)
     
     def stats(self) -> Dict:
         now = time.time()
@@ -137,6 +151,12 @@ class WorkingMemory:
         heat = self._current_heat(entry, now=now)
         recency = 1.0 / max(1.0, now - max(entry.last_accessed, entry.created_at))
         return (entry.importance * recency) + (heat * 0.25)
+
+    def _eligible_for_promotion(self, entry: MemoryEntry, now: Optional[float] = None) -> bool:
+        now = now or time.time()
+        if self.gate_threshold is not None and entry.importance >= self.gate_threshold:
+            return True
+        return self._current_heat(entry, now=now) >= self.heat_gate_threshold
 
     def _current_heat(self, entry: MemoryEntry, now: Optional[float] = None) -> float:
         now = now or time.time()
