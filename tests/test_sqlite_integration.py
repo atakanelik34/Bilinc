@@ -355,3 +355,18 @@ class TestStatePlaneWithSQLite:
         assert _run(b.load("deploy_mode")) is None
 
         _run(b.close())
+
+    def test_working_memory_roundtrip_persists(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane1 = StatePlane(backend=b, enable_verification=False, enable_audit=True)
+        _run(plane1.init())
+        _run(plane1.commit(key="wm_sqlite", value={"x": 1}, memory_type=MemoryType.WORKING))
+        _run(b.close())
+
+        b2 = _make_backend(tmp_db_path)
+        plane2 = StatePlane(backend=b2, enable_verification=False, enable_audit=True)
+        _run(plane2.init())
+        restored = plane2.working_memory.get("wm_sqlite")
+        assert restored is not None
+        assert restored.value == {"x": 1}
+        _run(b2.close())
