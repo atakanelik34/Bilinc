@@ -373,6 +373,61 @@ class TestStatePlane:
             summaries = asyncio.run(plane.summarize_episodic_sessions())
             assert summaries == []
 
+    def test_reflective_recall_expands_query_until_adequate(self):
+        """Reflection loop should expand query and improve adequacy."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = os.path.join(td, "phase6_reflective.db")
+            import asyncio
+
+            plane = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+            )
+            asyncio.run(plane.init())
+            plane.commit_sync(
+                "kube_guide",
+                "Kubernetes deployment guide for Bilinc services.",
+                memory_type=MemoryType.SEMANTIC,
+            )
+
+            result = asyncio.run(
+                plane.recall_reflective(
+                    "k8s deploy bilinc",
+                    limit=3,
+                    max_reflections=3,
+                    adequacy_threshold=0.75,
+                )
+            )
+            assert result["reflections_used"] >= 1
+            assert result["adequacy"] >= 0.75
+            assert result["results"][0]["key"] == "kube_guide"
+
+    def test_reflective_recall_stops_at_max_reflections(self):
+        """Reflection loop should stop when max reflections is reached."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = os.path.join(td, "phase6_reflective_cap.db")
+            import asyncio
+
+            plane = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+            )
+            asyncio.run(plane.init())
+            plane.commit_sync("note", "unrelated content", memory_type=MemoryType.SEMANTIC)
+
+            result = asyncio.run(
+                plane.recall_reflective(
+                    "quantum entanglement theorem",
+                    limit=3,
+                    max_reflections=2,
+                    adequacy_threshold=0.8,
+                )
+            )
+            assert result["reflections_used"] == 2
+            assert result["adequacy"] < 0.8
+
     def test_commit_sync_and_working_memory_recall(self):
         plane = StatePlane(enable_verification=False, enable_audit=False)
         
