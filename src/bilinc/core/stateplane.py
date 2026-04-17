@@ -24,6 +24,7 @@ from bilinc.core.confidence import ConfidenceEstimator
 from bilinc.core.dual_process import System1Engine, System2Engine, Arbiter
 from bilinc.core.verifier import StateVerifier, VerificationResult
 from bilinc.core.audit import AuditTrail, OpType
+from bilinc.core.decay import compute_new_strength, should_prune
 from bilinc.storage.backend import StorageBackend
 from bilinc.observability.metrics import MetricsCollector
 from bilinc.observability.health import HealthCheck
@@ -564,6 +565,131 @@ class StatePlane:
                 count += 1
         await self.summarize_episodic_sessions()
         return count
+
+    async def apply_decay_pass(self, now: Optional[float] = None, prune: bool = True) -> Dict[str, int]:
+        """
+        Apply one global decay pass over persisted memories.
+
+        Returns counters for scanned, updated, and pruned entries.
+        """
+        if not self.backend:
+            return {"scanned": 0, "updated": 0, "pruned": 0}
+
+        now = now or time.time()
+        entries = await self.backend.list_all()
+        scanned = 0
+        updated = 0
+        pruned = 0
+
+        for entry in entries:
+            scanned += 1
+            last_touch = entry.last_accessed or entry.updated_at or entry.created_at
+            elapsed_days = max(0.0, (now - last_touch) / 86400.0)
+            if elapsed_days <= 0:
+                continue
+
+            new_strength, decay_meta = compute_new_strength(
+                current_strength=entry.current_strength,
+                memory_type=entry.memory_type.value,
+                days_elapsed=elapsed_days,
+                importance=entry.importance,
+                verification_score=entry.verification_score,
+                access_count=entry.access_count,
+            )
+
+            entry.current_strength = new_strength
+            if not isinstance(entry.metadata, dict):
+                entry.metadata = {}
+            entry.metadata["decay"] = {
+                "last_run": now,
+                "factor": decay_meta.get("factor", 1.0),
+                "phase": decay_meta.get("phase", "none"),
+                "ltp": decay_meta.get("ltp", "none"),
+            }
+            entry.updated_at = now
+
+            if prune and should_prune(new_strength, entry.memory_type.value):
+                removed = await self.backend.delete(entry.key)
+                if removed:
+                    self.working_memory.remove(entry.key)
+                    pruned += 1
+                continue
+
+            if hasattr(self.backend, "restore"):
+                await self.backend.restore(entry)
+            else:
+                await self.backend.save(entry)
+            updated += 1
+
+        return {"scanned": scanned, "updated": updated, "pruned": pruned}
+
+    async def run_kg_maintenance(self) -> Dict[str, int]:
+        """
+        Perform lightweight KG maintenance:
+        - prune orphan nodes (degree == 0)
+        - strengthen existing edges slightly.
+        """
+        if not hasattr(self, "knowledge_graph") or not self.knowledge_graph:
+            return {"pruned_orphans": 0, "strengthened_edges": 0}
+
+        kg = self.knowledge_graph
+        orphan_nodes = [node for node in list(kg.graph.nodes()) if kg.graph.degree(node) == 0]
+        for node_name in orphan_nodes:
+            kg.remove_entity(node_name)
+
+        strengthened = 0
+        for source, target, edge_key, attrs in kg.graph.edges(keys=True, data=True):
+            weight = float(attrs.get("weight", 1.0))
+            new_weight = min(1.0, weight + 0.05)
+            if new_weight != weight:
+                kg.graph[source][target][edge_key]["weight"] = new_weight
+                strengthened += 1
+        for edge in kg._edges:
+            edge.weight = min(1.0, edge.weight + 0.05)
+
+        return {"pruned_orphans": len(orphan_nodes), "strengthened_edges": strengthened}
+
+    async def run_entity_linking_backlog(self, limit: int = 500) -> Dict[str, int]:
+        """
+        Ingest semantic memories into KG when they are not yet entity-linked.
+        """
+        if not self.backend or not hasattr(self, "knowledge_graph") or not self.knowledge_graph:
+            return {"processed": 0, "entities_created": 0, "relations_created": 0}
+
+        semantic_entries = await self.backend.load_by_type(MemoryType.SEMANTIC, limit=limit)
+        processed = 0
+        entities_created = 0
+        relations_created = 0
+
+        for entry in semantic_entries:
+            if self.knowledge_graph.memory_entities(entry.key):
+                continue
+            outcome = self.knowledge_graph.ingest_memory_entry(entry)
+            processed += 1
+            entities_created += int(outcome.get("entities_created", 0))
+            relations_created += int(outcome.get("relations_created", 0))
+
+        return {
+            "processed": processed,
+            "entities_created": entities_created,
+            "relations_created": relations_created,
+        }
+
+    async def health_metrics_report(self) -> Dict[str, Any]:
+        """Generate a compact health + metrics report payload."""
+        readiness = self.health.readiness()
+        liveness = self.health.liveness()
+        self.health.update_gauges(self.metrics)
+        stats = await self.stats()
+        return {
+            "timestamp": time.time(),
+            "readiness": readiness.get("status"),
+            "liveness": liveness.get("status"),
+            "issues": readiness.get("issues", []),
+            "ops_count": stats.get("ops_count", 0),
+            "working_memory_usage": stats.get("working_memory", {}).get("capacity_usage", 0.0),
+            "backend_total_entries": stats.get("backend", {}).get("total_entries", 0),
+        }
 
     async def summarize_episodic_sessions(
         self,
