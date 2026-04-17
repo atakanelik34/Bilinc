@@ -263,6 +263,63 @@ class TestStatePlane:
             assert stored is not None
             assert stored.memory_type == MemoryType.EPISODIC
 
+    def test_intelligent_recall_multi_signal_fusion(self):
+        """Intelligent recall should fuse lexical/hybrid/entity signals."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = os.path.join(td, "phase4_intelligent_recall.db")
+            import asyncio
+
+            plane = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+            )
+            plane.init_agm()
+            plane.init_knowledge_graph()
+            asyncio.run(plane.init())
+
+            asyncio.run(
+                plane.commit_with_agm_async(
+                    key="rearc_infra",
+                    value="ReARCLabs runs Bilinc on Kubernetes with PostgreSQL.",
+                    memory_type="semantic",
+                    importance=0.9,
+                )
+            )
+            asyncio.run(
+                plane.commit_with_agm_async(
+                    key="random_note",
+                    value="The weather is sunny today.",
+                    memory_type="semantic",
+                    importance=0.2,
+                )
+            )
+
+            results = asyncio.run(plane.recall_intelligent("ReARCLabs Bilinc Kubernetes", limit=5))
+            assert len(results) >= 1
+            assert results[0]["key"] == "rearc_infra"
+            assert results[0]["signals"]["entity"] > 0.0
+            assert results[0]["signals"]["hybrid"] >= 0.0
+            assert results[0]["score"] > 0.0
+
+    def test_intelligent_recall_fallback_without_kg(self):
+        """Intelligent recall should still work without knowledge graph."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = os.path.join(td, "phase4_recall_no_kg.db")
+            import asyncio
+
+            plane = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+            )
+            asyncio.run(plane.init())
+            plane.commit_sync("deploy_notes", "Bilinc deployment guide", memory_type=MemoryType.SEMANTIC)
+
+            results = asyncio.run(plane.recall_intelligent("deployment bilinc", limit=3))
+            keys = [r["key"] for r in results]
+            assert "deploy_notes" in keys
+
     def test_commit_sync_and_working_memory_recall(self):
         plane = StatePlane(enable_verification=False, enable_audit=False)
         
