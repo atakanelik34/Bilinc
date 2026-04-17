@@ -11,6 +11,11 @@ import time
 from typing import Any, Dict, List, Optional, Callable
 from bilinc.core.models import MemoryEntry, MemoryType
 
+_WM_HEAT_KEY = "wm_heat"
+_WM_HEAT_TS_KEY = "wm_heat_ts"
+_WM_HEAT_DECAY_PER_HOUR = 0.95
+_WM_HEAT_ACCESS_BOOST = 0.2
+
 
 class WorkingMemory:
     """
@@ -44,7 +49,9 @@ class WorkingMemory:
         Add item to working memory.
         Returns evicted entry if buffer was full.
         """
+        now = time.time()
         entry.memory_type = MemoryType.WORKING
+        self._touch_heat(entry, now=now, access=False)
         evicted = None
         
         if entry.key in self._slots:
@@ -64,8 +71,10 @@ class WorkingMemory:
     def get(self, key: str) -> Optional[MemoryEntry]:
         entry = self._slots.get(key)
         if entry:
-            entry.last_accessed = time.time()
+            now = time.time()
+            entry.last_accessed = now
             entry.access_count += 1
+            self._touch_heat(entry, now=now, access=True)
         return entry
     
     def remove(self, key: str) -> Optional[MemoryEntry]:
@@ -82,7 +91,7 @@ class WorkingMemory:
         now = time.time()
         return sorted(
             self._slots.values(),
-            key=lambda e: e.importance * (1.0 / max(1.0, now - e.last_accessed)),
+            key=lambda e: self._priority_score(e, now=now),
             reverse=True
         )
     
@@ -97,7 +106,7 @@ class WorkingMemory:
         now = time.time()
         lowest_key = min(
             self._slots.keys(),
-            key=lambda k: self._slots[k].importance * max(0.01, 1.0 - (now - self._slots[k].created_at) / 3600)
+            key=lambda k: self._priority_score(self._slots[k], now=now)
         )
         return self._slots.pop(lowest_key)
     
@@ -122,3 +131,30 @@ class WorkingMemory:
             "avg_importance": (sum(e.importance for e in self._slots.values()) / self.count) if self.count > 0 else 0,
             "recent_accesses": sum(1 for e in self._slots.values() if now - e.last_accessed < 60),
         }
+
+    def _priority_score(self, entry: MemoryEntry, now: Optional[float] = None) -> float:
+        now = now or time.time()
+        heat = self._current_heat(entry, now=now)
+        recency = 1.0 / max(1.0, now - max(entry.last_accessed, entry.created_at))
+        return (entry.importance * recency) + (heat * 0.25)
+
+    def _current_heat(self, entry: MemoryEntry, now: Optional[float] = None) -> float:
+        now = now or time.time()
+        metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+        heat = float(metadata.get(_WM_HEAT_KEY, 0.0))
+        heat_ts = float(metadata.get(_WM_HEAT_TS_KEY, entry.created_at or now))
+        elapsed_hours = max(0.0, (now - heat_ts) / 3600.0)
+        if elapsed_hours <= 0:
+            return max(0.0, min(1.0, heat))
+        decayed = heat * (_WM_HEAT_DECAY_PER_HOUR ** elapsed_hours)
+        return max(0.0, min(1.0, decayed))
+
+    def _touch_heat(self, entry: MemoryEntry, now: Optional[float] = None, access: bool = False) -> None:
+        now = now or time.time()
+        if not isinstance(entry.metadata, dict):
+            entry.metadata = {}
+        heat = self._current_heat(entry, now=now)
+        if access:
+            heat = min(1.0, heat + (_WM_HEAT_ACCESS_BOOST * max(0.1, entry.importance)))
+        entry.metadata[_WM_HEAT_KEY] = heat
+        entry.metadata[_WM_HEAT_TS_KEY] = now
