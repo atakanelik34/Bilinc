@@ -1,4 +1,4 @@
-"""Bilinc: Verifiable State Plane for Autonomous Agents — v1.2.0"""
+"""Bilinc: Verifiable State Plane for Autonomous Agents — v1.2.1"""
 
 # Lazy imports — avoid heavy deps (z3, networkx) at package level
 __all__ = [
@@ -9,7 +9,7 @@ __all__ = [
     "KnowledgeGraph", "NodeType", "EdgeType",
 ]
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 
 def __getattr__(name: str):
