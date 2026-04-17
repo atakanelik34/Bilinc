@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [1.2.1] — 2026-04-17
+
+### Changed
+- PyPI package metadata license switched to `BUSL-1.1` (Business Source License 1.1) for distribution clarity.
+- Package version bumped to `1.2.1` for the metadata-only release.
+
 ## [1.2.0] — 2026-04-17
 
 ### Added
