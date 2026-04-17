@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time, json
 from typing import Any, Dict, List, Optional
 from bilinc.core.models import MemoryEntry, MemoryType
@@ -44,6 +45,10 @@ class StatePlane:
     AUTO_CONSOLIDATE_CAPACITY_THRESHOLD = 0.8
     AUTO_CONSOLIDATE_HEAT_THRESHOLD = 0.7
     AUTO_CONSOLIDATE_MIN_HOT_ENTRIES = 1
+    INTELLIGENT_RECALL_RRF_K = 60
+    INTELLIGENT_RECALL_LEXICAL_WEIGHT = 0.4
+    INTELLIGENT_RECALL_HYBRID_WEIGHT = 0.4
+    INTELLIGENT_RECALL_ENTITY_WEIGHT = 0.2
     
     def __init__(self, backend=None, working_memory=None, max_working_slots=8,
                  enable_verification=False, enable_audit=False):
@@ -375,6 +380,96 @@ class StatePlane:
     
     async def recall_all_working(self):
         return self.working_memory.get_all()
+
+    async def recall_intelligent(
+        self,
+        query: str,
+        limit: int = 10,
+        memory_types: Optional[List[MemoryType]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Multi-path retrieval with lightweight fusion:
+        lexical (FTS/token overlap) + hybrid (FTS/vector rerank) + entity overlap.
+        """
+        start_time = time.perf_counter()
+        try:
+            query = (query or "").strip()
+            if not query or limit <= 0:
+                return []
+
+            candidates = await self._collect_recall_candidates(memory_types=memory_types)
+            if not candidates:
+                return []
+
+            lexical_ranked = self._rank_lexical_keys(query, candidates)
+            hybrid_ranked = self._rank_hybrid_keys(query, top_k=max(limit * 3, 10))
+            entity_boosts = self._compute_entity_boosts(query, candidates)
+            entity_ranked = [
+                key for key, score in sorted(entity_boosts.items(), key=lambda kv: kv[1], reverse=True) if score > 0
+            ]
+
+            fused_scores: Dict[str, float] = {}
+            signals: Dict[str, Dict[str, float]] = {}
+            self._apply_rrf_signal(
+                fused_scores,
+                signals,
+                lexical_ranked,
+                weight=self.INTELLIGENT_RECALL_LEXICAL_WEIGHT,
+                signal_name="lexical",
+            )
+            self._apply_rrf_signal(
+                fused_scores,
+                signals,
+                hybrid_ranked,
+                weight=self.INTELLIGENT_RECALL_HYBRID_WEIGHT,
+                signal_name="hybrid",
+            )
+            self._apply_rrf_signal(
+                fused_scores,
+                signals,
+                entity_ranked,
+                weight=self.INTELLIGENT_RECALL_ENTITY_WEIGHT,
+                signal_name="entity_rrf",
+            )
+
+            # Entity overlap acts as an additional direct relevance signal.
+            for key, boost in entity_boosts.items():
+                if boost <= 0:
+                    continue
+                fused_scores[key] = fused_scores.get(key, 0.0) + (0.25 * boost)
+                bucket = signals.setdefault(key, {"lexical": 0.0, "hybrid": 0.0, "entity": 0.0, "entity_rrf": 0.0})
+                bucket["entity"] = boost
+
+            ranked_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]]
+            results = []
+            for key in ranked_keys:
+                entry = candidates.get(key)
+                if not entry:
+                    continue
+                entry_signals = signals.get(key, {"lexical": 0.0, "hybrid": 0.0, "entity": 0.0, "entity_rrf": 0.0})
+                results.append({
+                    "key": entry.key,
+                    "value": entry.value,
+                    "memory_type": entry.memory_type.value,
+                    "importance": entry.importance,
+                    "score": round(fused_scores.get(key, 0.0), 6),
+                    "signals": {
+                        "lexical": round(entry_signals.get("lexical", 0.0), 6),
+                        "hybrid": round(entry_signals.get("hybrid", 0.0), 6),
+                        "entity": round(entry_signals.get("entity", 0.0), 6),
+                    },
+                })
+
+            self._record_success(
+                "recall_intelligent",
+                start_time,
+                query_len=len(query),
+                result_count=len(results),
+            )
+            return results
+        except Exception as exc:
+            self._record_failure("recall_intelligent", start_time, exc, query_len=len(query or ""))
+            raise
     
     async def consolidate(self):
         if not self.backend:
@@ -398,6 +493,97 @@ class StatePlane:
             return False
         hot_entries = self.working_memory.hot_entries(threshold=self.AUTO_CONSOLIDATE_HEAT_THRESHOLD)
         return len(hot_entries) >= self.AUTO_CONSOLIDATE_MIN_HOT_ENTRIES
+
+    async def _collect_recall_candidates(
+        self,
+        memory_types: Optional[List[MemoryType]] = None,
+    ) -> Dict[str, MemoryEntry]:
+        allowed_types = None
+        if memory_types:
+            allowed_types = {
+                mt.value if hasattr(mt, "value") else str(mt)
+                for mt in memory_types
+            }
+
+        candidates: Dict[str, MemoryEntry] = {}
+        for entry in self.working_memory.get_all():
+            if allowed_types and entry.memory_type.value not in allowed_types:
+                continue
+            candidates[entry.key] = entry
+
+        if self.backend:
+            for entry in await self.backend.list_all():
+                if allowed_types and entry.memory_type.value not in allowed_types:
+                    continue
+                candidates[entry.key] = entry
+        return candidates
+
+    def _tokenize_query(self, query: str) -> List[str]:
+        return [token for token in re.findall(r"[a-zA-Z0-9_]+", query.lower()) if token]
+
+    def _rank_lexical_keys(self, query: str, candidates: Dict[str, MemoryEntry]) -> List[str]:
+        tokens = set(self._tokenize_query(query))
+        if not tokens:
+            return []
+        scored: List[tuple[str, float]] = []
+        for key, entry in candidates.items():
+            text = f"{entry.key} {entry.value}".lower()
+            overlap = sum(1 for token in tokens if token in text)
+            if overlap <= 0:
+                continue
+            score = overlap + (entry.importance * 0.1)
+            scored.append((key, score))
+        scored.sort(key=lambda kv: kv[1], reverse=True)
+        return [k for k, _ in scored]
+
+    def _rank_hybrid_keys(self, query: str, top_k: int) -> List[str]:
+        conn = self._sqlite_connection()
+        if conn is None:
+            return []
+        try:
+            from bilinc.core.vector_search import VectorStore, HybridSearch
+
+            hybrid = HybridSearch(conn, VectorStore(conn))
+            results = hybrid.search_with_reranking(query, top_k=top_k)
+            return [meta.get("key") for _, _, meta in results if meta.get("key")]
+        except Exception:
+            return []
+
+    def _compute_entity_boosts(self, query: str, candidates: Dict[str, MemoryEntry]) -> Dict[str, float]:
+        if not hasattr(self, "knowledge_graph") or not self.knowledge_graph:
+            return {key: 0.0 for key in candidates}
+        boosts: Dict[str, float] = {}
+        for key in candidates:
+            try:
+                boosts[key] = float(self.knowledge_graph.compute_entity_overlap_boost(query, key))
+            except Exception:
+                boosts[key] = 0.0
+        return boosts
+
+    def _apply_rrf_signal(
+        self,
+        fused_scores: Dict[str, float],
+        signals: Dict[str, Dict[str, float]],
+        ranked_keys: List[str],
+        weight: float,
+        signal_name: str,
+    ) -> None:
+        for rank, key in enumerate(ranked_keys):
+            contribution = weight / (self.INTELLIGENT_RECALL_RRF_K + rank + 1)
+            fused_scores[key] = fused_scores.get(key, 0.0) + contribution
+            bucket = signals.setdefault(key, {"lexical": 0.0, "hybrid": 0.0, "entity": 0.0, "entity_rrf": 0.0})
+            bucket[signal_name] = bucket.get(signal_name, 0.0) + contribution
+
+    def _sqlite_connection(self):
+        if not self.backend:
+            return None
+        get_conn = getattr(self.backend, "_get_conn", None)
+        if not callable(get_conn):
+            return None
+        try:
+            return get_conn()
+        except Exception:
+            return None
     
     async def diff(self, timestamp_a: float, timestamp_b: float) -> Dict[str, Any]:
         """Return a reconstructable diff between two timestamps using the audit trail."""
