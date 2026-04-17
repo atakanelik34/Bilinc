@@ -320,6 +320,59 @@ class TestStatePlane:
             keys = [r["key"] for r in results]
             assert "deploy_notes" in keys
 
+    def test_session_auto_summarization_creates_semantic_memory(self):
+        """Episodic entries in same session should produce semantic summary."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = os.path.join(td, "phase5_summary.db")
+            import asyncio
+
+            plane = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+            )
+            asyncio.run(plane.init())
+
+            for i in range(6):
+                plane.commit_sync(
+                    key=f"ep_{i}",
+                    value=f"User discussed deployment step {i} for Bilinc on Kubernetes.",
+                    memory_type=MemoryType.EPISODIC,
+                    metadata={"session_id": "sess-1"},
+                )
+
+            summaries = asyncio.run(plane.summarize_episodic_sessions())
+            assert len(summaries) >= 1
+            summary = summaries[0]
+            assert summary.memory_type == MemoryType.SEMANTIC
+            assert summary.metadata.get("is_session_summary") is True
+            assert summary.metadata.get("session_id") == "sess-1"
+            assert summary.metadata.get("entry_count") >= 6
+
+    def test_session_auto_summarization_respects_threshold(self):
+        """Summary should not be created below entry/token thresholds."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = os.path.join(td, "phase5_summary_threshold.db")
+            import asyncio
+
+            plane = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+            )
+            asyncio.run(plane.init())
+
+            for i in range(3):
+                plane.commit_sync(
+                    key=f"short_ep_{i}",
+                    value="tiny note",
+                    memory_type=MemoryType.EPISODIC,
+                    metadata={"session_id": "sess-2"},
+                )
+
+            summaries = asyncio.run(plane.summarize_episodic_sessions())
+            assert summaries == []
+
     def test_commit_sync_and_working_memory_recall(self):
         plane = StatePlane(enable_verification=False, enable_audit=False)
         
