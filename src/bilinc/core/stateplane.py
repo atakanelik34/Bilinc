@@ -38,6 +38,9 @@ class PersistenceWriteError(RuntimeError):
 
 class StatePlane:
     """Phase 2: Full brain-inspired agent memory with verification."""
+    AUTO_RECALL_IMPORTANCE_THRESHOLD = 0.7
+    AUTO_RECALL_ACCESS_COUNT_THRESHOLD = 3
+    AUTO_RECALL_MAX_SLOTS = 5
     
     def __init__(self, backend=None, working_memory=None, max_working_slots=8,
                  enable_verification=False, enable_audit=False):
@@ -177,12 +180,56 @@ class StatePlane:
         try:
             if self.backend:
                 await self.backend.init()
+                await self._hydrate_working_memory_from_backend()
+                await self._auto_recall_semantic_to_working()
             if self.enable_audit and self.audit:
                 await self.audit.init()
             self._record_success("init", start_time)
         except Exception as exc:
             self._record_failure("init", start_time, exc)
             raise
+
+    async def _hydrate_working_memory_from_backend(self) -> None:
+        """Restore persisted working memory entries into the in-process buffer."""
+        if not self.backend:
+            return
+        entries = await self.backend.load_by_type(MemoryType.WORKING, limit=self.working_memory.max_slots)
+        for entry in entries:
+            if self.working_memory.count >= self.working_memory.max_slots:
+                break
+            if self.working_memory.get(entry.key):
+                continue
+            self.working_memory.put(entry)
+
+    async def _auto_recall_semantic_to_working(self) -> int:
+        """
+        Warm up working memory from high-signal semantic memories.
+        Rule: importance > 0.7 AND access_count > 3, capped at 5 slots.
+        """
+        if not self.backend or self.working_memory.count >= self.working_memory.max_slots:
+            return 0
+
+        semantic_entries = await self.backend.load_by_type(MemoryType.SEMANTIC, limit=200)
+        candidates = [
+            entry for entry in semantic_entries
+            if entry.importance > self.AUTO_RECALL_IMPORTANCE_THRESHOLD
+            and entry.access_count > self.AUTO_RECALL_ACCESS_COUNT_THRESHOLD
+        ]
+        candidates = sorted(
+            candidates,
+            key=lambda e: (e.importance, e.last_accessed, e.access_count),
+            reverse=True,
+        )
+
+        loaded = 0
+        slots_available = self.working_memory.max_slots - self.working_memory.count
+        max_to_load = min(self.AUTO_RECALL_MAX_SLOTS, slots_available)
+        for entry in candidates[:max_to_load]:
+            if self.working_memory.get(entry.key):
+                continue
+            self.working_memory.put(entry)
+            loaded += 1
+        return loaded
     
     async def commit(self, key: str, value: Any, memory_type: MemoryType = MemoryType.EPISODIC,
                      verify: bool = False, importance: float = 1.0, metadata: Optional[Dict[str, Any]] = None) -> MemoryEntry:
@@ -200,8 +247,19 @@ class StatePlane:
             if memory_type == MemoryType.WORKING:
                 previous_entry = self.working_memory.get(key)
                 evicted = self.working_memory.put(entry)
+                if self.backend:
+                    saved = await self.backend.save(entry)
+                    if not saved:
+                        raise PersistenceWriteError(
+                            f"persistence_write_failed: backend save returned false for key '{key}'"
+                        )
                 if evicted and self.backend:
-                    await self.backend.save(evicted)
+                    evicted.memory_type = MemoryType.SEMANTIC
+                    saved = await self.backend.save(evicted)
+                    if not saved:
+                        raise PersistenceWriteError(
+                            f"persistence_write_failed: backend save returned false for evicted key '{evicted.key}'"
+                        )
                     if self.enable_audit and self.audit:
                         self.audit.log(OpType.CONSOLIDATE, evicted.key,
                                        before_value=evicted.to_dict(), metadata={"auto_evicted": True})
