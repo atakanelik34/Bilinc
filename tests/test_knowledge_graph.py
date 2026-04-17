@@ -223,6 +223,66 @@ class TestKGSemanticIntegration:
         assert result["entities_created"] == 0
         assert result["relations_created"] == 0
 
+    def test_kg_entity_memory_index_for_shared_entities(self, kg: KnowledgeGraph):
+        """Shared entities should map to multiple memory keys."""
+        first = MemoryEntry(
+            key="rearc_profile",
+            value="Atakan works at ReARCLabs.",
+            memory_type=MemoryType.SEMANTIC,
+        )
+        second = MemoryEntry(
+            key="rearc_products",
+            value="ReARCLabs ships Hermes and Bilinc.",
+            memory_type=MemoryType.SEMANTIC,
+        )
+
+        kg.ingest_memory_entry(first)
+        kg.ingest_memory_entry(second)
+
+        memories = kg.query_memories_by_entity("ReARCLabs")
+        assert "rearc_profile" in memories
+        assert "rearc_products" in memories
+
+    def test_kg_creates_cross_memory_links_on_shared_entity(self, kg: KnowledgeGraph):
+        """Ingesting two memories with same entity should add cross-memory relations."""
+        first = MemoryEntry(
+            key="mem_a",
+            value="Atakan maintains Bilinc for ReARCLabs.",
+            memory_type=MemoryType.SEMANTIC,
+        )
+        second = MemoryEntry(
+            key="mem_b",
+            value="ReARCLabs uses Bilinc in production.",
+            memory_type=MemoryType.SEMANTIC,
+        )
+
+        kg.ingest_memory_entry(first)
+        kg.ingest_memory_entry(second)
+
+        rels_from_b = kg.get_relations("mem_b")
+        cross_refs = [
+            rel for rel in rels_from_b
+            if rel.get("target") == "mem_a" and rel.get("metadata", {}).get("cross_memory") is True
+        ]
+        assert len(cross_refs) >= 1
+
+    def test_kg_entity_overlap_boost_is_capped(self, kg: KnowledgeGraph):
+        """Entity overlap boost should be additive but capped."""
+        entry = MemoryEntry(
+            key="infra_notes",
+            value="Hermes runs in Istanbul and serves ReARCLabs workloads.",
+            memory_type=MemoryType.SEMANTIC,
+        )
+        kg.ingest_memory_entry(entry)
+
+        boost = kg.compute_entity_overlap_boost(
+            query_text="Hermes Istanbul ReARCLabs",
+            memory_key="infra_notes",
+            boost_per_match=0.2,
+            max_boost=0.4,
+        )
+        assert boost == pytest.approx(0.4)
+
 
 # ── Test 4: Serialization ─────────────────────────────────────
 
