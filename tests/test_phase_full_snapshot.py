@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
 import tempfile
-import time
 from pathlib import Path
 
 from bilinc.core.models import MemoryType
@@ -21,9 +19,7 @@ from bilinc.mcp_server.server_v2 import (
 )
 from bilinc.scheduler import BackgroundScheduler
 from bilinc.storage.sqlite import SQLiteBackend
-
-
-SNAPSHOT_DB = Path(__file__).parent / "fixtures" / "bilinc.live.snapshot.db"
+from tests.snapshot_seed import copy_or_seed_snapshot_db
 
 
 def _run(coro):
@@ -42,10 +38,7 @@ def _call(handler, plane, args=None):
 
 
 def _copy_snapshot_db(tmp_path: Path) -> str:
-    assert SNAPSHOT_DB.exists(), f"Snapshot db not found: {SNAPSHOT_DB}"
-    target = tmp_path / "phase_all.runtime.db"
-    shutil.copy2(SNAPSHOT_DB, target)
-    return str(target)
+    return copy_or_seed_snapshot_db(tmp_path, filename="phase_all.runtime.db")
 
 
 def test_all_phases_on_snapshot_copy():
