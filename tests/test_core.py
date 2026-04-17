@@ -2,12 +2,15 @@
 
 import sys
 import os
+import tempfile
+import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from bilinc.core.models import MemoryEntry, MemoryType, BeliefState
 from bilinc.adaptive.agm_engine import AGMEngine, AGMOperation
 from bilinc.core.verification import VerificationGate, VerificationStatus
 from bilinc.core.stateplane import StatePlane
+from bilinc.storage.sqlite import SQLiteBackend
 
 
 class TestMemoryEntry:
@@ -86,6 +89,131 @@ class TestAGMEngine:
 
 
 class TestStatePlane:
+    def test_working_memory_persist_roundtrip(self):
+        """Working memory entries should persist across process restarts."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = os.path.join(td, "phase1_working.db")
+
+            plane1 = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+            )
+            import asyncio
+            asyncio.run(plane1.init())
+            plane1.commit_sync(
+                key="wm_roundtrip",
+                value={"pref": "dark"},
+                memory_type=MemoryType.WORKING,
+            )
+
+            plane2 = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+            )
+            asyncio.run(plane2.init())
+            restored = plane2.working_memory.get("wm_roundtrip")
+            assert restored is not None
+            assert restored.value == {"pref": "dark"}
+
+    def test_auto_recall_threshold(self):
+        """Init should auto-recall only semantic entries above threshold, capped at 5."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = os.path.join(td, "phase1_autorecall.db")
+            import asyncio
+
+            seed = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+            )
+            asyncio.run(seed.init())
+
+            now = time.time()
+            # 6 eligible entries: only 5 should load.
+            for i in range(6):
+                entry = MemoryEntry(
+                    key=f"sem_good_{i}",
+                    value=f"good_{i}",
+                    memory_type=MemoryType.SEMANTIC,
+                    importance=0.9 - (i * 0.01),
+                    access_count=5 + i,
+                    last_accessed=now - i,
+                )
+                asyncio.run(seed.backend.restore(entry))
+
+            # Non-eligible entries: must not load.
+            low_importance = MemoryEntry(
+                key="sem_low_importance",
+                value="x",
+                memory_type=MemoryType.SEMANTIC,
+                importance=0.7,
+                access_count=10,
+                last_accessed=now,
+            )
+            low_access = MemoryEntry(
+                key="sem_low_access",
+                value="y",
+                memory_type=MemoryType.SEMANTIC,
+                importance=0.95,
+                access_count=3,
+                last_accessed=now,
+            )
+            asyncio.run(seed.backend.restore(low_importance))
+            asyncio.run(seed.backend.restore(low_access))
+
+            fresh = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+            )
+            asyncio.run(fresh.init())
+
+            wm_entries = fresh.working_memory.get_all()
+            wm_keys = {e.key for e in wm_entries}
+
+            assert len(wm_entries) == 5
+            assert "sem_low_importance" not in wm_keys
+            assert "sem_low_access" not in wm_keys
+
+    def test_semantic_fallback_on_working_eviction(self):
+        """When working memory is full, evicted entry should be persisted as semantic."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = os.path.join(td, "phase1_fallback.db")
+            import asyncio
+
+            plane = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+                max_working_slots=2,
+            )
+            asyncio.run(plane.init())
+
+            plane.commit_sync("wm_low", "a", memory_type=MemoryType.WORKING, importance=0.1)
+            plane.commit_sync("wm_high", "b", memory_type=MemoryType.WORKING, importance=0.9)
+            plane.commit_sync("wm_new", "c", memory_type=MemoryType.WORKING, importance=0.8)
+
+            evicted = asyncio.run(plane.backend.load("wm_low"))
+            assert evicted is not None
+            assert evicted.memory_type == MemoryType.SEMANTIC
+
+    def test_heat_tracking_in_working_memory(self):
+        """Working memory access should increase wm_heat metadata."""
+        plane = StatePlane(enable_verification=False, enable_audit=False)
+        plane.commit_sync("wm_heat", {"v": 1}, memory_type=MemoryType.WORKING, importance=0.8)
+
+        entry = plane.working_memory.get("wm_heat")
+        initial_heat = float(entry.metadata.get("wm_heat", 0.0))
+        plane.working_memory.get("wm_heat")
+        plane.working_memory.get("wm_heat")
+        updated = plane.working_memory.get("wm_heat")
+        updated_heat = float(updated.metadata.get("wm_heat", 0.0))
+
+        assert updated_heat >= initial_heat
+        assert 0.0 <= updated_heat <= 1.0
+
     def test_commit_sync_and_working_memory_recall(self):
         plane = StatePlane(enable_verification=False, enable_audit=False)
         
