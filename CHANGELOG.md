@@ -2,6 +2,29 @@
 
 All notable changes to Bilinc.
 
+## [1.2.0] — 2026-04-17
+
+### Added
+- Phase 7 scheduler runtime completed with background jobs and start/stop integration for stdio and HTTP transports.
+- New `src/bilinc/jobs/` layer for explicit background job definitions.
+- Phase 8 MCP tool expansion:
+  - `bilinc_recall_smart`
+  - `bilinc_query_analysis`
+  - `bilinc_event_segment`
+  - `bilinc_summarize`
+  - `bilinc_health`
+  - `bilinc_benchmark`
+  - `bilinc_export`
+  - `bilinc_import`
+- Full-phase snapshot regression test (`tests/test_phase_full_snapshot.py`) to validate Phase 1-8 behavior on a snapshot copy.
+
+### Changed
+- README badges and feature matrix updated for current CI/stars links and 20-tool MCP surface.
+- Snapshot-based tests now support CI fallback seeding when local fixture DB is unavailable.
+
+### Fixed
+- CI failures caused by missing local snapshot fixture (`tests/fixtures/*.db`) on GitHub runners.
+
 ## [1.0.4] — 2026-04-10
 
 ### Fixed
