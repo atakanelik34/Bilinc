@@ -52,6 +52,8 @@ class StatePlane:
     INTELLIGENT_RECALL_LEXICAL_WEIGHT = 0.4
     INTELLIGENT_RECALL_HYBRID_WEIGHT = 0.4
     INTELLIGENT_RECALL_ENTITY_WEIGHT = 0.2
+    REFLECTION_DEFAULT_THRESHOLD = 0.55
+    REFLECTION_MAX_PASSES = 3
     
     def __init__(self, backend=None, working_memory=None, max_working_slots=8,
                  enable_verification=False, enable_audit=False):
@@ -473,6 +475,80 @@ class StatePlane:
         except Exception as exc:
             self._record_failure("recall_intelligent", start_time, exc, query_len=len(query or ""))
             raise
+
+    async def recall_reflective(
+        self,
+        query: str,
+        limit: int = 10,
+        max_reflections: int = 3,
+        adequacy_threshold: float = 0.55,
+        memory_types: Optional[List[MemoryType]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Reflection loop:
+        1) run intelligent recall
+        2) evaluate adequacy
+        3) if insufficient, expand query and retry (bounded)
+        """
+        start_time = time.perf_counter()
+        try:
+            current_query = (query or "").strip()
+            max_reflections = max(0, int(max_reflections))
+            adequacy_threshold = max(0.0, min(1.0, float(adequacy_threshold)))
+            queries_tried = [current_query]
+            reflections_used = 0
+
+            results = await self.recall_intelligent(
+                current_query,
+                limit=limit,
+                memory_types=memory_types,
+            )
+            adequacy = self._evaluate_recall_adequacy(current_query, results)
+
+            while adequacy < adequacy_threshold and reflections_used < max_reflections:
+                expanded_query = self._expand_reflection_query(current_query)
+                if not expanded_query:
+                    break
+                if expanded_query == current_query:
+                    expanded_query = f"{current_query} context"
+                current_query = expanded_query
+                queries_tried.append(current_query)
+                reflections_used += 1
+
+                next_results = await self.recall_intelligent(
+                    current_query,
+                    limit=limit,
+                    memory_types=memory_types,
+                )
+                next_adequacy = self._evaluate_recall_adequacy(current_query, next_results)
+
+                # Keep the best attempt seen so far.
+                if next_adequacy >= adequacy:
+                    results = next_results
+                    adequacy = next_adequacy
+
+            payload = {
+                "query": query,
+                "final_query": current_query,
+                "adequacy": round(adequacy, 6),
+                "adequacy_threshold": adequacy_threshold,
+                "reflections_used": reflections_used,
+                "max_reflections": max_reflections,
+                "queries_tried": queries_tried,
+                "results": results,
+            }
+            self._record_success(
+                "recall_reflective",
+                start_time,
+                query_len=len(query or ""),
+                result_count=len(results),
+                reflections_used=reflections_used,
+                adequacy=round(adequacy, 4),
+            )
+            return payload
+        except Exception as exc:
+            self._record_failure("recall_reflective", start_time, exc, query_len=len(query or ""))
+            raise
     
     async def consolidate(self):
         if not self.backend:
@@ -613,6 +689,40 @@ class StatePlane:
 
     def _tokenize_query(self, query: str) -> List[str]:
         return [token for token in re.findall(r"[a-zA-Z0-9_]+", query.lower()) if token]
+
+    def _evaluate_recall_adequacy(self, query: str, results: List[Dict[str, Any]]) -> float:
+        tokens = set(self._tokenize_query(query))
+        if not tokens or not results:
+            return 0.0
+        coverage: set[str] = set()
+        for result in results:
+            text = f"{result.get('key', '')} {result.get('value', '')}".lower()
+            for token in tokens:
+                if token in text:
+                    coverage.add(token)
+        return len(coverage) / max(len(tokens), 1)
+
+    def _expand_reflection_query(self, query: str) -> str:
+        expansions = {
+            "k8s": "kubernetes",
+            "deploy": "deployment",
+            "infra": "infrastructure",
+            "db": "database",
+            "svc": "service",
+            "cfg": "configuration",
+            "authn": "authentication",
+            "authz": "authorization",
+            "perf": "performance",
+            "obs": "observability",
+        }
+        tokens = self._tokenize_query(query)
+        expanded_tokens: List[str] = []
+        for token in tokens:
+            expanded_tokens.append(token)
+            mapped = expansions.get(token)
+            if mapped and mapped not in expanded_tokens:
+                expanded_tokens.append(mapped)
+        return " ".join(expanded_tokens)
 
     def _rank_lexical_keys(self, query: str, candidates: Dict[str, MemoryEntry]) -> List[str]:
         tokens = set(self._tokenize_query(query))
