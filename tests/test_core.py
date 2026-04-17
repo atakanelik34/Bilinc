@@ -214,6 +214,55 @@ class TestStatePlane:
         assert updated_heat >= initial_heat
         assert 0.0 <= updated_heat <= 1.0
 
+    def test_heat_based_consolidation_promotes_low_importance_entry(self):
+        """Low-importance entries should promote if heat passes threshold."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = os.path.join(td, "phase3_heat_consolidate.db")
+            import asyncio
+
+            plane = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+                max_working_slots=8,
+            )
+            asyncio.run(plane.init())
+            plane.commit_sync("wm_hot_low", {"k": 1}, memory_type=MemoryType.WORKING, importance=0.2)
+
+            for _ in range(20):
+                plane.working_memory.get("wm_hot_low")
+
+            promoted = asyncio.run(plane.consolidate())
+            assert promoted >= 1
+
+            stored = asyncio.run(plane.backend.load("wm_hot_low"))
+            assert stored is not None
+            assert stored.memory_type == MemoryType.EPISODIC
+            assert plane.working_memory.get("wm_hot_low") is None
+
+    def test_auto_consolidate_on_hot_and_high_usage(self):
+        """Hot entries should auto-consolidate when working memory usage is high."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = os.path.join(td, "phase3_auto_consolidate.db")
+            import asyncio
+
+            plane = StatePlane(
+                backend=SQLiteBackend(db_path=db_path),
+                enable_verification=False,
+                enable_audit=True,
+                max_working_slots=2,
+            )
+            asyncio.run(plane.init())
+            plane.commit_sync("wm_hot", "a", memory_type=MemoryType.WORKING, importance=0.2)
+            for _ in range(20):
+                plane.working_memory.get("wm_hot")
+
+            plane.commit_sync("wm_other", "b", memory_type=MemoryType.WORKING, importance=0.1)
+
+            stored = asyncio.run(plane.backend.load("wm_hot"))
+            assert stored is not None
+            assert stored.memory_type == MemoryType.EPISODIC
+
     def test_commit_sync_and_working_memory_recall(self):
         plane = StatePlane(enable_verification=False, enable_audit=False)
         
