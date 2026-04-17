@@ -496,7 +496,7 @@ def _create_server_v2(
                 result = await _handle_verify(plane, arguments)
 
             elif name == "consolidate":
-                result = _handle_consolidate(plane, arguments)
+                result = await _handle_consolidate(plane, arguments)
 
             elif name == "snapshot":
                 if plane.backend and plane.enable_audit:
@@ -1161,11 +1161,19 @@ async def _handle_verify(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
     })
 
 
-def _handle_consolidate(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+async def _handle_consolidate(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    memory_type = args.get("memory_type")
+    count = 0
+    if hasattr(plane, "working_memory") and plane.working_memory.count > 0:
+        entries = plane.working_memory.get_all()
+        if memory_type:
+            entries = [e for e in entries if e.memory_type == memory_type or e.memory_type.value == memory_type]
+        count = await plane.consolidate()
     return _result_text({
         "tool": "consolidate",
-        "status": "consolidation_triggered",
-        "message": "In production mode, this triggers the sleep cycle. Currently using in-memory storage.",
+        "status": "consolidation_complete",
+        "consolidated_count": count,
+        "message": f"{count} working memory entries consolidated to backend." if count > 0 else "No entries to consolidate.",
     })
 
 
