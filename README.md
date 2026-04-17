@@ -9,11 +9,11 @@
 <p align="center">
   <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/v/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7" alt="PyPI"></a>
   <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/dm/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7&label=downloads%2Fmo" alt="Downloads"></a>
-  <a href="https://github.com/ReARCLabs/Bilinc/actions/workflows/ci.yml"><img src="https://github.com/ReARCLabs/Bilinc/actions/workflows/ci.yml/badge.svg?style=flat-square" alt="CI"></a>
+  <a href="https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml"><img src="https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml/badge.svg?style=flat-square" alt="CI"></a>
   <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-orange?style=flat-square" alt="License: BSL 1.1"></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/tests-217%20passing-brightgreen?style=flat-square&logo=pytest&logoColor=white" alt="Tests"></a>
-  <a href="https://github.com/ReARCLabs/Bilinc/stargazers"><img src="https://img.shields.io/github/stars/ReARCLabs/Bilinc?style=flat-square&logo=github&color=yellow" alt="Stars"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-245%20passing-brightgreen?style=flat-square&logo=pytest&logoColor=white" alt="Tests"></a>
+  <a href="https://github.com/atakanelik34/Bilinc/stargazers"><img src="https://img.shields.io/github/stars/atakanelik34/Bilinc?style=flat-square&logo=github&color=yellow" alt="Stars"></a>
 </p>
 
 ```bash
@@ -53,7 +53,9 @@ Bilinc fixes all three:
 
 **Infrastructure**
 - SQLite (default, zero-dep) and PostgreSQL backends
-- MCP server v2 — 12 tools over stdio or authenticated HTTP
+- MCP server v2 — 20 tools over stdio or authenticated HTTP
+- Phase 7 scheduler + background jobs (consolidation, decay, KG maintenance, entity backlog, health report)
+- Phase 8 advanced MCP tools (smart recall, query analysis, event segment, summarize, health, benchmark, export/import)
 - LangGraph checkpoint adapter (drop-in `BaseCheckpointSaver`)
 - Cross-tool memory translation: Claude Code ↔ Cursor ↔ VS Code ↔ OpenClaw
 - Prometheus-compatible metrics, health checks, latency tracing
@@ -123,7 +125,7 @@ Bilinc ships as an MCP server for Claude Code, Cursor, and any MCP-compatible ag
 }
 ```
 
-**12 MCP tools:** `commit_mem` · `recall` · `revise` · `forget` · `consolidate` · `contradictions` · `diff` · `snapshot` · `rollback` · `status` · `verify` · `query_graph`
+**20 MCP tools:** `commit_mem` · `recall` · `revise` · `forget` · `consolidate` · `contradictions` · `diff` · `snapshot` · `rollback` · `status` · `verify` · `query_graph` · `bilinc_recall_smart` · `bilinc_query_analysis` · `bilinc_event_segment` · `bilinc_summarize` · `bilinc_health` · `bilinc_benchmark` · `bilinc_export` · `bilinc_import`
 
 ---
 
@@ -193,7 +195,7 @@ StatePlane (orchestrator)
 ├── Hybrid Recall          FTS5 → vector → KG → RRF fusion
 ├── ContextBudgetRL        Adaptive token allocation by memory type
 ├── Storage                SQLite (FTS5, sqlite-vec) · PostgreSQL
-└── MCP Server v2          stdio + authenticated HTTP, 12 tools
+└── MCP Server v2          stdio + authenticated HTTP, 20 tools
 ```
 
 ---
