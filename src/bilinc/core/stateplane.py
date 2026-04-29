@@ -866,13 +866,10 @@ class StatePlane:
         return [k for k, _ in scored]
 
     def _rank_hybrid_keys(self, query: str, top_k: int) -> List[str]:
-        conn = self._sqlite_connection()
-        if conn is None:
+        hybrid = self._get_hybrid_search()
+        if hybrid is None:
             return []
         try:
-            from bilinc.core.vector_search import VectorStore, HybridSearch
-
-            hybrid = HybridSearch(conn, VectorStore(conn))
             results = hybrid.search_with_reranking(query, top_k=top_k)
             return [meta.get("key") for _, _, meta in results if meta.get("key")]
         except Exception:
@@ -911,6 +908,25 @@ class StatePlane:
             return None
         try:
             return get_conn()
+        except Exception:
+            return None
+
+    _cached_vector_store = None
+    _cached_hybrid_search = None
+
+    def _get_hybrid_search(self):
+        """Lazy-cached HybridSearch instance to avoid re-creating on every call."""
+        if self._cached_hybrid_search is not None:
+            return self._cached_hybrid_search
+        conn = self._sqlite_connection()
+        if conn is None:
+            return None
+        try:
+            from bilinc.core.vector_search import VectorStore, HybridSearch
+            vs = VectorStore(conn)
+            self._cached_vector_store = vs
+            self._cached_hybrid_search = HybridSearch(conn, vs)
+            return self._cached_hybrid_search
         except Exception:
             return None
 
