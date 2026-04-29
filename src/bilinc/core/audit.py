@@ -11,6 +11,7 @@ import hashlib
 import json
 import time
 import sqlite3
+import threading
 from typing import Any, Dict, List, Optional, NamedTuple
 from enum import Enum
 
@@ -52,6 +53,7 @@ class AuditTrail:
         self.db_path = db_path
         self.conn: Optional[sqlite3.Connection] = None
         self._root_hash: str = ""
+        self._lock = threading.Lock()
     
     async def init(self) -> None:
         """Initialize audit trail database."""
@@ -88,41 +90,45 @@ class AuditTrail:
         """
         Append an immutable audit entry and return it.
         
+        Thread-safe: uses a lock to prevent race conditions
+        when multiple async tasks call log() concurrently.
+        
         Returns the new root hash for verification.
         """
         if self.conn is None:
             raise RuntimeError("AuditTrail not initialized. Call .init() first.")
         
-        timestamp = time.time()
-        before_json = json.dumps(before_value) if before_value is not None else None
-        after_json = json.dumps(after_value) if after_value is not None else None
-        meta_json = json.dumps(metadata or {})
-        
-        # Compute data hash
-        data_str = f"{op_type.value}:{key}:{timestamp}:{before_json}:{after_json}"
-        data_hash = hashlib.sha256(data_str.encode()).hexdigest()
-        
-        # Chain with previous root
-        prev_root = self._root_hash
-        new_root = hashlib.sha256(f"{prev_root}:{data_hash}".encode()).hexdigest()
-        
-        cursor = self.conn.execute("""
-            INSERT INTO audit_log (timestamp, op_type, key, before_value, after_value,
-                                   data_hash, prev_root, root_hash, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (timestamp, op_type.value, key, before_json, after_json,
-              data_hash, prev_root, new_root, meta_json))
-        self.conn.commit()
+        with self._lock:
+            timestamp = time.time()
+            before_json = json.dumps(before_value) if before_value is not None else None
+            after_json = json.dumps(after_value) if after_value is not None else None
+            meta_json = json.dumps(metadata or {})
+            
+            # Compute data hash
+            data_str = f"{op_type.value}:{key}:{timestamp}:{before_json}:{after_json}"
+            data_hash = hashlib.sha256(data_str.encode()).hexdigest()
+            
+            # Chain with previous root
+            prev_root = self._root_hash
+            new_root = hashlib.sha256(f"{prev_root}:{data_hash}".encode()).hexdigest()
+            
+            cursor = self.conn.execute("""
+                INSERT INTO audit_log (timestamp, op_type, key, before_value, after_value,
+                                       data_hash, prev_root, root_hash, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (timestamp, op_type.value, key, before_json, after_json,
+                  data_hash, prev_root, new_root, meta_json))
+            self.conn.commit()
 
-        self._root_hash = new_root
-        
-        return AuditEntry(
-            id=cursor.lastrowid, timestamp=timestamp,
-            op_type=op_type.value, key=key,
-            before_value=before_json, after_value=after_json,
-            data_hash=data_hash, prev_root=prev_root,
-            root_hash=new_root, metadata=meta_json,
-        )
+            self._root_hash = new_root
+            
+            return AuditEntry(
+                id=cursor.lastrowid, timestamp=timestamp,
+                op_type=op_type.value, key=key,
+                before_value=before_json, after_value=after_json,
+                data_hash=data_hash, prev_root=prev_root,
+                root_hash=new_root, metadata=meta_json,
+            )
     
     def verify_integrity(self) -> Dict[str, Any]:
         """
