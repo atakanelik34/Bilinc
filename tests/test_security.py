@@ -7,6 +7,7 @@ import pytest
 from bilinc.security.validator import InputValidator
 from bilinc.security.resource_limits import ResourceLimits
 from bilinc import StatePlane
+from bilinc.core.audit import AuditTrail, OpType
 from bilinc.core.models import MemoryType
 
 
@@ -63,3 +64,26 @@ class TestResourceLimits:
                 value="should_be_rejected",
                 memory_type=MemoryType.WORKING,
             )
+
+
+@pytest.mark.asyncio
+async def test_audit_trail_handles_stale_multi_instance_root(tmp_path):
+    """Separate AuditTrail instances must not fork the SQLite audit chain."""
+    db_path = str(tmp_path / "audit.db")
+
+    writer_a = AuditTrail(db_path)
+    writer_b = AuditTrail(db_path)
+    await writer_a.init()
+    await writer_b.init()
+
+    # writer_b initialized before writer_a writes, so its cached _root_hash is stale.
+    writer_a.log(OpType.CREATE, "a", after_value={"value": 1})
+    writer_b.log(OpType.CREATE, "b", after_value={"value": 2})
+    writer_a.log(OpType.UPDATE, "a", before_value={"value": 1}, after_value={"value": 3})
+
+    integrity = writer_a.verify_integrity()
+    assert integrity["valid"] is True
+    assert integrity["first_error"] is None
+
+    await writer_a.close()
+    await writer_b.close()
