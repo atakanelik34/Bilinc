@@ -16,6 +16,7 @@ import hashlib
 import asyncio
 import hmac
 import csv
+import importlib.metadata
 import io
 import json
 import logging
@@ -1214,8 +1215,15 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
     })
 
 
+def _bilinc_version() -> str:
+    try:
+        return importlib.metadata.version("bilinc")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
 async def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List[TextContent]:
-    status = {"tool": "status", "version": "1.0.4"}
+    status = {"tool": "status", "version": _bilinc_version()}
 
 
     # AGM stats

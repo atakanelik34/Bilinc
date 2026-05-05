@@ -103,28 +103,40 @@ class AuditTrail:
             before_json = json.dumps(before_value) if before_value is not None else None
             after_json = json.dumps(after_value) if after_value is not None else None
             meta_json = json.dumps(metadata or {})
+            op_value = op_type.value if hasattr(op_type, "value") else str(op_type)
             
             # Compute data hash
-            data_str = f"{op_type.value}:{key}:{timestamp}:{before_json}:{after_json}"
+            data_str = f"{op_value}:{key}:{timestamp}:{before_json}:{after_json}"
             data_hash = hashlib.sha256(data_str.encode()).hexdigest()
             
-            # Chain with previous root
-            prev_root = self._root_hash
-            new_root = hashlib.sha256(f"{prev_root}:{data_hash}".encode()).hexdigest()
-            
-            cursor = self.conn.execute("""
-                INSERT INTO audit_log (timestamp, op_type, key, before_value, after_value,
-                                       data_hash, prev_root, root_hash, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (timestamp, op_type.value, key, before_json, after_json,
-                  data_hash, prev_root, new_root, meta_json))
-            self.conn.commit()
+            try:
+                # Cross-process safety: serialize writers and read the latest
+                # persisted root inside the same transaction that inserts the
+                # next row. A process-local cached root can be stale when
+                # multiple MCP stdio processes share one SQLite database.
+                self.conn.execute("BEGIN IMMEDIATE")
+                row = self.conn.execute(
+                    "SELECT root_hash FROM audit_log ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                prev_root = row["root_hash"] if row else "0" * 64
+                new_root = hashlib.sha256(f"{prev_root}:{data_hash}".encode()).hexdigest()
+                
+                cursor = self.conn.execute("""
+                    INSERT INTO audit_log (timestamp, op_type, key, before_value, after_value,
+                                           data_hash, prev_root, root_hash, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (timestamp, op_value, key, before_json, after_json,
+                      data_hash, prev_root, new_root, meta_json))
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
             self._root_hash = new_root
             
             return AuditEntry(
                 id=cursor.lastrowid, timestamp=timestamp,
-                op_type=op_type.value, key=key,
+                op_type=op_value, key=key,
                 before_value=before_json, after_value=after_json,
                 data_hash=data_hash, prev_root=prev_root,
                 root_hash=new_root, metadata=meta_json,
