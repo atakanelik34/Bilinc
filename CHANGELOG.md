@@ -2,6 +2,17 @@
 
 All notable changes to Bilinc.
 
+## [1.2.2] — 2026-05-06
+
+### Fixed
+- Hardened audit trail appends against stale multi-process roots by reading the latest persisted root inside a SQLite `BEGIN IMMEDIATE` transaction.
+- Added regression coverage for stale multi-instance audit writers sharing one SQLite database.
+- MCP `diff` dispatcher now routes through structured argument validation instead of raising `KeyError` when optional timestamps are omitted on audit-backed planes.
+- MCP status version now reads installed package metadata instead of returning a stale hardcoded version.
+
+### Changed
+- Version bumped to `1.2.2` for the Bilinc audit/MCP hardening release.
+
 ## [1.2.1] — 2026-04-17
 
 ### Changed
