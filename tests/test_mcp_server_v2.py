@@ -17,6 +17,7 @@ import asyncio
 import json
 import tempfile
 import pytest
+from mcp.types import CallToolRequest, CallToolRequestParams
 
 from bilinc.core.stateplane import StatePlane
 from bilinc.storage.sqlite import SQLiteBackend
@@ -38,6 +39,7 @@ from bilinc.mcp_server.server_v2 import (
     _handle_bilinc_benchmark,
     _handle_bilinc_export,
     _handle_bilinc_import,
+    create_mcp_server_v2,
     _error_text,
     _json_safe,
 )
@@ -60,6 +62,32 @@ def _call(handler, plane, args=None):
     if asyncio.iscoroutine(result):
         result = asyncio.run(result)
     return json.loads(result[0].text)
+
+
+def _call_server_tool(plane: StatePlane, name: str, args=None):
+    """Call the MCP dispatcher and parse the TextContent JSON response."""
+    async def _run():
+        server = create_mcp_server_v2(plane)
+        handler = server.request_handlers[CallToolRequest]
+        response = await handler(
+            CallToolRequest(
+                params=CallToolRequestParams(name=name, arguments=args or {})
+            )
+        )
+        return json.loads(response.root.content[0].text)
+
+    return asyncio.run(_run())
+
+
+async def _build_persistent_plane(db_path: str) -> StatePlane:
+    backend = SQLiteBackend(db_path)
+    await backend.init()
+    plane = StatePlane(backend=backend, enable_verification=True, enable_audit=True)
+    if plane.audit:
+        await plane.audit.init()
+    plane.init_agm()
+    plane.init_knowledge_graph()
+    return plane
 
 
 # ── Test 1: Commit/Recall Roundtrip ──────────────────────────
@@ -254,10 +282,19 @@ class TestMCPErrorHandling:
 
     def test_mcp_server_creates_without_crash(self):
         """create_mcp_server_v2 should work with default StatePlane."""
-        from bilinc.mcp_server.server_v2 import create_mcp_server_v2
         server = create_mcp_server_v2()
         assert server is not None
         assert server.name == "bilinc-v2"
+
+    def test_dispatcher_diff_missing_timestamps_returns_structured_error(self, tmp_path):
+        """The MCP dispatcher should validate optional diff args before audit-backed diff."""
+        p = asyncio.run(_build_persistent_plane(str(tmp_path / "bilinc.db")))
+
+        result = _call_server_tool(p, "diff", {})
+
+        assert result["tool"] == "diff"
+        assert result["success"] is False
+        assert result["error"] == "ts_a and ts_b are required for diff"
 
     def test_json_safe_handles_edge_cases(self):
         """_json_safe should not crash on unusual inputs."""

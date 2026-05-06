@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bilinc"
-version = "1.2.1"
+version = "1.2.2"
 description = "Verifiable State Plane for Autonomous Agents"
 readme = "README.md"
 license = "BUSL-1.1"
