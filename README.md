@@ -9,10 +9,11 @@
 <p align="center">
   <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/v/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7" alt="PyPI"></a>
   <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/dm/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7&label=downloads%2Fmo" alt="Downloads"></a>
-  <a href="https://github.com/ReARCLabs/Bilinc/actions/workflows/ci.yml"><img src="https://github.com/ReARCLabs/Bilinc/actions/workflows/ci.yml/badge.svg?style=flat-square" alt="CI"></a>
-  <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-orange?style=flat-square" alt="License: BSL 1.1"></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/tests-245%20passing-brightgreen?style=flat-square&logo=pytest&logoColor=white" alt="Tests"></a>
+  <a href="https://github.com/ReARCLabs/Bilinc/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ReARCLabs/Bilinc/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=ci" alt="CI"></a>
+  <a href="https://github.com/ReARCLabs/Bilinc/tags"><img src="https://img.shields.io/github/v/tag/ReARCLabs/Bilinc?sort=semver&style=flat-square&logo=github&label=tag" alt="GitHub tag"></a>
+  <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/pyversions/bilinc?style=flat-square&logo=python&logoColor=white" alt="Python versions"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BUSL%201.1-orange?style=flat-square" alt="License: BUSL 1.1"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-247%20passing-brightgreen?style=flat-square&logo=pytest&logoColor=white" alt="Tests"></a>
   <a href="https://github.com/ReARCLabs/Bilinc/stargazers"><img src="https://img.shields.io/github/stars/ReARCLabs/Bilinc?style=flat-square&logo=github&color=yellow" alt="Stars"></a>
 </p>
 
