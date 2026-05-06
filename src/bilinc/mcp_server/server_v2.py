@@ -615,12 +615,7 @@ def _create_server_v2(
                     result = await _handle_snapshot(plane, arguments)
 
             elif name == "diff":
-                if plane.backend and plane.enable_audit:
-                    diff = await plane.diff(arguments["ts_a"], arguments["ts_b"])
-                    diff["tool"] = "diff"
-                    result = _result_text(diff)
-                else:
-                    result = await _handle_diff(plane, arguments)
+                result = await _handle_diff(plane, arguments)
 
             elif name == "rollback":
                 if plane.backend and plane.enable_audit:
