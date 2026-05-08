@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/v/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7" alt="PyPI"></a>
-  <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/dd/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7&label=downloads%2Fday" alt="PyPI downloads/day"></a>
+  <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/badge/downloads-46%2Fday-0073b7?style=flat-square&logo=pypi&logoColor=white" alt="PyPI downloads/day"></a>
   <a href="https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/atakanelik34/Bilinc/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=ci" alt="CI"></a>
   <a href="https://github.com/atakanelik34/Bilinc/tags"><img src="https://img.shields.io/github/v/tag/atakanelik34/Bilinc?sort=semver&style=flat-square&logo=github&label=tag" alt="GitHub tag"></a>
   <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/pyversions/bilinc?style=flat-square&logo=python&logoColor=white" alt="Python versions"></a>
