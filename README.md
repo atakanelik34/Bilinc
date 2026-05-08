@@ -3,18 +3,18 @@
 **Verifiable state plane for autonomous agents.**
 
 <p align="center">
-  <img src="assets/bilinc-architecture.png" alt="Bilinc architecture diagram showing the Bilinc State Plane connected to memory types, AGM belief revision, LangGraph checkpointing, MCP server integration, hybrid recall, SQLite/PostgreSQL storage, Z3 verification, and a Merkle audit trail." />
+  <img src="https://raw.githubusercontent.com/atakanelik34/Bilinc/main/assets/bilinc-architecture.png" alt="Bilinc architecture diagram showing the Bilinc State Plane connected to memory types, AGM belief revision, LangGraph checkpointing, MCP server integration, hybrid recall, SQLite/PostgreSQL storage, Z3 verification, and a Merkle audit trail." />
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/v/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7" alt="PyPI"></a>
-  <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/dm/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7&label=downloads%2Fmo" alt="Downloads"></a>
-  <a href="https://github.com/atakanelik34/bilinc/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/atakanelik34/bilinc/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=ci" alt="CI"></a>
-  <a href="https://github.com/atakanelik34/bilinc/tags"><img src="https://img.shields.io/github/v/tag/atakanelik34/bilinc?sort=semver&style=flat-square&logo=github&label=tag" alt="GitHub tag"></a>
+  <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/dd/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7&label=downloads%2Fday" alt="PyPI downloads/day"></a>
+  <a href="https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/atakanelik34/Bilinc/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=ci" alt="CI"></a>
+  <a href="https://github.com/atakanelik34/Bilinc/tags"><img src="https://img.shields.io/github/v/tag/atakanelik34/Bilinc?sort=semver&style=flat-square&logo=github&label=tag" alt="GitHub tag"></a>
   <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/pyversions/bilinc?style=flat-square&logo=python&logoColor=white" alt="Python versions"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-orange?style=flat-square" alt="License: BSL 1.1"></a>
   <a href="tests/"><img src="https://img.shields.io/badge/tests-247%20passing-brightgreen?style=flat-square&logo=pytest&logoColor=white" alt="Tests"></a>
-  <a href="https://github.com/atakanelik34/bilinc/stargazers"><img src="https://img.shields.io/github/stars/atakanelik34/bilinc?style=flat-square&logo=github&color=yellow" alt="Stars"></a>
+  <a href="https://github.com/atakanelik34/Bilinc/stargazers"><img src="https://img.shields.io/github/stars/atakanelik34/Bilinc?style=flat-square&logo=github&color=yellow" alt="Stars"></a>
 </p>
 
 ```bash
