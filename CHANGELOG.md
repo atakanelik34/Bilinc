@@ -2,6 +2,11 @@
 
 All notable changes to Bilinc.
 
+## [1.2.5] — 2026-05-09
+
+### Changed
+- Switched the downloads badge from a pinned daily count to the Pepy all-time downloads badge (`downloads: 3k`) for both GitHub and PyPI rendering.
+
 ## [1.2.4] — 2026-05-09
 
 ### Changed
