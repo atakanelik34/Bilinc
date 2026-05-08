@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [1.2.3] — 2026-05-09
+
+### Changed
+- Refreshed PyPI long description from the current GitHub README.
+- Updated README badges to use the refreshed GitHub/PyPI badge set and a non-rate-limited PyPI downloads/day badge.
+
 ## [1.2.2] — 2026-05-06
 
 ### Fixed
