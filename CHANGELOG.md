@@ -2,6 +2,11 @@
 
 All notable changes to Bilinc.
 
+## [1.2.4] — 2026-05-09
+
+### Changed
+- Pinned the README downloads badge to the last observed PyPI downloads/day value because the dynamic Shields/PyPI downloads endpoint is intermittently upstream rate-limited.
+
 ## [1.2.3] — 2026-05-09
 
 ### Changed
