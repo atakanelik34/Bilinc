@@ -146,6 +146,32 @@ class SQLiteBackend(StorageBackend):
         ]:
             self._conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON claims ({col})")
 
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS entities (
+                id TEXT PRIMARY KEY,
+                canonical_name TEXT NOT NULL,
+                entity_type TEXT NOT NULL DEFAULT 'unknown',
+                aliases TEXT NOT NULL DEFAULT '[]',
+                metadata TEXT NOT NULL DEFAULT '{}',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_entities_canonical_name ON entities (canonical_name)")
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS entity_mentions (
+                id TEXT PRIMARY KEY,
+                entity_id TEXT NOT NULL,
+                memory_key TEXT NOT NULL,
+                mention_text TEXT NOT NULL,
+                source TEXT DEFAULT '',
+                confidence REAL NOT NULL DEFAULT 0.5,
+                created_at REAL NOT NULL
+            )
+        """)
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_mentions_entity_id ON entity_mentions (entity_id)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_mentions_memory_key ON entity_mentions (memory_key)")
+
         # FTS5 full-text search (insert trigger only - simple and reliable)
         try:
             self._conn.execute("""
@@ -263,9 +289,166 @@ class SQLiteBackend(StorageBackend):
     async def delete(self, key: str) -> bool:
         conn = self._get_conn()
         conn.execute("DELETE FROM claims WHERE memory_key = ?", (key,))
+        conn.execute("DELETE FROM entity_mentions WHERE memory_key = ?", (key,))
+        self._prune_orphan_entities(conn)
         r = conn.execute("DELETE FROM memories WHERE key = ?", (key,))
         conn.commit()
         return r.rowcount > 0
+
+    async def delete_entity_mentions_for_memory_key(self, memory_key: str) -> int:
+        conn = self._get_conn()
+        cursor = conn.execute("DELETE FROM entity_mentions WHERE memory_key = ?", (memory_key,))
+        self._prune_orphan_entities(conn)
+        conn.commit()
+        return cursor.rowcount
+
+    def _prune_orphan_entities(self, conn) -> int:
+        cursor = conn.execute(
+            """
+            DELETE FROM entities
+            WHERE id NOT IN (SELECT DISTINCT entity_id FROM entity_mentions)
+            """
+        )
+        return cursor.rowcount
+
+    async def save_entity(self, entity) -> bool:
+        from bilinc.core.entities import Entity
+
+        if not isinstance(entity, Entity):
+            raise TypeError("entity must be Entity")
+        entity.updated_at = time.time()
+        conn = self._get_conn()
+        existing = conn.execute("SELECT aliases FROM entities WHERE id = ?", (entity.id,)).fetchone()
+        aliases = list(entity.aliases)
+        if existing:
+            try:
+                aliases.extend(json.loads(existing["aliases"] or "[]"))
+            except Exception:
+                pass
+        deduped_aliases = []
+        seen = set()
+        for alias in aliases:
+            key = " ".join(str(alias).strip().lower().split())
+            if key and key not in seen:
+                seen.add(key)
+                deduped_aliases.append(str(alias).strip())
+        conn.execute(
+            """
+            INSERT INTO entities (id, canonical_name, entity_type, aliases, metadata, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                canonical_name=excluded.canonical_name,
+                entity_type=excluded.entity_type,
+                aliases=excluded.aliases,
+                metadata=excluded.metadata,
+                updated_at=excluded.updated_at
+            """,
+            (
+                entity.id,
+                entity.canonical_name,
+                entity.entity_type,
+                json.dumps(deduped_aliases),
+                json.dumps(entity.metadata),
+                entity.created_at,
+                entity.updated_at,
+            ),
+        )
+        conn.commit()
+        return True
+
+    async def add_entity_alias(self, entity_id: str, alias: str) -> bool:
+        entity = await self.find_entity_by_id(entity_id)
+        if entity is None:
+            return False
+        entity.aliases.append(alias)
+        await self.save_entity(entity)
+        return True
+
+    async def save_entity_mention(self, mention) -> bool:
+        from bilinc.core.entities import EntityMention
+
+        if not isinstance(mention, EntityMention):
+            raise TypeError("mention must be EntityMention")
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO entity_mentions (id, entity_id, memory_key, mention_text, source, confidence, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                entity_id=excluded.entity_id,
+                memory_key=excluded.memory_key,
+                mention_text=excluded.mention_text,
+                source=excluded.source,
+                confidence=excluded.confidence
+            """,
+            (mention.id, mention.entity_id, mention.memory_key, mention.mention_text, mention.source, mention.confidence, mention.created_at),
+        )
+        conn.commit()
+        return True
+
+    async def find_entity_by_id(self, entity_id: str):
+        row = self._get_conn().execute("SELECT * FROM entities WHERE id = ?", (entity_id,)).fetchone()
+        return self._row_to_entity(row) if row else None
+
+    async def find_entity(self, name: str):
+        normalized = " ".join(str(name).strip().lower().split())
+        rows = self._get_conn().execute("SELECT * FROM entities").fetchall()
+        for row in rows:
+            entity = self._row_to_entity(row)
+            names = [entity.canonical_name, *entity.aliases]
+            if any(" ".join(candidate.strip().lower().split()) == normalized for candidate in names):
+                return entity
+        return None
+
+    async def list_entity_mentions(self, entity_id: str | None = None, memory_key: str | None = None, limit: int = 100):
+        sql = "SELECT * FROM entity_mentions WHERE 1=1"
+        params: list[object] = []
+        if entity_id is not None:
+            sql += " AND entity_id = ?"
+            params.append(entity_id)
+        if memory_key is not None:
+            sql += " AND memory_key = ?"
+            params.append(memory_key)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(int(limit))
+        rows = self._get_conn().execute(sql, tuple(params)).fetchall()
+        return [self._row_to_entity_mention(row) for row in rows]
+
+    async def list_memories_for_entity(self, name: str, limit: int = 100) -> list[str]:
+        entity = await self.find_entity(name)
+        if entity is None:
+            return []
+        rows = self._get_conn().execute(
+            "SELECT DISTINCT memory_key FROM entity_mentions WHERE entity_id = ? ORDER BY created_at DESC LIMIT ?",
+            (entity.id, int(limit)),
+        ).fetchall()
+        return [row["memory_key"] for row in rows]
+
+    def _row_to_entity(self, row):
+        from bilinc.core.entities import Entity
+
+        return Entity.from_dict({
+            "id": row["id"],
+            "canonical_name": row["canonical_name"],
+            "entity_type": row["entity_type"],
+            "aliases": json.loads(row["aliases"] or "[]"),
+            "metadata": json.loads(row["metadata"] or "{}"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        })
+
+    def _row_to_entity_mention(self, row):
+        from bilinc.core.entities import EntityMention
+
+        return EntityMention.from_dict({
+            "id": row["id"],
+            "entity_id": row["entity_id"],
+            "memory_key": row["memory_key"],
+            "mention_text": row["mention_text"],
+            "source": row["source"],
+            "confidence": row["confidence"],
+            "created_at": row["created_at"],
+        })
 
     async def delete_claims_for_memory_key(self, memory_key: str) -> int:
         conn = self._get_conn()

@@ -40,7 +40,8 @@ Bilinc gives agents a state layer with verification, belief revision, provenance
 | Area | What Bilinc provides |
 | --- | --- |
 | Memory model | Working, episodic, procedural, semantic, and spatial memory with per-type decay curves |
-| Recall | FTS5 BM25 + vector similarity + knowledge-graph spreading activation, fused with RRF |
+| Recall | FTS5 BM25 + vector similarity + knowledge-graph/entity signals, fused with RRF |
+| Evidence-aware recall | Opt-in recall replay, structured claim projection, read-only contradiction probes, named recall profiles, and conservative entity/backlink projection |
 | Belief revision | AGM-style EXPAND / CONTRACT / REVISE for conflict-aware updates |
 | Verification | Z3 SMT checks at the commit gate |
 | Auditability | Merkle-chain provenance, snapshots, diffs, and rollback |
@@ -142,11 +143,11 @@ StatePlane
 
 | Benchmark | Score | Notes |
 | --- | ---: | --- |
-| LongMemEval | 98.0% | Fully local, no LLM |
+| LongMemEval | historical repo run: 98.0% | Do not claim as freshly reproducible unless `longmemeval_s_cleaned.json` is present locally |
 | ConvoMem | 98.0% | 5 categories, real recall pipeline |
 | LoCoMo | 90.3% | Temporal, causal, and multi-hop recall |
 
-These are repository benchmark runs, not hosted-service claims. Reproduce them from the benchmark scripts and fixtures in this repo.
+These are repository benchmark records, not hosted-service claims. Fresh claims require the relevant fixture files and captured command output. Evidence-aware recall verification and public-safe wording live in [`docs/evidence-aware-recall.md`](docs/evidence-aware-recall.md); current sprint evidence receipts are under `benchmarks/results/`.
 
 ## Comparison
 
