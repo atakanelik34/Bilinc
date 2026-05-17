@@ -457,6 +457,59 @@ def _create_server_v2(
                 },
             ),
             Tool(
+                name="claims_list",
+                description="List projected epistemic claims without replacing source memories.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "holder": {"type": "string"},
+                        "subject": {"type": "string"},
+                        "kind": {"type": "string", "enum": ["fact", "belief", "preference", "commitment", "prediction", "hunch"]},
+                        "active": {"type": "boolean", "default": True},
+                        "limit": {"type": "integer", "default": 100},
+                    },
+                    "required": [],
+                },
+            ),
+            Tool(
+                name="claims_search",
+                description="Search projected epistemic claims by claim text, holder, or subject.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": "integer", "default": 10},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            Tool(
+                name="claims_for_entity",
+                description="List active claims for an entity/subject with memory provenance.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "entity": {"type": "string"},
+                        "active": {"type": "boolean", "default": True},
+                        "limit": {"type": "integer", "default": 100},
+                    },
+                    "required": ["entity"],
+                },
+            ),
+            Tool(
+                name="claim_contradictions",
+                description="Read-only contradiction probe over projected claims with provenance.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "holder": {"type": "string"},
+                        "subject": {"type": "string"},
+                        "limit": {"type": "integer", "default": 1000},
+                    },
+                    "required": [],
+                },
+            ),
+            Tool(
                 name="bilinc_recall_smart",
                 description="Advanced recall with reflection loop and adequacy scoring.",
                 inputSchema={
@@ -630,6 +683,14 @@ def _create_server_v2(
 
             elif name == "contradictions":
                 result = _handle_contradictions(plane)
+            elif name == "claims_list":
+                result = await _handle_claims_list(plane, arguments)
+            elif name == "claims_search":
+                result = await _handle_claims_search(plane, arguments)
+            elif name == "claims_for_entity":
+                result = await _handle_claims_for_entity(plane, arguments)
+            elif name == "claim_contradictions":
+                result = await _handle_claim_contradictions(plane, arguments)
             elif name == "bilinc_recall_smart":
                 result = await _handle_bilinc_recall_smart(plane, arguments)
             elif name == "bilinc_query_analysis":
@@ -654,6 +715,7 @@ def _create_server_v2(
                         "Unknown tool: "
                         f"{name}. Available tools: commit_mem, recall, forget, revise, status, verify, "
                         "consolidate, snapshot, diff, rollback, query_graph, contradictions, "
+                        "claims_list, claims_search, claims_for_entity, claim_contradictions, "
                         "bilinc_recall_smart, bilinc_query_analysis, bilinc_event_segment, bilinc_summarize, "
                         "bilinc_health, bilinc_benchmark, bilinc_export, bilinc_import"
                     ),
@@ -949,7 +1011,6 @@ async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[Te
     session_id = args.get("session_id", "")
     metadata = _build_metadata(args)
     ttl = args.get("ttl")
-    invalid_at = args.get("invalid_at")
 
     if ttl is None and str(source).startswith("hermes_session"):
         ttl = DEFAULT_HERMES_SESSION_TTL_SECONDS
@@ -1461,10 +1522,66 @@ def _handle_contradictions(plane: StatePlane, args: Dict[str, Any] = None) -> Li
     })
 
 
+def _claim_payloads(claims) -> list[dict[str, Any]]:
+    return [claim.to_dict() if hasattr(claim, "to_dict") else dict(claim) for claim in claims]
+
+
+async def _handle_claims_list(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    if not getattr(plane, "backend", None) or not hasattr(plane.backend, "list_claims"):
+        return _result_text({"tool": "claims_list", "success": False, "error": "claim storage unavailable"})
+    claims = await plane.backend.list_claims(
+        holder=args.get("holder"),
+        subject=args.get("subject"),
+        kind=args.get("kind"),
+        active=args.get("active", True),
+        limit=int(args.get("limit", 100)),
+    )
+    return _result_text({"tool": "claims_list", "success": True, "count": len(claims), "claims": _claim_payloads(claims)})
+
+
+async def _handle_claims_search(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    query = (args.get("query") or "").strip()
+    if not query:
+        return _result_text({"tool": "claims_search", "success": False, "error": "query is required"})
+    if not getattr(plane, "backend", None) or not hasattr(plane.backend, "search_claims"):
+        return _result_text({"tool": "claims_search", "success": False, "error": "claim storage unavailable"})
+    claims = await plane.backend.search_claims(query, limit=int(args.get("limit", 10)))
+    return _result_text({"tool": "claims_search", "success": True, "count": len(claims), "claims": _claim_payloads(claims)})
+
+
+async def _handle_claims_for_entity(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    entity = (args.get("entity") or args.get("subject") or "").strip()
+    if not entity:
+        return _result_text({"tool": "claims_for_entity", "success": False, "error": "entity is required"})
+    if not getattr(plane, "backend", None) or not hasattr(plane.backend, "list_claims"):
+        return _result_text({"tool": "claims_for_entity", "success": False, "error": "claim storage unavailable"})
+    claims = await plane.backend.list_claims(subject=entity, active=args.get("active", True), limit=int(args.get("limit", 100)))
+    return _result_text({"tool": "claims_for_entity", "success": True, "entity": entity, "count": len(claims), "claims": _claim_payloads(claims)})
+
+
+async def _handle_claim_contradictions(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    if not getattr(plane, "backend", None) or not hasattr(plane.backend, "list_claims"):
+        return _result_text({"tool": "claim_contradictions", "success": False, "error": "claim storage unavailable"})
+    claims = await plane.backend.list_claims(
+        holder=args.get("holder"),
+        subject=args.get("subject"),
+        active=True,
+        limit=int(args.get("limit", 1000)),
+    )
+    from bilinc.eval.contradictions import ContradictionReport, detect_claim_contradictions
+
+    findings = detect_claim_contradictions(claims)
+    report = ContradictionReport.from_findings(findings)
+    payload = report.to_dict()
+    payload.update({"tool": "claim_contradictions", "success": True, "read_only": True})
+    return _result_text(payload)
+
+
 async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     query = (args.get("query") or "").strip()
     if not query:
         return _result_text({"tool": "bilinc_recall_smart", "success": False, "error": "query is required"})
+    started_at = time.perf_counter()
     limit = int(args.get("limit", 10))
     max_reflections = int(args.get("max_reflections", 2))
     adequacy_threshold = float(args.get("adequacy_threshold", 0.55))
@@ -1482,6 +1599,21 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
         adequacy_threshold=adequacy_threshold,
         memory_types=memory_types or None,
     )
+    if hasattr(plane, "_record_eval_capture"):
+        await plane._record_eval_capture(
+            tool_name="bilinc_recall_smart",
+            query=query,
+            results=payload.get("results", []),
+            started_at=started_at,
+            detail={
+                "limit": limit,
+                "max_reflections": max_reflections,
+                "adequacy_threshold": adequacy_threshold,
+                "reflections_used": payload.get("reflections_used", 0),
+                "adequacy": payload.get("adequacy"),
+                "queries_tried": payload.get("queries_tried", []),
+            },
+        )
     payload["tool"] = "bilinc_recall_smart"
     payload["success"] = True
     return _result_text(payload)

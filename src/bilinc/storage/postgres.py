@@ -27,11 +27,11 @@ try:
 except ImportError:
     register_vector = None
 from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.observability.health import _redact_dsn
 from bilinc.storage.backend import StorageBackend
 logger = logging.getLogger(__name__)
 
 
-from bilinc.observability.health import _redact_dsn
 class PostgresBackend(StorageBackend):
     SCHEMA_VERSION = 1
 
@@ -90,6 +90,46 @@ class PostgresBackend(StorageBackend):
                 CREATE INDEX IF NOT EXISTS idx_bilinc_verified ON bilinc_entries(is_verified) WHERE is_verified = true;
                 CREATE INDEX IF NOT EXISTS idx_bilinc_embedding ON bilinc_entries USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
                 CREATE INDEX IF NOT EXISTS idx_bilinc_gin_metadata ON bilinc_entries USING GIN (metadata);
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS eval_candidates (
+                    id BIGSERIAL PRIMARY KEY,
+                    schema_version INTEGER NOT NULL DEFAULT 1,
+                    tool_name TEXT NOT NULL,
+                    query TEXT NOT NULL,
+                    retrieved_keys JSONB NOT NULL DEFAULT '[]',
+                    retrieved_scores JSONB NOT NULL DEFAULT '[]',
+                    memory_types JSONB NOT NULL DEFAULT '[]',
+                    latency_ms INTEGER NOT NULL DEFAULT 0,
+                    detail JSONB NOT NULL DEFAULT '{}',
+                    created_at DOUBLE PRECISION NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_eval_candidates_created_at ON eval_candidates(created_at);
+                CREATE INDEX IF NOT EXISTS idx_eval_candidates_tool ON eval_candidates(tool_name);
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS bilinc_claims (
+                    id TEXT PRIMARY KEY,
+                    memory_key TEXT NOT NULL,
+                    holder TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    claim TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    confidence DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+                    valid_at DOUBLE PRECISION,
+                    invalid_at DOUBLE PRECISION,
+                    source TEXT DEFAULT '',
+                    provenance_id TEXT DEFAULT '',
+                    active BOOLEAN NOT NULL DEFAULT true,
+                    superseded_by TEXT,
+                    metadata JSONB DEFAULT '{}',
+                    created_at DOUBLE PRECISION NOT NULL,
+                    updated_at DOUBLE PRECISION NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_bilinc_claims_memory_key ON bilinc_claims(memory_key);
+                CREATE INDEX IF NOT EXISTS idx_bilinc_claims_holder_active ON bilinc_claims(holder, active);
+                CREATE INDEX IF NOT EXISTS idx_bilinc_claims_subject_active ON bilinc_claims(subject, active);
+                CREATE INDEX IF NOT EXISTS idx_bilinc_claims_kind_active ON bilinc_claims(kind, active);
             """)
             current = await conn.fetchrow("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
             if current is None or current["version"] < self.SCHEMA_VERSION:
@@ -157,6 +197,211 @@ class PostgresBackend(StorageBackend):
     async def restore(self, entry: MemoryEntry) -> bool:
         """PostgreSQL save path already preserves the provided fields."""
         return await self.save(entry)
+
+    async def save_claim(self, claim) -> bool:
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO bilinc_claims (
+                    id, memory_key, holder, subject, claim, kind, confidence,
+                    valid_at, invalid_at, source, provenance_id, active,
+                    superseded_by, metadata, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                          $9, $10, $11, $12, $13, $14, $15, $16)
+                ON CONFLICT (id) DO UPDATE SET
+                    memory_key = EXCLUDED.memory_key,
+                    holder = EXCLUDED.holder,
+                    subject = EXCLUDED.subject,
+                    claim = EXCLUDED.claim,
+                    kind = EXCLUDED.kind,
+                    confidence = EXCLUDED.confidence,
+                    valid_at = EXCLUDED.valid_at,
+                    invalid_at = EXCLUDED.invalid_at,
+                    source = EXCLUDED.source,
+                    provenance_id = EXCLUDED.provenance_id,
+                    active = EXCLUDED.active,
+                    superseded_by = EXCLUDED.superseded_by,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = EXCLUDED.updated_at
+            """,
+                claim.id,
+                claim.memory_key,
+                claim.holder,
+                claim.subject,
+                claim.claim,
+                claim.kind.value,
+                claim.confidence,
+                claim.valid_at,
+                claim.invalid_at,
+                claim.source,
+                claim.provenance_id,
+                claim.active,
+                claim.superseded_by,
+                json.dumps(claim.metadata or {}),
+                claim.created_at,
+                claim.updated_at,
+            )
+        return True
+
+    async def list_claims(
+        self,
+        holder: str | None = None,
+        subject: str | None = None,
+        kind: str | None = None,
+        active: bool | None = True,
+        limit: int = 100,
+    ):
+        if not self._initialized:
+            await self.init()
+        sql = "SELECT * FROM bilinc_claims WHERE 1=1"
+        params: list[Any] = []
+        if holder is not None:
+            params.append(holder)
+            sql += f" AND holder = ${len(params)}"
+        if subject is not None:
+            params.append(subject)
+            sql += f" AND subject = ${len(params)}"
+        if kind is not None:
+            params.append(getattr(kind, "value", str(kind)))
+            sql += f" AND kind = ${len(params)}"
+        if active is not None:
+            params.append(bool(active))
+            sql += f" AND active = ${len(params)}"
+            if active:
+                now = time.time()
+                params.append(now)
+                sql += f" AND (valid_at IS NULL OR valid_at <= ${len(params)})"
+                params.append(now)
+                sql += f" AND (invalid_at IS NULL OR invalid_at > ${len(params)})"
+        params.append(int(limit))
+        sql += f" ORDER BY updated_at DESC LIMIT ${len(params)}"
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [self._row_to_claim(row) for row in rows]
+
+    async def search_claims(self, query: str, limit: int = 10):
+        if not self._initialized:
+            await self.init()
+        needle = f"%{query}%"
+        now = time.time()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM bilinc_claims
+                WHERE active = true
+                  AND (valid_at IS NULL OR valid_at <= $1)
+                  AND (invalid_at IS NULL OR invalid_at > $2)
+                  AND (claim ILIKE $3 OR subject ILIKE $3 OR holder ILIKE $3)
+                ORDER BY updated_at DESC LIMIT $4
+                """,
+                now,
+                now,
+                needle,
+                int(limit),
+            )
+        return [self._row_to_claim(row) for row in rows]
+
+    async def supersede_claim(self, old_id: str, new_claim) -> bool:
+        await self.save_claim(new_claim)
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE bilinc_claims SET active = false, superseded_by = $1, updated_at = $2 WHERE id = $3",
+                new_claim.id,
+                time.time(),
+                old_id,
+            )
+        return True
+
+    def _row_to_claim(self, row):
+        from bilinc.core.models import Claim
+
+        metadata = row.get("metadata") if hasattr(row, "get") else row["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata or "{}")
+        return Claim.from_dict({
+            "id": row["id"],
+            "memory_key": row["memory_key"],
+            "holder": row["holder"],
+            "subject": row["subject"],
+            "claim": row["claim"],
+            "kind": row["kind"],
+            "confidence": row["confidence"],
+            "valid_at": row["valid_at"],
+            "invalid_at": row["invalid_at"],
+            "source": row["source"],
+            "provenance_id": row["provenance_id"],
+            "active": bool(row["active"]),
+            "superseded_by": row["superseded_by"],
+            "metadata": metadata or {},
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        })
+
+    async def record_eval_candidate(self, row) -> bool:
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO eval_candidates (
+                    schema_version, tool_name, query, retrieved_keys, retrieved_scores,
+                    memory_types, latency_ms, detail, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """,
+                row.schema_version,
+                row.tool_name,
+                row.query,
+                json.dumps(row.retrieved_keys),
+                json.dumps(row.retrieved_scores),
+                json.dumps(row.memory_types),
+                row.latency_ms,
+                json.dumps(row.detail),
+                row.created_at,
+            )
+        return True
+
+    async def list_eval_candidates(self, since: float | None = None, limit: int | None = None):
+        if not self._initialized:
+            await self.init()
+        params: list[Any] = []
+        sql = "SELECT * FROM eval_candidates"
+        if since is not None:
+            params.append(float(since))
+            sql += f" WHERE created_at >= ${len(params)}"
+        sql += " ORDER BY created_at ASC, id ASC"
+        if limit is not None:
+            params.append(int(limit))
+            sql += f" LIMIT ${len(params)}"
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [self._eval_row_to_capture(row) for row in rows]
+
+    def _eval_row_to_capture(self, row):
+        from bilinc.eval.capture import EvalCaptureRow
+
+        def as_list(value):
+            if isinstance(value, str):
+                return json.loads(value or "[]")
+            return list(value or [])
+
+        detail = row["detail"]
+        if isinstance(detail, str):
+            detail = json.loads(detail or "{}")
+        return EvalCaptureRow(
+            schema_version=int(row["schema_version"]),
+            tool_name=row["tool_name"],
+            query=row["query"],
+            retrieved_keys=[str(value) for value in as_list(row["retrieved_keys"])],
+            retrieved_scores=[float(value) for value in as_list(row["retrieved_scores"])],
+            memory_types=[str(value) for value in as_list(row["memory_types"])],
+            latency_ms=int(row["latency_ms"]),
+            created_at=float(row["created_at"]),
+            detail=dict(detail or {}),
+        )
+
     async def load(self, key: str) -> Optional[MemoryEntry]:
         if not self._initialized:
             await self.init()
@@ -194,8 +439,42 @@ class PostgresBackend(StorageBackend):
         if not self._initialized:
             await self.init()
         async with self.pool.acquire() as conn:
-            result = await conn.execute("DELETE FROM bilinc_entries WHERE key = $1", key)
+            async with conn.transaction():
+                await conn.execute("DELETE FROM bilinc_claims WHERE memory_key = $1", key)
+                result = await conn.execute("DELETE FROM bilinc_entries WHERE key = $1", key)
             return result == "DELETE 1"
+
+    async def delete_claims_for_memory_key(self, memory_key: str) -> int:
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            result = await conn.execute("DELETE FROM bilinc_claims WHERE memory_key = $1", memory_key)
+        return int(result.split()[-1])
+
+    async def deactivate_claims_for_memory_key(self, memory_key: str, keep_ids: list[str] | None = None) -> int:
+        if not self._initialized:
+            await self.init()
+        keep_ids = keep_ids or []
+        async with self.pool.acquire() as conn:
+            if keep_ids:
+                result = await conn.execute(
+                    """
+                    UPDATE bilinc_claims
+                    SET active = false, updated_at = $1
+                    WHERE memory_key = $2 AND NOT (id = ANY($3::text[]))
+                    """,
+                    time.time(),
+                    memory_key,
+                    keep_ids,
+                )
+            else:
+                result = await conn.execute(
+                    "UPDATE bilinc_claims SET active = false, updated_at = $1 WHERE memory_key = $2",
+                    time.time(),
+                    memory_key,
+                )
+        return int(result.split()[-1])
+
     async def list_all(self) -> List[MemoryEntry]:
         if not self._initialized:
             await self.init()
