@@ -1223,11 +1223,53 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
         })
 
     previous_entry = await plane.backend.load(key) if plane.backend else None
-    entry = MemoryEntry(key=key, value=value, importance=importance, memory_type=MemoryType.SEMANTIC)
+    previous_belief = plane.agm_engine.belief_state.get_belief(key)
+    base_entry = previous_entry or previous_belief
+
+    if base_entry is not None:
+        entry_data: Dict[str, Any] = base_entry.to_dict()
+        metadata = dict(base_entry.metadata) if isinstance(base_entry.metadata, dict) else {}
+    else:
+        entry_data = {
+            "key": key,
+            "memory_type": args.get("memory_type", MemoryType.SEMANTIC.value),
+            "metadata": {},
+        }
+        metadata = {}
+
+    metadata.update(_build_metadata(args))
+    entry_data.update({
+        "key": key,
+        "value": value,
+        "importance": importance,
+        "memory_type": args.get("memory_type", entry_data.get("memory_type", MemoryType.SEMANTIC.value)),
+        "metadata": metadata,
+        "updated_at": time.time(),
+    })
+
+    if "source" in args:
+        entry_data["source"] = args.get("source") or ""
+    if "session_id" in args:
+        entry_data["session_id"] = args.get("session_id") or ""
+    if "ttl" in args:
+        ttl = args.get("ttl")
+        entry_data["ttl"] = float(ttl) if ttl is not None else None
+        entry_data["invalid_at"] = time.time() + float(ttl) if ttl is not None else None
+
+    entry = MemoryEntry.from_dict(entry_data)
     if hasattr(plane, "_apply_entry_verification"):
         plane._apply_entry_verification(entry)
     result = plane.agm_engine.revise(entry, strategy=strategy)
     winning_entry = plane.agm_engine.belief_state.get_belief(key)
+
+    if result.success and winning_entry and entry.value == winning_entry.value and entry.to_dict() != winning_entry.to_dict():
+        # AGM treats identical values as a no-op, but MCP revise can still carry
+        # explicit metadata/provenance/ttl/claims corrections that must persist.
+        plane.agm_engine.belief_state.add_belief(entry)
+        if key not in result.affected_keys:
+            result.affected_keys.append(key)
+        result.new_beliefs[key] = entry
+        winning_entry = entry
 
     if result.success and winning_entry and hasattr(plane, "knowledge_graph") and plane.knowledge_graph:
         plane.knowledge_graph.ingest_memory_entry(winning_entry)
@@ -1244,6 +1286,8 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
                 "message": f"backend save returned false for key '{key}'",
                 "conflicts_resolved": result.conflicts_resolved,
             })
+        if hasattr(plane, "_project_claims_for_entry"):
+            await plane._project_claims_for_entry(winning_entry)
         if plane.enable_audit and plane.audit:
             previous_state = previous_entry.to_dict() if previous_entry else None
             next_state = winning_entry.to_dict()
