@@ -143,11 +143,11 @@ StatePlane
 
 | Benchmark | Score | Notes |
 | --- | ---: | --- |
-| LongMemEval | historical repo run: 98.0% | Do not claim as freshly reproducible unless `longmemeval_s_cleaned.json` is present locally |
-| ConvoMem | 98.0% | 5 categories, real recall pipeline |
+| LongMemEval-s | 98.0% R@5 | Fresh 2026-05-17 full 500-question run, no LLM reranker / no paid API |
+| ConvoMem | 98.0% | 5 categories, repository recall pipeline |
 | LoCoMo | 90.3% | Temporal, causal, and multi-hop recall |
 
-These are repository benchmark records, not hosted-service claims. Fresh claims require the relevant fixture files and captured command output. Evidence-aware recall verification and public-safe wording live in [`docs/evidence-aware-recall.md`](docs/evidence-aware-recall.md); current sprint evidence receipts are under `benchmarks/results/`.
+Benchmark receipts and public-safe competitive positioning live under `benchmarks/results/`, including the 2026-05-17 LongMemEval competitive report. These are benchmark records, not hosted-service claims; public comparisons must preserve metric scope because competitor scores mix retrieval R@5 and LLM-involved task accuracy.
 
 ## Comparison
 
