@@ -112,6 +112,9 @@ def main():
     # Recall
     p_recall = sub.add_parser("recall", help="Recall memories")
     p_recall.add_argument("--key", help="Specific memory key")
+    p_recall.add_argument("--query", help="Run profile-based semantic recall query")
+    p_recall.add_argument("--profile", choices=["fast", "balanced", "verified", "deep"], default="balanced")
+    p_recall.add_argument("--json", action="store_true", help="Print full JSON payload for query recall")
     p_recall.add_argument("--limit", type=int, default=20)
 
     # Forget
@@ -248,7 +251,23 @@ def _run_recall(plane, backend, args, backend_type: str):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                if args.key:
+                if getattr(args, "query", None):
+                    payload = loop.run_until_complete(
+                        plane.recall_profiled(args.query, profile=args.profile, limit=args.limit)
+                    )
+                    payload["tool"] = "recall"
+                    payload["backend"] = backend_type
+                    if args.json:
+                        print(json.dumps(payload, indent=2, default=str))
+                    else:
+                        print(json.dumps({
+                            "tool": "recall",
+                            "profile": payload.get("profile"),
+                            "count": len(payload.get("results", [])),
+                            "results": payload.get("results", []),
+                            "backend": backend_type,
+                        }, indent=2, default=str))
+                elif args.key:
                     entries = loop.run_until_complete(plane.recall(key=args.key))
                     if entries:
                         entry = entries[0]
@@ -277,7 +296,20 @@ def _run_recall(plane, backend, args, backend_type: str):
                 loop.close()
         else:
             # In-memory mode: read from working memory
-            if args.key:
+            if getattr(args, "query", None):
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    payload = loop.run_until_complete(
+                        plane.recall_profiled(args.query, profile=args.profile, limit=args.limit)
+                    )
+                    payload["tool"] = "recall"
+                    payload["backend"] = backend_type
+                    print(json.dumps(payload, indent=2, default=str))
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(None)
+            elif args.key:
                 entry = plane.working_memory.get(args.key) if hasattr(plane, 'working_memory') else None
                 if entry:
                     print(json.dumps({"found": True, "key": entry.key, "value": entry.value}, indent=2, default=str))

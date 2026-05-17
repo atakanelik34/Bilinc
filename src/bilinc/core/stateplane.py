@@ -531,6 +531,87 @@ class StatePlane:
             self._record_failure("recall_intelligent", start_time, exc, query_len=len(query or ""))
             raise
 
+    def resolve_recall_profile(self, profile: Optional[str] = None) -> Dict[str, Any]:
+        """Resolve named recall quality/cost/safety profiles without changing defaults."""
+        profiles: Dict[str, Dict[str, Any]] = {
+            "fast": {
+                "name": "fast",
+                "max_reflections": 0,
+                "adequacy_threshold": 0.0,
+                "include_claims": False,
+                "include_contradictions": False,
+            },
+            "balanced": {
+                "name": "balanced",
+                "max_reflections": 2,
+                "adequacy_threshold": 0.55,
+                "include_claims": False,
+                "include_contradictions": False,
+            },
+            "verified": {
+                "name": "verified",
+                "max_reflections": 2,
+                "adequacy_threshold": 0.7,
+                "include_claims": True,
+                "include_contradictions": True,
+            },
+            "deep": {
+                "name": "deep",
+                "max_reflections": 4,
+                "adequacy_threshold": 0.75,
+                "include_claims": True,
+                "include_contradictions": True,
+            },
+        }
+        name = (profile or "balanced").strip().lower()
+        if name not in profiles:
+            raise ValueError(f"unknown recall profile: {profile}")
+        return dict(profiles[name])
+
+    async def recall_profiled(
+        self,
+        query: str,
+        profile: Optional[str] = None,
+        limit: int = 10,
+        memory_types: Optional[List[MemoryType]] = None,
+        max_reflections: Optional[int] = None,
+        adequacy_threshold: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Run recall with a named profile and attach optional read-only evidence metadata."""
+        resolved = self.resolve_recall_profile(profile)
+        if max_reflections is not None:
+            resolved["max_reflections"] = max(0, int(max_reflections))
+        if adequacy_threshold is not None:
+            resolved["adequacy_threshold"] = max(0.0, min(1.0, float(adequacy_threshold)))
+        payload = await self.recall_reflective(
+            query,
+            limit=limit,
+            max_reflections=resolved["max_reflections"],
+            adequacy_threshold=resolved["adequacy_threshold"],
+            memory_types=memory_types,
+        )
+        payload["profile"] = resolved["name"]
+        payload["recall_profile"] = resolved
+        payload["read_only"] = True
+        if resolved.get("include_claims"):
+            payload["evidence"] = await self._recall_profile_evidence(payload.get("results", []), resolved)
+        return payload
+
+    async def _recall_profile_evidence(self, results: List[Dict[str, Any]], profile: Dict[str, Any]) -> Dict[str, Any]:
+        evidence: Dict[str, Any] = {"claims": [], "contradictions": {"count": 0, "findings": []}}
+        if not self.backend or not hasattr(self.backend, "list_claims"):
+            return evidence
+        keys = {str(item.get("key")) for item in results if isinstance(item, dict) and item.get("key") is not None}
+        claims = await self.backend.list_claims(active=True, limit=1000)
+        selected = [claim for claim in claims if claim.memory_key in keys]
+        evidence["claims"] = [claim.to_dict() for claim in selected]
+        if profile.get("include_contradictions") and selected:
+            from bilinc.eval.contradictions import ContradictionReport, detect_claim_contradictions
+
+            findings = detect_claim_contradictions(selected)
+            evidence["contradictions"] = ContradictionReport.from_findings(findings).to_dict()
+        return evidence
+
     async def recall_reflective(
         self,
         query: str,

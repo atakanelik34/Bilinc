@@ -1353,6 +1353,39 @@ Final verification:
 Remaining caveat:
 - Full repo ruff still reports pre-existing unrelated lint issues in legacy files outside the changed-path gate.
 
+### Sprint 4 Recall Profiles — 2026-05-17 12:50 +03
+
+Changed files:
+- `src/bilinc/core/stateplane.py`
+- `src/bilinc/mcp_server/server_v2.py`
+- `src/bilinc/cli/main.py`
+- `tests/test_recall_profiles.py`
+
+Implemented:
+- Named recall profiles: `fast`, `balanced`, `verified`, and `deep`.
+- `StatePlane.resolve_recall_profile()` with stable profile parameters.
+- `StatePlane.recall_profiled()` wrapping reflective recall without changing default legacy calls.
+- `fast` profile disables reflection loop.
+- `verified`/`deep` profiles attach read-only evidence metadata from projected claims and contradiction reports where available.
+- MCP `bilinc_recall_smart` accepts `profile` while preserving explicit legacy `max_reflections`/`adequacy_threshold` behavior when no profile is supplied.
+- CLI `bilinc recall --query ... --profile ... --json` emits full profile metadata and results.
+
+Verification:
+- RED first: `python3 -m pytest tests/test_recall_profiles.py -q` → 5 failing tests for missing resolver/profiled recall/MCP profile/CLI args.
+- Independent review found two high-risk issues before commit: verified/deep evidence could disclose contradiction details from unrecalled same-subject memories, and MCP `profile` could override explicit `max_reflections`/`adequacy_threshold` when clients sent a default profile.
+- Added RED regression tests for both blockers: evidence scope leak and explicit-parameter precedence failed before fixes.
+- GREEN: `python3 -m pytest tests/test_recall_profiles.py -q` → `7 passed in 0.89s`.
+- Related suite: `python3 -m pytest tests/test_recall_profiles.py tests/test_eval_contradictions.py tests/test_claims.py tests/test_core.py tests/test_mcp_server_v2.py -q` → `86 passed in 2.15s`.
+- Full suite: `python3 -m pytest -q` → `303 passed, 5 skipped in 53.63s`.
+- Changed-path ruff: `python3 -m ruff check src/bilinc/core/stateplane.py src/bilinc/mcp_server/server_v2.py src/bilinc/cli/main.py tests/test_recall_profiles.py` → `All checks passed!`.
+- `git diff --check` → clean.
+- `python3 -m build` → built `bilinc-1.2.5.tar.gz` and `bilinc-1.2.5-py3-none-any.whl`.
+- Adversarial SQLite/MCP probe for recalled-key-scoped evidence, no unrecalled object/key leakage, MCP explicit-parameter precedence, and build smoke → `{"contradiction_count": 0, "leaks_unrecalled_key": false, "leaks_unrecalled_object": false, "mcp_adequacy_threshold": 0.99, "mcp_max_reflections": 0, "mcp_queries_tried_len": 1, "ok": true, "result_keys": ["mem:target"]}`.
+
+Caveats:
+- Profile evidence uses deterministic projected claims only; no LLM/provider-backed judging was added.
+- No live `/Users/busecimen/bilinc.db` mutation was performed during Sprint 4.
+
 ### Sprint 3 Read-Only Contradiction Probe — 2026-05-17 11:38 +03
 
 Changed files:

@@ -519,6 +519,7 @@ def _create_server_v2(
                         "limit": {"type": "integer", "default": 10},
                         "max_reflections": {"type": "integer", "default": 2},
                         "adequacy_threshold": {"type": "number", "default": 0.55},
+                        "profile": {"type": "string", "enum": ["fast", "balanced", "verified", "deep"]},
                         "memory_types": {
                             "type": "array",
                             "items": {"type": "string", "enum": ["episodic", "procedural", "semantic", "working", "spatial"]},
@@ -1583,6 +1584,7 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
         return _result_text({"tool": "bilinc_recall_smart", "success": False, "error": "query is required"})
     started_at = time.perf_counter()
     limit = int(args.get("limit", 10))
+    profile = args.get("profile")
     max_reflections = int(args.get("max_reflections", 2))
     adequacy_threshold = float(args.get("adequacy_threshold", 0.55))
     raw_types = args.get("memory_types") or []
@@ -1592,13 +1594,25 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
             memory_types.append(MemoryType(mt))
         except Exception:
             continue
-    payload = await plane.recall_reflective(
-        query=query,
-        limit=limit,
-        max_reflections=max_reflections,
-        adequacy_threshold=adequacy_threshold,
-        memory_types=memory_types or None,
-    )
+    if profile:
+        payload = await plane.recall_profiled(
+            query=query,
+            profile=profile,
+            limit=limit,
+            memory_types=memory_types or None,
+            max_reflections=args.get("max_reflections") if "max_reflections" in args else None,
+            adequacy_threshold=args.get("adequacy_threshold") if "adequacy_threshold" in args else None,
+        )
+        max_reflections = int(payload.get("max_reflections", max_reflections))
+        adequacy_threshold = float(payload.get("adequacy_threshold", adequacy_threshold))
+    else:
+        payload = await plane.recall_reflective(
+            query=query,
+            limit=limit,
+            max_reflections=max_reflections,
+            adequacy_threshold=adequacy_threshold,
+            memory_types=memory_types or None,
+        )
     if hasattr(plane, "_record_eval_capture"):
         await plane._record_eval_capture(
             tool_name="bilinc_recall_smart",
@@ -1612,6 +1626,7 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
                 "reflections_used": payload.get("reflections_used", 0),
                 "adequacy": payload.get("adequacy"),
                 "queries_tried": payload.get("queries_tried", []),
+                "profile": payload.get("profile"),
             },
         )
     payload["tool"] = "bilinc_recall_smart"
