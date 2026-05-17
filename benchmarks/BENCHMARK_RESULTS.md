@@ -5,24 +5,24 @@
 - Per-type: Knowledge Update 100%, Single-Session 100%, Multi-Session 99.2%, Assistant 96.4%, Temporal 96.2%, Preference 93.3%
 
 ## ConvoMem (New)
-- **Overall: 96.0%** (10 queries, FTS5 + hybrid recall)
+- **Overall: 98.0%** (10 queries, FTS5 + hybrid recall)
 - fact_recall: 100%
 - preference: 100%
 - temporal: 100%
-- entity_linking: 80% (1 miss: qnbehond/$300k keyword normalization)
+- entity_linking: 90% (1 miss: `$300k` normalization)
 - multi_hop: 100%
 
 ## LoCoMo (New)
-- **Overall: 85.8%** (11 queries, FTS5 + hybrid recall)
-- temporal_inference: 89.6%
+- **Overall: 90.35%** (11 queries, FTS5 + hybrid recall)
+- temporal_inference: 97.92%
 - multi_hop: 83.3%
 - causal: 100%
-- long_range: 62.5%
+- long_range: 75.0%
 
 ## Score Progression
 ```
-ConvoMem: 17.5% → 63% → 72% → 76% → 86% → 96%
-LoCoMo:    9.1% → 37% → 58% → 70% → 79% → 85.8%
+ConvoMem: 17.5% → 63% → 72% → 76% → 86% → 96% → 98%
+LoCoMo:    9.1% → 37% → 58% → 70% → 79% → 85.8% → 90.35%
 ```
 
 ## Recall Architecture
@@ -33,6 +33,11 @@ LoCoMo:    9.1% → 37% → 58% → 70% → 79% → 85.8%
   + Decay-aware reranking + temporal boost + importance + access frequency
 
 ## Remaining Gaps
-- LoCoMo long_range: 62.5% (needs temporal reasoning integration)
-- el_001: "qnbehond" keyword normalization issue
-- lr_002: "synaptiai" needs alias handling
+- LoCoMo long_range: 75.0% (`lr_001` misses `yes`, `memory`)
+- LoCoMo multi_hop: 83.3% (`mh_001` misses `trust`, `rearc`)
+- ConvoMem entity_linking: 90.0% (`el_001` misses `$300k`)
+
+## Current Source Artifacts
+- `benchmarks/results/convomem_results.json`
+- `benchmarks/results/locomo_results.json`
+- `benchmarks/results/longmemeval_results.json`
