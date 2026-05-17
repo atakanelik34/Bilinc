@@ -1386,6 +1386,50 @@ Caveats:
 - Profile evidence uses deterministic projected claims only; no LLM/provider-backed judging was added.
 - No live `/Users/busecimen/bilinc.db` mutation was performed during Sprint 4.
 
+### Sprint 5 Entity/Backlink Projection + Sprint 6 Public-Safe Package — 2026-05-17 13:11 +03
+
+Changed files:
+- `README.md`
+- `benchmarks/results/2026-05-17-evidence-aware-recall.md`
+- `docs/evidence-aware-recall.md`
+- `docs/superpowers/plans/2026-05-17-bilinc-evidence-aware-recall-claim-layer.md`
+- `src/bilinc/core/entities.py`
+- `src/bilinc/core/stateplane.py`
+- `src/bilinc/storage/sqlite.py`
+- `tests/test_entities.py`
+
+Implemented:
+- Additive SQLite `entities` and `entity_mentions` projection tables.
+- `Entity` and `EntityMention` projection models with stable IDs.
+- Deterministic entity extraction from explicit metadata `entities`, metadata `relations`, and structured claim holder/subject fields.
+- Conservative bounded proper-noun fallback only for semantic text.
+- Best-effort entity projection after `StatePlane.commit`; source memory remains canonical.
+- Source update cleanup: stale entity mentions for the same `memory_key` are removed before reprojecting.
+- Source delete cleanup: deleting a memory removes projected claims and entity mentions.
+- Entity projection contributes bounded direct recall boost in `recall_intelligent` when a query matches a canonical entity name or alias.
+- Public-safe evidence docs and benchmark receipt explaining reproduction commands and the missing LongMemEval fixture caveat.
+
+Verification:
+- RED first: `python3 -m pytest tests/test_entities.py -q` failed with `ModuleNotFoundError: No module named 'bilinc.core.entities'` before implementation.
+- GREEN first pass: `python3 -m pytest tests/test_entities.py -q` → `10 passed in 0.21s`.
+- Independent review found one release-blocking issue and one high issue before merge: orphaned `entities` rows could retain private canonical names/aliases/metadata after source update/delete, and README still implied LongMemEval was freshly reproducible from current repo fixtures despite the fixture being absent.
+- Added RED blocker regressions for orphaned entity cleanup and relation-suppressed heuristic extraction: `python3 -m pytest tests/test_entities.py -q` → `4 failed, 9 passed` before fixes.
+- Fixed orphan pruning after entity mention deletion, source delete, and source update; fixed relation metadata to suppress proper-noun fallback; tightened README benchmark wording.
+- GREEN: `python3 -m pytest tests/test_entities.py -q` → `13 passed in 0.15s`.
+- Focused post-fix suite: `python3 -m pytest tests/test_entities.py tests/test_claims.py tests/test_knowledge_graph.py tests/test_core.py -q` → `79 passed in 0.89s`.
+- Related post-fix suite: `python3 -m pytest tests/test_eval_capture.py tests/test_eval_replay.py tests/test_claims.py tests/test_eval_contradictions.py tests/test_recall_profiles.py tests/test_entities.py tests/test_knowledge_graph.py tests/test_core.py tests/test_sqlite_integration.py tests/test_mcp_server_v2.py -q` → `167 passed in 2.38s`.
+- Full suite: `python3 -m pytest -q` → `316 passed, 5 skipped in 53.23s`.
+- Changed-path ruff: `python3 -m ruff check src/bilinc/core/entities.py src/bilinc/core/stateplane.py src/bilinc/storage/sqlite.py tests/test_entities.py` → `All checks passed!`.
+- `git diff --check` → clean.
+- `python3 -m build` → built `bilinc-1.2.5.tar.gz` and `bilinc-1.2.5-py3-none-any.whl`.
+- Second independent post-fix review: no release-blocking/high-risk issues found. Reviewer reran `tests/test_entities.py` (`13 passed`), related suite (`167 passed`), ruff, `git diff --check`, and a custom SQLite/privacy probe proving old entity canonical names/aliases/metadata are pruned after source update/delete and relation metadata suppresses proper-noun fallback.
+
+Caveats:
+- Sprint 5 entity extraction is conservative and deterministic; no LLM/provider extraction was added.
+- Sprint 6 does not claim a fresh LongMemEval score because `longmemeval_s_cleaned.json` is absent from this checkout.
+- Public publication still requires Atakan approval.
+- No live `/Users/busecimen/bilinc.db` mutation was performed during implementation.
+
 ### Sprint 3 Read-Only Contradiction Probe — 2026-05-17 11:38 +03
 
 Changed files:

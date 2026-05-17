@@ -300,6 +300,7 @@ class StatePlane:
 
             self._ops_count += 1
             await self._project_claims_for_entry(entry)
+            await self._project_entities_for_entry(entry)
             self._record_success(
                 "commit",
                 start_time,
@@ -396,6 +397,32 @@ class StatePlane:
                 await self.backend.deactivate_claims_for_memory_key(entry.key, keep_ids=keep_ids)
         except Exception:
             logger.debug("claim projection failed", exc_info=True)
+
+    async def _project_entities_for_entry(self, entry: MemoryEntry) -> None:
+        """Best-effort deterministic entity/backlink projection. Never breaks commit."""
+        if not self.backend or not hasattr(self.backend, "save_entity"):
+            return
+        try:
+            from bilinc.core.entities import Entity, entity_from_raw, extract_entities_from_entry
+
+            if hasattr(self.backend, "delete_entity_mentions_for_memory_key"):
+                await self.backend.delete_entity_mentions_for_memory_key(entry.key)
+
+            mentions = extract_entities_from_entry(entry)
+            metadata_entities = entry.metadata.get("entities", []) if isinstance(entry.metadata, dict) else []
+            raw_entities = metadata_entities if isinstance(metadata_entities, list) else [metadata_entities]
+            explicit_by_id = {}
+            for raw_entity in raw_entities:
+                entity = entity_from_raw(raw_entity)
+                if entity:
+                    explicit_by_id[entity.id] = entity
+
+            for mention in mentions:
+                entity = explicit_by_id.get(mention.entity_id) or Entity(canonical_name=mention.mention_text)
+                await self.backend.save_entity(entity)
+                await self.backend.save_entity_mention(mention)
+        except Exception:
+            logger.debug("entity projection failed", exc_info=True)
 
     async def recall(self, key: Optional[str] = None, memory_type: Optional[MemoryType] = None, limit: int = 50) -> List[MemoryEntry]:
         start_time = time.perf_counter()
@@ -1011,15 +1038,69 @@ class StatePlane:
             return []
 
     def _compute_entity_boosts(self, query: str, candidates: Dict[str, MemoryEntry]) -> Dict[str, float]:
-        if not hasattr(self, "knowledge_graph") or not self.knowledge_graph:
-            return {key: 0.0 for key in candidates}
-        boosts: Dict[str, float] = {}
-        for key in candidates:
-            try:
-                boosts[key] = float(self.knowledge_graph.compute_entity_overlap_boost(query, key))
-            except Exception:
-                boosts[key] = 0.0
+        boosts: Dict[str, float] = {key: 0.0 for key in candidates}
+        if hasattr(self, "knowledge_graph") and self.knowledge_graph:
+            for key in candidates:
+                try:
+                    boosts[key] = float(self.knowledge_graph.compute_entity_overlap_boost(query, key))
+                except Exception:
+                    boosts[key] = 0.0
+
+        for memory_key, boost in self._entity_projection_boosts(query, set(candidates.keys())).items():
+            boosts[memory_key] = min(1.0, boosts.get(memory_key, 0.0) + boost)
         return boosts
+
+    def _entity_projection_boosts(self, query: str, candidate_keys: set[str]) -> Dict[str, float]:
+        conn = self._sqlite_connection()
+        if conn is None or not query.strip():
+            return {}
+        normalized_seeds = {" ".join(seed.lower().split()) for seed in self._entity_seed_phrases(query)}
+        if not normalized_seeds:
+            return {}
+        boosts: Dict[str, float] = {}
+        try:
+            entity_rows = conn.execute("SELECT id, canonical_name, aliases FROM entities").fetchall()
+        except Exception:
+            return {}
+        entity_ids: set[str] = set()
+        for row in entity_rows:
+            names = [row["canonical_name"]]
+            try:
+                names.extend(json.loads(row["aliases"] or "[]"))
+            except Exception:
+                pass
+            normalized_names = {" ".join(str(name).lower().split()) for name in names if str(name).strip()}
+            if normalized_names & normalized_seeds:
+                entity_ids.add(row["id"])
+        for entity_id in list(entity_ids)[:5]:
+            try:
+                rows = conn.execute(
+                    "SELECT DISTINCT memory_key FROM entity_mentions WHERE entity_id = ? LIMIT 20",
+                    (entity_id,),
+                ).fetchall()
+            except Exception:
+                continue
+            for row in rows:
+                memory_key = row["memory_key"]
+                if memory_key in candidate_keys:
+                    boosts[memory_key] = min(1.0, boosts.get(memory_key, 0.0) + 0.6)
+        return boosts
+
+    def _entity_seed_phrases(self, query: str) -> List[str]:
+        query = (query or "").strip()
+        if not query:
+            return []
+        phrases = [query]
+        tokens = self._tokenize_query(query)
+        phrases.extend(token for token in tokens if len(token) >= 3)
+        seen = set()
+        out: List[str] = []
+        for phrase in phrases[:10]:
+            key = phrase.lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(phrase)
+        return out
 
     def _apply_rrf_signal(
         self,
@@ -1174,7 +1255,10 @@ class StatePlane:
                 await self._restore_backend_entry(restored_entry)
                 if hasattr(self.backend, "delete_claims_for_memory_key"):
                     await self.backend.delete_claims_for_memory_key(key)
+                if hasattr(self.backend, "delete_entity_mentions_for_memory_key"):
+                    await self.backend.delete_entity_mentions_for_memory_key(key)
                 await self._project_claims_for_entry(restored_entry)
+                await self._project_entities_for_entry(restored_entry)
                 self.working_memory.remove(key)
 
                 if self.enable_audit and self.audit:
