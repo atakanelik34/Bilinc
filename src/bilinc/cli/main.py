@@ -121,6 +121,24 @@ def main():
     # Status
     sub.add_parser("status", help="Show operational statistics")
 
+    # Eval
+    p_eval = sub.add_parser("eval", help="Retrieval eval capture/replay commands")
+    eval_sub = p_eval.add_subparsers(dest="eval_command", required=True)
+    p_eval_export = eval_sub.add_parser("export", help="Export captured retrieval eval rows as JSONL")
+    p_eval_export.add_argument("--since", help="Only export rows since duration like 7d/12h or unix timestamp")
+    p_eval_export.add_argument("--limit", type=int, help="Maximum rows to export")
+    p_eval_replay = eval_sub.add_parser("replay", help="Replay captured retrieval eval rows against current recall")
+    p_eval_replay.add_argument("--against", required=True, help="Baseline JSONL file")
+    p_eval_replay.add_argument("--limit", type=int, help="Maximum rows to replay")
+    p_eval_contradictions = eval_sub.add_parser("contradictions", help="Run read-only contradiction probe over projected claims")
+    p_eval_contradictions.add_argument("--query", help="Recall query to probe")
+    p_eval_contradictions.add_argument("--queries", help="File containing one recall query per line")
+    p_eval_contradictions.add_argument("--top-k", type=int, default=5, help="Recall results per query when probing by query")
+    p_eval_contradictions.add_argument("--holder", help="Filter claims by holder")
+    p_eval_contradictions.add_argument("--subject", help="Filter claims by subject/entity")
+    p_eval_contradictions.add_argument("--limit", type=int, default=1000, help="Maximum active claims to inspect")
+    p_eval_contradictions.add_argument("--json", action="store_true", help="Print JSON report")
+
     # Hermes
     hermes = sub.add_parser("hermes", help="Hermes integration commands")
     hermes_sub = hermes.add_subparsers(dest="hermes_command", required=True)
@@ -161,6 +179,9 @@ def main():
 
     elif args.command == "status":
         _run_status(plane, backend, backend_type)
+
+    elif args.command == "eval":
+        _run_eval(plane, backend, args, backend_type)
 
     elif args.command == "hermes":
         _run_hermes(args)
@@ -345,6 +366,104 @@ def _run_status(plane, backend, backend_type: str):
         print(json.dumps(status, indent=2, default=str))
     except Exception as e:
         print(json.dumps(_structured_error_payload(e, "status_failed"), indent=2), file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_since(value: str | None):
+    if not value:
+        return None
+    text = value.strip().lower()
+    try:
+        if text.endswith("d"):
+            return __import__("time").time() - float(text[:-1]) * 86400
+        if text.endswith("h"):
+            return __import__("time").time() - float(text[:-1]) * 3600
+        if text.endswith("m"):
+            return __import__("time").time() - float(text[:-1]) * 60
+        return float(text)
+    except ValueError as exc:
+        raise ValueError(f"invalid --since value: {value}") from exc
+
+
+def _run_eval(plane, backend, args, backend_type: str):
+    """Run retrieval eval export/replay commands."""
+    try:
+        if args.eval_command == "export":
+            if not backend or not hasattr(backend, "list_eval_candidates"):
+                raise RuntimeError(f"eval export requires SQLite backend, got {backend_type}")
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                rows = loop.run_until_complete(
+                    backend.list_eval_candidates(since=_parse_since(args.since), limit=args.limit)
+                )
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+            from bilinc.eval.capture import row_to_jsonl
+
+            for row in rows:
+                print(row_to_jsonl(row), end="")
+            return
+
+        if args.eval_command == "replay":
+            from bilinc.eval.capture import row_from_jsonl
+            from bilinc.eval.replay import replay_rows
+
+            with open(args.against, encoding="utf-8") as handle:
+                rows = [row_from_jsonl(line) for line in handle if line.strip()]
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                report = loop.run_until_complete(replay_rows(plane, rows, limit=args.limit))
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+            print(json.dumps(report.to_dict(), indent=2, default=str))
+            return
+
+        if args.eval_command == "contradictions":
+            if not backend or not hasattr(backend, "list_claims"):
+                raise RuntimeError(f"eval contradictions requires claim storage, got {backend_type}")
+            queries = []
+            if args.query:
+                queries.append(args.query)
+            if args.queries:
+                with open(args.queries, encoding="utf-8") as handle:
+                    queries.extend(line.strip() for line in handle if line.strip())
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                if queries:
+                    from bilinc.eval.contradictions import probe_claim_contradictions_for_queries
+
+                    report = loop.run_until_complete(
+                        probe_claim_contradictions_for_queries(plane, queries, top_k=args.top_k)
+                    )
+                    payload = report.to_dict()
+                else:
+                    claims = loop.run_until_complete(
+                        backend.list_claims(
+                            holder=args.holder,
+                            subject=args.subject,
+                            active=True,
+                            limit=args.limit,
+                        )
+                    )
+                    from bilinc.eval.contradictions import ContradictionReport, detect_claim_contradictions
+
+                    findings = detect_claim_contradictions(claims)
+                    payload = ContradictionReport.from_findings(findings).to_dict()
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+            payload.update({"tool": "eval_contradictions", "success": True, "read_only": True})
+            print(json.dumps(payload, indent=2, default=str))
+            return
+
+        raise RuntimeError(f"unknown eval command: {args.eval_command}")
+    except Exception as e:
+        print(json.dumps(_structured_error_payload(e, "eval_failed"), indent=2), file=sys.stderr)
         sys.exit(1)
 
 

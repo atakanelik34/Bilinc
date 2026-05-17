@@ -36,7 +36,7 @@ async def backend():
 
 async def _truncate(backend: PostgresBackend) -> None:
     async with backend.pool.acquire() as conn:
-        await conn.execute("TRUNCATE TABLE bilinc_entries")
+        await conn.execute("TRUNCATE TABLE bilinc_entries, bilinc_claims")
 
 
 @pytest.mark.asyncio

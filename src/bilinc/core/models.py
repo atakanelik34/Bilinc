@@ -3,9 +3,10 @@ Core data models for Bilinc. Phase 1 update (v0.2.0).
 Brain-inspired 5-type memory taxonomy with full provenance tracking.
 """
 from __future__ import annotations
-import uuid, json, time
+import time
+import uuid
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from dataclasses import dataclass, field, asdict
 
 
@@ -50,6 +51,59 @@ class CCSDimension(str, Enum):
     CONSTRAINTS = "constraints"
     PREDICTIVE = "predictive"
     UNCERTAINTY = "uncertainty"
+
+
+class ClaimKind(str, Enum):
+    FACT = "fact"
+    BELIEF = "belief"
+    PREFERENCE = "preference"
+    COMMITMENT = "commitment"
+    PREDICTION = "prediction"
+    HUNCH = "hunch"
+
+
+@dataclass
+class Claim:
+    """Derived epistemic claim projection linked back to a memory entry."""
+    memory_key: str
+    holder: str
+    subject: str
+    claim: str
+    kind: ClaimKind = ClaimKind.FACT
+    confidence: float = 0.5
+    id: str = ""
+    valid_at: Optional[float] = None
+    invalid_at: Optional[float] = None
+    source: str = ""
+    provenance_id: str = ""
+    active: bool = True
+    superseded_by: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    def __post_init__(self):
+        if not isinstance(self.kind, ClaimKind):
+            self.kind = ClaimKind(str(self.kind))
+        self.confidence = max(0.0, min(1.0, float(self.confidence)))
+        if not self.provenance_id:
+            self.provenance_id = self.memory_key
+        if not self.id:
+            from bilinc.core.claims import claim_id_for
+
+            self.id = claim_id_for(self.memory_key, self.claim, self.holder, self.subject)
+
+    def to_dict(self):
+        data = asdict(self)
+        data["kind"] = self.kind.value
+        return data
+
+    @classmethod
+    def from_dict(cls, data):
+        payload = dict(data)
+        if "kind" in payload:
+            payload["kind"] = ClaimKind(payload["kind"])
+        return cls(**{k: v for k, v in payload.items() if k in cls.__dataclass_fields__})
 
 
 @dataclass

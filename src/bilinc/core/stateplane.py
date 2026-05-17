@@ -16,16 +16,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import time, json
+import json
+import time
 from typing import Any, Dict, List, Optional
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.working_memory import WorkingMemory
 from bilinc.core.confidence import ConfidenceEstimator
 from bilinc.core.dual_process import System1Engine, System2Engine, Arbiter
-from bilinc.core.verifier import StateVerifier, VerificationResult
+from bilinc.core.verifier import StateVerifier
 from bilinc.core.audit import AuditTrail, OpType
 from bilinc.core.decay import compute_new_strength, should_prune
-from bilinc.storage.backend import StorageBackend
 from bilinc.observability.metrics import MetricsCollector
 from bilinc.observability.health import HealthCheck
 from bilinc.observability.logging import log_event
@@ -299,6 +299,7 @@ class StatePlane:
                 )
 
             self._ops_count += 1
+            await self._project_claims_for_entry(entry)
             self._record_success(
                 "commit",
                 start_time,
@@ -349,7 +350,53 @@ class StatePlane:
     def recall_all_sync(self):
         """Synchronous recall of all entries from working memory. For in-memory/test use."""
         return self.working_memory.get_all()
-    
+
+    async def _record_eval_capture(
+        self,
+        *,
+        tool_name: str,
+        query: str,
+        results: List[Any],
+        started_at: float,
+        detail: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Best-effort opt-in retrieval capture. Never breaks recall."""
+        if not self.backend or not hasattr(self.backend, "record_eval_candidate"):
+            return
+        try:
+            from bilinc.eval.capture import capture_enabled, row_from_results
+
+            if not capture_enabled():
+                return
+            if getattr(self, "_suppress_eval_capture", False):
+                return
+            row = row_from_results(
+                tool_name=tool_name,
+                query=query,
+                results=results,
+                latency_ms=int((time.perf_counter() - started_at) * 1000),
+                detail=detail,
+            )
+            await self.backend.record_eval_candidate(row)
+        except Exception:
+            logger.debug("eval capture failed", exc_info=True)
+
+    async def _project_claims_for_entry(self, entry: MemoryEntry) -> None:
+        """Best-effort deterministic claim projection. Never breaks commit."""
+        if not self.backend or not hasattr(self.backend, "save_claim"):
+            return
+        try:
+            from bilinc.core.claims import extract_claims_from_entry
+
+            claims = extract_claims_from_entry(entry)
+            keep_ids = [claim.id for claim in claims]
+            for claim in claims:
+                await self.backend.save_claim(claim)
+            if hasattr(self.backend, "deactivate_claims_for_memory_key"):
+                await self.backend.deactivate_claims_for_memory_key(entry.key, keep_ids=keep_ids)
+        except Exception:
+            logger.debug("claim projection failed", exc_info=True)
+
     async def recall(self, key: Optional[str] = None, memory_type: Optional[MemoryType] = None, limit: int = 50) -> List[MemoryEntry]:
         start_time = time.perf_counter()
         try:
@@ -372,6 +419,13 @@ class StatePlane:
                 key=key,
                 memory_type=memory_type.value if hasattr(memory_type, "value") else memory_type,
                 result_count=len(results),
+            )
+            await self._record_eval_capture(
+                tool_name="recall",
+                query=key or (memory_type.value if hasattr(memory_type, "value") else str(memory_type or "")),
+                results=results,
+                started_at=start_time,
+                detail={"key": key, "memory_type": memory_type.value if hasattr(memory_type, "value") else memory_type, "limit": limit},
             )
             return results
         except Exception as exc:
@@ -1037,6 +1091,9 @@ class StatePlane:
 
                 restored_entry = self._coerce_audit_state_entry(key, target_entry_dict)
                 await self._restore_backend_entry(restored_entry)
+                if hasattr(self.backend, "delete_claims_for_memory_key"):
+                    await self.backend.delete_claims_for_memory_key(key)
+                await self._project_claims_for_entry(restored_entry)
                 self.working_memory.remove(key)
 
                 if self.enable_audit and self.audit:
@@ -1261,7 +1318,6 @@ class StatePlane:
         Async variant of commit_with_agm that keeps backend, verification, AGM,
         knowledge graph, and audit trail synchronized. Supports Hermes metadata.
         """
-        start_time = time.perf_counter()
         try:
             entry = MemoryEntry(
                 key=key,
@@ -1296,6 +1352,7 @@ class StatePlane:
                         raise PersistenceWriteError(
                             f"persistence_write_failed: backend save returned false for key '{key}'"
                         )
+                    await self._project_claims_for_entry(entry)
 
                 if self.enable_audit and self.audit and result.success:
                     self.audit.log(
@@ -1305,7 +1362,6 @@ class StatePlane:
                         after_value=entry.to_dict(),
                     )
 
-                duration = time.perf_counter() - start_time
                 return result
             else:
                 # Fallback mode
@@ -1315,9 +1371,9 @@ class StatePlane:
                         raise PersistenceWriteError(
                             f"persistence_write_failed: backend save returned false for key '{key}'"
                         )
-                duration = time.perf_counter() - start_time
+                    await self._project_claims_for_entry(entry)
                 return entry
-        except Exception as exc:
+        except Exception:
             if hasattr(self, 'metrics') and self.metrics:
                 self.metrics.increment("commit_with_agm_errors")
             raise
