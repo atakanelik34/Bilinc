@@ -11,6 +11,7 @@ from bilinc.mcp_server.server_v2 import (
     _handle_claims_list,
     _handle_claims_search,
     _handle_commit_mem,
+    _handle_revise,
 )
 from bilinc.storage.postgres import PostgresBackend
 from bilinc.storage.sqlite import SQLiteBackend
@@ -278,6 +279,87 @@ async def test_mcp_commit_mem_projects_claims(tmp_path):
 
     assert payload["success"] is True
     assert [claim.claim for claim in claims] == ["MCP projects claims"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_revise_reprojects_claims_and_deactivates_stale_claims(tmp_path):
+    plane = await make_temp_plane(tmp_path)
+
+    seed = text_payload(await _handle_commit_mem(
+        plane,
+        {
+            "key": "mem:mcp-revise",
+            "value": "source",
+            "memory_type": "semantic",
+            "importance": 0.2,
+            "metadata": {
+                "claims": [{"holder": "atakan", "subject": "Bilinc", "claim": "Bilinc tier paid", "kind": "fact"}]
+            },
+        },
+    ))
+    assert seed["success"] is True
+
+    revised = text_payload(await _handle_revise(
+        plane,
+        {
+            "key": "mem:mcp-revise",
+            "value": "source revised",
+            "importance": 0.3,
+            "strategy": "recency",
+            "metadata": {
+                "claims": [{"holder": "atakan", "subject": "Bilinc", "claim": "Bilinc tier free", "kind": "fact"}]
+            },
+        },
+    ))
+
+    active = await plane.backend.list_claims(subject="Bilinc", active=True)
+    inactive = await plane.backend.list_claims(subject="Bilinc", active=False)
+
+    assert revised["success"] is True
+    assert [claim.claim for claim in active] == ["Bilinc tier free"]
+    assert [claim.claim for claim in inactive] == ["Bilinc tier paid"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_revise_same_value_reprojects_explicit_metadata_claims(tmp_path):
+    plane = await make_temp_plane(tmp_path)
+
+    seed = text_payload(await _handle_commit_mem(
+        plane,
+        {
+            "key": "mem:mcp-revise-same",
+            "value": "source",
+            "memory_type": "semantic",
+            "importance": 0.2,
+            "metadata": {
+                "claims": [{"holder": "atakan", "subject": "Bilinc", "claim": "Bilinc tier paid", "kind": "fact"}]
+            },
+        },
+    ))
+    assert seed["success"] is True
+
+    revised = text_payload(await _handle_revise(
+        plane,
+        {
+            "key": "mem:mcp-revise-same",
+            "value": "source",
+            "importance": 0.3,
+            "strategy": "recency",
+            "metadata": {
+                "claims": [{"holder": "atakan", "subject": "Bilinc", "claim": "Bilinc tier free", "kind": "fact"}],
+                "custom": "updated",
+            },
+        },
+    ))
+
+    active = await plane.backend.list_claims(subject="Bilinc", active=True)
+    inactive = await plane.backend.list_claims(subject="Bilinc", active=False)
+    stored = await plane.backend.load("mem:mcp-revise-same")
+
+    assert revised["success"] is True
+    assert [claim.claim for claim in active] == ["Bilinc tier free"]
+    assert [claim.claim for claim in inactive] == ["Bilinc tier paid"]
+    assert stored.metadata["custom"] == "updated"
 
 
 @pytest.mark.asyncio

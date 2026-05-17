@@ -423,6 +423,79 @@ class TestPhase8Tools:
         assert fetch_res["success"] is True
         assert fetch_res["count"] >= 2
 
+    def test_revise_preserves_existing_entry_type_metadata_ttl_and_provenance(self, phase8_plane: StatePlane):
+        _call(_handle_commit_mem, phase8_plane, {
+            "key": "revise_preserve",
+            "value": "before",
+            "memory_type": "episodic",
+            "importance": 0.2,
+            "metadata": {"event_id": "release-2", "custom": "kept"},
+            "source": "test-source",
+            "session_id": "session-1",
+            "canonical": True,
+            "priority": 0.7,
+            "ttl": 3600,
+        })
+
+        result = _call(_handle_revise, phase8_plane, {
+            "key": "revise_preserve",
+            "value": "after",
+            "importance": 0.3,
+            "strategy": "recency",
+        })
+        assert result["success"] is True
+
+        recall = _call(_handle_recall, phase8_plane, {"key": "revise_preserve"})
+        entry = recall["entries"][0]
+        assert entry["value"] == "after"
+        assert entry["memory_type"] == "episodic"
+        assert entry["source"] == "test-source"
+        assert entry["session_id"] == "session-1"
+        assert entry["ttl"] == 3600
+        assert entry["invalid_at"] is not None
+        assert entry["metadata"]["event_id"] == "release-2"
+        assert entry["metadata"]["custom"] == "kept"
+        assert entry["metadata"]["canonical"] is True
+        assert entry["metadata"]["priority"] == 0.7
+        assert entry["metadata"]["previous_value"] == "'before'"
+
+    def test_event_segment_retrieve_keeps_revised_segmented_key(self, phase8_plane: StatePlane):
+        _call(_handle_commit_mem, phase8_plane, {
+            "key": "ev_revised",
+            "value": "before",
+            "memory_type": "episodic",
+            "metadata": {"custom": "kept"},
+            "ttl": 3600,
+        })
+        create_res = _call(_handle_bilinc_event_segment, phase8_plane, {
+            "action": "create",
+            "event_id": "release-3",
+            "keys": ["ev_revised"],
+        })
+        assert create_res["success"] is True
+        assert create_res["updated"] == 1
+
+        revise_res = _call(_handle_revise, phase8_plane, {
+            "key": "ev_revised",
+            "value": "after",
+            "importance": 0.4,
+            "strategy": "recency",
+        })
+        assert revise_res["success"] is True
+
+        fetch_res = _call(_handle_bilinc_event_segment, phase8_plane, {
+            "action": "retrieve",
+            "event_id": "release-3",
+        })
+        assert fetch_res["success"] is True
+        assert fetch_res["count"] == 1
+        entry = fetch_res["entries"][0]
+        assert entry["key"] == "ev_revised"
+        assert entry["value"] == "after"
+        assert entry["memory_type"] == "episodic"
+        assert entry["ttl"] == 3600
+        assert entry["metadata"]["custom"] == "kept"
+
     def test_summarize_tool(self, phase8_plane: StatePlane):
         for idx in range(6):
             _call(_handle_commit_mem, phase8_plane, {
