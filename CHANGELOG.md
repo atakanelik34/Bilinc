@@ -2,6 +2,15 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased] — 2026-05-17
+
+### Added
+- Evidence-aware recall package on `main`: opt-in retrieval capture/replay, structured attributed claims, read-only contradiction probes, named recall profiles, and conservative entity/backlink projection.
+- Public-safe evidence documentation and refreshed LongMemEval competitive benchmark artifacts.
+
+### Changed
+- README architecture asset and benchmark framing refreshed to reflect the current `main` capability set.
+
 ## [1.2.5] — 2026-05-09
 
 ### Changed
