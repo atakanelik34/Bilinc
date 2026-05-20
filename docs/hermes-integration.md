@@ -1,5 +1,7 @@
 # Hermes Integration Guide
 
+> Legacy/private runtime note: this guide describes the pre-2.0 local Hermes MCP integration. Bilinc 2.0 on PyPI uses the hosted `bilinc.cloud_mcp` adapter and `BILINC_API_KEY`.
+
 Bilinc can run as Hermes' durable MCP memory layer with a one-command bootstrap.
 
 ## Install (10 minutes)

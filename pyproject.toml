@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bilinc"
-version = "1.2.5"
-description = "Verifiable State Plane for Autonomous Agents"
+version = "2.0.0"
+description = "Cloud-only memory SDK and MCP adapter for autonomous agents"
 readme = "README.md"
 license = "BUSL-1.1"
 authors = [{name = "Bilinc Team"}]
@@ -33,9 +33,6 @@ classifiers = [
 
 dependencies = [
     "mcp>=1.0.0,<2.0",
-    "pydantic>=2.0,<3.0",
-    "z3-solver>=4.12.0,<5.0",
-    "networkx>=3.0,<4.0",
 ]
 
 [project.optional-dependencies]
@@ -47,20 +44,12 @@ dev = [
     "mypy>=1.0,<2.0",
     "ruff>=0.1,<1.0",
 ]
-postgres = [
-    "asyncpg>=0.29,<1.0",
-    "pgvector>=0.2,<1.0",
-]
-server = [
-    "fastapi>=0.110,<1.0",
-    "uvicorn>=0.27,<1.0",
-]
-
 [project.scripts]
 bilinc = "bilinc.cli.main:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["bilinc", "bilinc.cli"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

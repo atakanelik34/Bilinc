@@ -1,5 +1,7 @@
 # Operator Runbook
 
+> Legacy/private runtime note: this runbook describes operating the local StatePlane/runtime stack. Bilinc 2.0 on PyPI is cloud-only and exposes SDK, CLI, and MCP adapter calls against hosted Bilinc Cloud.
+
 This runbook covers the supported Bilinc deployment surfaces in the current production gate.
 
 ## Deployment Modes

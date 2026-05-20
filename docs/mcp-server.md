@@ -1,5 +1,7 @@
 # MCP Server Reference
 
+> Legacy/private runtime note: this document describes the pre-2.0 local MCP server and StatePlane runtime. Bilinc 2.0 on PyPI ships only the hosted Cloud SDK, CLI, and `bilinc.cloud_mcp` adapter.
+
 Bilinc exposes full memory functionality via **Model Context Protocol (MCP)**, enabling any MCP-compatible agent (Claude Code, Cursor, OpenClaw, VS Code Copilot) to use Bilinc as a cross-tool memory layer.
 
 ## Quick Start

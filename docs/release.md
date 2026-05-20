@@ -48,14 +48,19 @@ python -c "import bilinc; print(bilinc.__version__)"
 ## Pre-publish Smoke
 
 ```bash
-bilinc --db ./tmp.db commit --key smoke_key --value hello
-bilinc --db ./tmp.db recall --key smoke_key
+export BILINC_API_KEY=bil_live_...
+bilinc --version
+bilinc signup
+bilinc status
+bilinc commit --key smoke_key --value '{"hello":"world"}'
+bilinc recall --query smoke_key
 ```
 
-HTTP deployment smoke:
+Hosted API smoke:
 
-- authenticated `/health`
-- authenticated `/metrics`
+- authenticated `GET /api/cloud/health`
+- authenticated `POST /api/cloud/memory/commit`
+- authenticated `POST /api/cloud/memory/recall`
 
 ## Publish
 
@@ -70,8 +75,8 @@ HTTP deployment smoke:
 3. Import smoke:
 
 ```bash
-python -c "import bilinc; print(bilinc.__version__)"
-python -c "from bilinc import StatePlane; print(type(StatePlane()).__name__)"
+python -c "import bilinc; print(bilinc.version)"
+python -c "from bilinc import CloudClient, Bilinc; print(CloudClient is Bilinc)"
 ```
 
 4. If HTTP surface is part of the release notes, verify:
