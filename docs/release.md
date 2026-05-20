@@ -81,5 +81,5 @@ python -c "from bilinc import CloudClient, Bilinc; print(CloudClient is Bilinc)"
 
 4. If HTTP surface is part of the release notes, verify:
    - authenticated requests succeed and unauthenticated ones fail
-   - `/health` returns readiness/liveness
-   - `/metrics` exposes `bilinc_` metrics
+   - `GET /api/cloud/health` returns the hosted Cloud health envelope
+   - `POST /api/cloud/memory/commit` and `POST /api/cloud/memory/recall` are smoke-tested only with approved live credentials
