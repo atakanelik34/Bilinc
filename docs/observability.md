@@ -1,5 +1,7 @@
 # Observability Guide
 
+> Legacy/private runtime note: this document describes local runtime observability. Bilinc 2.0 on PyPI exposes hosted Cloud status through the SDK/CLI and does not ship in-process health or metrics internals.
+
 Bilinc exposes lightweight in-process observability for both embedded use and HTTP deployments.
 
 ## Health Model
