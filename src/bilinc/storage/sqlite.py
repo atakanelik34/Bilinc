@@ -715,10 +715,20 @@ class SQLiteBackend(StorageBackend):
             self._conn.close()
             self._conn = None
     
+    @staticmethod
+    def _decode_value(raw: Optional[str]):
+        """Decode stored JSON values, accepting legacy raw text rows as strings."""
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+
     def _row_to_entry(self, row: sqlite3.Row) -> MemoryEntry:
         return MemoryEntry(
             id=row["id"], memory_type=MemoryType(row["memory_type"]),
-            key=row["key"], value=json.loads(row["value"]) if row["value"] is not None else None,
+            key=row["key"], value=self._decode_value(row["value"]),
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
             ccs_dimensions=json.loads(row["ccs_dimensions"]) if row["ccs_dimensions"] else {},
             source=row["source"] or "", session_id=row["session_id"] or "",

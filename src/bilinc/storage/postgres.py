@@ -520,10 +520,21 @@ class PostgresBackend(StorageBackend):
                 "schema_version": version_row["version"] if version_row else 0,
                 "dsn": _redact_dsn(self.dsn),
             }
+    @staticmethod
+    def _decode_value(raw):
+        """Decode stored JSON values, accepting legacy raw text rows as strings."""
+        if raw is None:
+            return None
+        import json
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+
     def _row_to_entry(self, row) -> MemoryEntry:
         """Convert database row to MemoryEntry."""
         import json
-        value = json.loads(row["value"]) if row["value"] else None
+        value = self._decode_value(row["value"])
         metadata = json.loads(row.get("metadata", "{}")) if row.get("metadata") else {}
         ccs_json = json.loads(row.get("ccs_dimensions", "{}")) if row.get("ccs_dimensions") else {}
         return MemoryEntry(
