@@ -2,7 +2,29 @@
 
 All notable changes to Bilinc.
 
-## [Unreleased] — 2026-05-17
+## [Unreleased]
+
+No unreleased changes yet.
+
+## [2.0.0] — 2026-05-20
+
+### Changed
+- Repositioned the public PyPI package as a cloud-only SDK, CLI, and MCP adapter for hosted Bilinc Cloud.
+- Public imports now expose `CloudClient`, `Bilinc`, `BilincApiKeyRequired`, and `BilincCloudError`; `Bilinc` is an alias for `CloudClient`.
+- `bilinc` CLI now supports hosted `signup`, `commit`, `recall`, and `status` flows using `BILINC_API_KEY`.
+- `bilinc.cloud_mcp` is the public MCP adapter entrypoint for hosted commit, recall, and status.
+- Release gates, CI, examples, and public docs now validate the cloud-only package boundary.
+
+### Removed
+- Local `StatePlane`, SQLite/PostgreSQL storage backends, local MCP server internals, eval, observability, integrations, adaptive, retrieval, security, and jobs packages from the public wheel and sdist.
+- Heavy local runtime dependencies from the public install path.
+
+### Notes
+- Bilinc 2.0 sends durable memory operations to hosted Bilinc Cloud endpoints.
+- Start a 7-day trial at `https://bilinc.space/signup`, create an API key, then set `BILINC_API_KEY`.
+- Legacy/private runtime documentation remains labeled as legacy/private and is not the Bilinc 2.0 PyPI quickstart.
+
+## [1.2.6-main] — 2026-05-17
 
 ### Added
 - Evidence-aware recall package on `main`: opt-in retrieval capture/replay, structured attributed claims, read-only contradiction probes, named recall profiles, and conservative entity/backlink projection.
