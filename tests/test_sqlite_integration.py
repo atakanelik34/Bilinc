@@ -148,6 +148,53 @@ class TestSQLiteBackendCRUD:
         _run(b.close())
 
 
+class TestSQLiteLegacyValueCompatibility:
+    def test_stateplane_init_treats_legacy_raw_text_value_as_string(self, tmp_db_path: str):
+        """Legacy/plain-text SQLite values should not crash semantic preload."""
+        b = _make_backend(tmp_db_path)
+        assert b._conn is not None
+        now = time.time()
+        b._conn.execute(
+            """
+            INSERT INTO memories (
+                id, key, memory_type, value, metadata, ccs_dimensions,
+                source, session_id, created_at, updated_at,
+                last_accessed, access_count, is_verified, verification_score,
+                verification_method, importance, decay_rate, current_strength
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-raw-id",
+                "legacy_raw_value",
+                MemoryType.SEMANTIC.value,
+                "raw text captured before JSON encoding was enforced",
+                "{}",
+                "{}",
+                "legacy-import",
+                "",
+                now,
+                now,
+                0.0,
+                0,
+                0,
+                0.0,
+                "",
+                0.9,
+                0.01,
+                1.0,
+            ),
+        )
+        b._conn.commit()
+
+        plane = StatePlane(backend=b, enable_verification=False, enable_audit=False)
+        _run(plane.init())
+        loaded = _run(b.load("legacy_raw_value"))
+
+        assert loaded is not None
+        assert loaded.value == "raw text captured before JSON encoding was enforced"
+        _run(b.close())
+
+
 class TestSQLitePersistenceAcrossProcesses:
     """Test that data persists across separate CLI invocations."""
 
