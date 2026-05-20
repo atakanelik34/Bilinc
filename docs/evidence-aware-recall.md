@@ -1,5 +1,7 @@
 # Evidence-Aware Recall + Claim Layer
 
+> Legacy/private runtime note: this document covers repository/runtime internals and benchmark evidence. Bilinc 2.0 on PyPI does not ship the local eval, storage, or StatePlane implementation described here.
+
 Status: implemented in repository code, with public claims limited to local/repository verification.
 
 This package adds a deterministic evidence layer around Bilinc recall without requiring an LLM provider:

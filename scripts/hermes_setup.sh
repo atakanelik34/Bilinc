@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
-BILINC_DB_PATH="${BILINC_DB_PATH:-$HOME/bilinc.db}"
+cat >&2 <<'EOF'
+[bilinc] scripts/hermes_setup.sh is a legacy local-runtime helper.
+[bilinc] Bilinc 2.0 on PyPI is cloud-only and does not ship the old Hermes bootstrap command.
+[bilinc] Use the hosted MCP adapter instead:
 
-echo "[bilinc] Hermes bootstrap starting..."
-echo "[bilinc] hermes_home=$HERMES_HOME"
-echo "[bilinc] db_path=$BILINC_DB_PATH"
+  export BILINC_API_KEY=bil_live_...
+  python3 -m bilinc.cloud_mcp
 
-python3 -m bilinc.cli.main hermes bootstrap \
-  --hermes-home "$HERMES_HOME" \
-  --db-path "$BILINC_DB_PATH" \
-  "$@"
+EOF
+
+exit 1
