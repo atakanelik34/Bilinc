@@ -20,6 +20,7 @@ import json
 import time
 from typing import Any, Dict, List, Optional
 from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core.event_ledger import EventOperation
 from bilinc.core.working_memory import WorkingMemory
 from bilinc.core.confidence import ConfidenceEstimator
 from bilinc.core.dual_process import System1Engine, System2Engine, Arbiter
@@ -277,6 +278,14 @@ class StatePlane:
                     if self.enable_audit and self.audit:
                         self.audit.log(OpType.CONSOLIDATE, evicted.key,
                                        before_value=evicted.to_dict(), metadata={"auto_evicted": True})
+                    await self._append_memory_event(
+                        operation=EventOperation.CONSOLIDATE.value,
+                        subject=evicted.key,
+                        memory_key=evicted.key,
+                        memory_type=evicted.memory_type.value if hasattr(evicted.memory_type, "value") else str(evicted.memory_type),
+                        after_value=evicted.to_dict(),
+                        payload_json={"auto_evicted": True},
+                    )
                 if self._should_auto_consolidate_working():
                     await self.consolidate()
             else:
@@ -301,6 +310,21 @@ class StatePlane:
             self._ops_count += 1
             await self._project_claims_for_entry(entry)
             await self._project_entities_for_entry(entry)
+            ledger_operation = EventOperation.REVISE.value if previous_entry else EventOperation.COMMIT.value
+            await self._append_memory_event(
+                operation=ledger_operation,
+                subject=key,
+                memory_key=key,
+                memory_type=memory_type.value if hasattr(memory_type, "value") else str(memory_type),
+                before_value=previous_entry.to_dict() if previous_entry else None,
+                after_value=entry.to_dict(),
+                payload_json={
+                    "metadata": entry.metadata,
+                    "source": entry.source,
+                    "session_id": entry.session_id,
+                    "request_id": (entry.metadata or {}).get("request_id") if isinstance(entry.metadata, dict) else None,
+                },
+            )
             self._record_success(
                 "commit",
                 start_time,
@@ -351,6 +375,15 @@ class StatePlane:
     def recall_all_sync(self):
         """Synchronous recall of all entries from working memory. For in-memory/test use."""
         return self.working_memory.get_all()
+
+    async def _append_memory_event(self, **kwargs) -> None:
+        """Best-effort semantic event ledger append; never breaks existing runtime operations."""
+        if not self.backend or not hasattr(self.backend, "append_memory_event"):
+            return
+        try:
+            await self.backend.append_memory_event(**kwargs)
+        except Exception:
+            logger.debug("memory event ledger append failed", exc_info=True)
 
     async def _record_eval_capture(
         self,
@@ -726,6 +759,12 @@ class StatePlane:
                                    before_value={"type": "working"}, after_value=e.to_dict())
                 count += 1
         await self.summarize_episodic_sessions()
+        if count:
+            await self._append_memory_event(
+                operation=EventOperation.CONSOLIDATE.value,
+                subject=f"consolidate:{int(time.time())}",
+                payload_json={"consolidated_count": count, "memory_keys": [e.key for e in ready]},
+            )
         return count
 
     async def apply_decay_pass(self, now: Optional[float] = None, prune: bool = True) -> Dict[str, int]:
@@ -1375,6 +1414,12 @@ class StatePlane:
                 "integrity": self.audit.verify_integrity() if self.enable_audit else None,
                 "ops_count": self._ops_count,
             }
+            await self._append_memory_event(
+                operation=EventOperation.SNAPSHOT.value,
+                subject=f"snapshot:{int(result['timestamp'])}",
+                payload_json={"total_entries": total, "by_type": by_type, "ops_count": self._ops_count},
+                checkpoint_root=result.get("root_hash"),
+            )
             self._record_success("snapshot", start_time, total_entries=total)
             return result
         except Exception as exc:
@@ -1403,6 +1448,14 @@ class StatePlane:
                     before_value=existing.to_dict() if existing else (wm_entry.to_dict() if wm_entry else None),
                     metadata={"deleted": result},
                 )
+            await self._append_memory_event(
+                operation=EventOperation.FORGET.value,
+                subject=key,
+                memory_key=key,
+                memory_type=(existing.memory_type.value if existing and hasattr(existing.memory_type, "value") else None),
+                before_value=existing.to_dict() if existing else (wm_entry.to_dict() if wm_entry else None),
+                payload_json={"deleted": result},
+            )
             self._record_success("forget", start_time, key=key, removed=result)
             return result
         except Exception as exc:
@@ -1518,6 +1571,20 @@ class StatePlane:
                             f"persistence_write_failed: backend save returned false for key '{key}'"
                         )
                     await self._project_claims_for_entry(entry)
+                    await self._append_memory_event(
+                        operation=EventOperation.REVISE.value if previous_entry else EventOperation.COMMIT.value,
+                        subject=key,
+                        memory_key=key,
+                        memory_type=entry.memory_type.value if hasattr(entry.memory_type, "value") else str(entry.memory_type),
+                        before_value=previous_entry.to_dict() if previous_entry else None,
+                        after_value=entry.to_dict(),
+                        payload_json={
+                            "metadata": entry.metadata,
+                            "source": entry.source,
+                            "session_id": entry.session_id,
+                            "agm_success": True,
+                        },
+                    )
 
                 if self.enable_audit and self.audit and result.success:
                     self.audit.log(
@@ -1531,12 +1598,22 @@ class StatePlane:
             else:
                 # Fallback mode
                 if self.backend:
+                    previous_entry = await self.backend.load(key)
                     saved = await self.backend.save(entry)
                     if not saved:
                         raise PersistenceWriteError(
                             f"persistence_write_failed: backend save returned false for key '{key}'"
                         )
                     await self._project_claims_for_entry(entry)
+                    await self._append_memory_event(
+                        operation=EventOperation.REVISE.value if previous_entry else EventOperation.COMMIT.value,
+                        subject=key,
+                        memory_key=key,
+                        memory_type=entry.memory_type.value if hasattr(entry.memory_type, "value") else str(entry.memory_type),
+                        before_value=previous_entry.to_dict() if previous_entry else None,
+                        after_value=entry.to_dict(),
+                        payload_json={"metadata": entry.metadata, "source": entry.source, "session_id": entry.session_id},
+                    )
                 return entry
         except Exception:
             if hasattr(self, 'metrics') and self.metrics:
