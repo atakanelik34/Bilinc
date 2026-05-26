@@ -18,6 +18,7 @@ __all__ = [
     "ContextAssembler", "ContextBundle", "ContextSection",
     "SalienceEngine", "SalienceDecision", "MemoryWriteProposal", "WritebackRouter",
     "CognitiveWorkspace", "TurnFrame",
+    "MemoryEvent", "EventOperation", "export_events_jsonl", "replay_events_summary",
 ]
 
 # Lazy imports for all core classes
@@ -58,6 +59,10 @@ _IMPORTS = {
     "WritebackRouter": "bilinc.core.salience",
     "CognitiveWorkspace": "bilinc.core.cognitive_workspace",
     "TurnFrame": "bilinc.core.cognitive_workspace",
+    "MemoryEvent": "bilinc.core.event_ledger",
+    "EventOperation": "bilinc.core.event_ledger",
+    "export_events_jsonl": "bilinc.core.event_ledger",
+    "replay_events_summary": "bilinc.core.event_ledger",
 }
 # Models are lightweight, always import
 from bilinc.core.models import MemoryType, MemoryEntry, BeliefState, CCSDimension
