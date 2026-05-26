@@ -11,8 +11,8 @@ import pytest
 def test_public_api_is_cloud_only():
     import bilinc
 
-    assert bilinc.__version__ == "2.0.0"
-    assert bilinc.version == "2.0.0"
+    assert bilinc.__version__ == "2.1.1"
+    assert bilinc.version == "2.1.1"
     assert hasattr(bilinc, "Bilinc")
     assert hasattr(bilinc, "CloudClient")
     assert not hasattr(bilinc, "StatePlane")
@@ -64,7 +64,7 @@ def test_cloud_client_commit_posts_to_hosted_api():
             "headers": {
                 "Authorization": "Bearer bil_live_test",
                 "Content-Type": "application/json",
-                "User-Agent": "bilinc-python/2.0.0",
+                "User-Agent": "bilinc-python/2.1.1",
             },
             "body": json.dumps(
                 {
@@ -111,7 +111,7 @@ def test_cloud_client_status_reads_hosted_health_endpoint():
             "url": "https://bilinc.space/api/cloud/health",
             "headers": {
                 "Authorization": "Bearer bil_live_test",
-                "User-Agent": "bilinc-python/2.0.0",
+                "User-Agent": "bilinc-python/2.1.1",
             },
             "body": None,
             "timeout": 30.0,

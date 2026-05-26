@@ -2,7 +2,7 @@
 
 Cloud-only memory SDK and MCP adapter for autonomous agents.
 
-Bilinc 2.0 on PyPI is intentionally thin: it does not ship the local StatePlane, storage backends, evaluation harness, or server internals. The public package connects agents to hosted Bilinc Cloud at https://bilinc.space.
+Bilinc 2.x on PyPI is intentionally thin: it does not ship the local StatePlane, storage backends, evaluation harness, or server internals. The public package connects agents to hosted Bilinc Cloud at https://bilinc.space.
 
 ```bash
 pip install bilinc
@@ -55,7 +55,7 @@ All commands use `BILINC_API_KEY` unless `--api-key` is passed explicitly.
 }
 ```
 
-## What is included in 2.0
+## What is included
 
 - `bilinc.CloudClient`
 - `bilinc.Bilinc` alias
