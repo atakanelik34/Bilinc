@@ -16,6 +16,7 @@ __all__ = [
     "VectorStore", "HybridSearch",
     # Cognitive runtime
     "ContextAssembler", "ContextBundle", "ContextSection",
+    "SalienceEngine", "SalienceDecision", "MemoryWriteProposal", "WritebackRouter",
 ]
 
 # Lazy imports for all core classes
@@ -50,6 +51,10 @@ _IMPORTS = {
     "ContextAssembler": "bilinc.core.context_assembler",
     "ContextBundle": "bilinc.core.context_assembler",
     "ContextSection": "bilinc.core.context_assembler",
+    "SalienceEngine": "bilinc.core.salience",
+    "SalienceDecision": "bilinc.core.salience",
+    "MemoryWriteProposal": "bilinc.core.salience",
+    "WritebackRouter": "bilinc.core.salience",
 }
 # Models are lightweight, always import
 from bilinc.core.models import MemoryType, MemoryEntry, BeliefState, CCSDimension
