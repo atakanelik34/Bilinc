@@ -1,0 +1,454 @@
+"""SQLite integration tests for Bilinc persistent storage."""
+import asyncio
+import json
+import os
+import tempfile
+import time
+from pathlib import Path
+from typing import Generator
+
+import pytest
+
+from bilinc.core.stateplane import StatePlane
+from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.mcp_server.server_v2 import (
+    _handle_commit_mem,
+    _handle_forget,
+    _handle_recall,
+    _handle_revise,
+    _handle_verify,
+)
+from bilinc.storage.sqlite import SQLiteBackend
+
+
+@pytest.fixture
+def tmp_db_path() -> Generator[str, None, None]:
+    """Create a temporary database file path (no file created, just name)."""
+    with tempfile.TemporaryDirectory() as td:
+        yield os.path.join(td, "test.db")
+
+
+def _run(coro):
+    """Helper to run async code in sync tests."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def _make_backend(path: str) -> SQLiteBackend:
+    """Create and initialize a backend (sync)."""
+    b = SQLiteBackend(db_path=path)
+    _run(b.init())
+    return b
+
+
+def _parse_mcp_result(result):
+    return json.loads(result[0].text)
+
+
+# ── Backend Init Tests ─────────────────────────────────
+
+
+class TestSQLiteBackendInit:
+    def test_creates_db_file(self, tmp_db_path: str):
+        assert not os.path.exists(tmp_db_path)
+        _make_backend(tmp_db_path)
+        assert os.path.exists(tmp_db_path)
+
+    def test_init_is_idempotent(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        _run(b.init())  # second call should succeed
+        assert b._conn is not None
+        _run(b.close())
+
+    def test_creates_schema_version_table(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        row = b._conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+        assert row is not None
+        assert row["version"] == 1
+        _run(b.close())
+
+    def test_schema_version_recorded(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        stats = _run(b.stats())
+        assert stats["schema_version"] == 1
+        _run(b.close())
+
+    def test_wal_mode_enabled(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        row = b._conn.execute("PRAGMA journal_mode").fetchone()
+        assert row[0] == "wal"
+        _run(b.close())
+
+
+class TestSQLiteBackendCRUD:
+    def test_save_and_load(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        entry = MemoryEntry(key="test_key", value={"hello": "world"}, memory_type=MemoryType.SEMANTIC)
+        assert _run(b.save(entry))
+        loaded = _run(b.load("test_key"))
+        assert loaded is not None
+        assert loaded.key == "test_key"
+        assert loaded.value == {"hello": "world"}
+        _run(b.close())
+
+    def test_load_nonexistent_returns_none(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        assert _run(b.load("nonexistent")) is None
+        _run(b.close())
+
+    def test_delete_existing(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        _run(b.save(MemoryEntry(key="del_key", value="val", memory_type=MemoryType.SEMANTIC)))
+        assert _run(b.delete("del_key")) is True
+        assert _run(b.load("del_key")) is None
+        _run(b.close())
+
+    def test_delete_nonexistent_returns_false(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        assert _run(b.delete("nonexistent")) is False
+        _run(b.close())
+
+    def test_update_existing_key(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        _run(b.save(MemoryEntry(key="update_key", value="v1", memory_type=MemoryType.SEMANTIC)))
+        _run(b.save(MemoryEntry(key="update_key", value="v2", memory_type=MemoryType.SEMANTIC)))
+        loaded = _run(b.load("update_key"))
+        assert loaded.value == "v2"
+        _run(b.close())
+
+    def test_load_by_type(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        _run(b.save(MemoryEntry(key="k1", value="v1", memory_type=MemoryType.EPISODIC)))
+        _run(b.save(MemoryEntry(key="k2", value="v2", memory_type=MemoryType.SEMANTIC)))
+        _run(b.save(MemoryEntry(key="k3", value="v3", memory_type=MemoryType.EPISODIC)))
+        results = _run(b.load_by_type(MemoryType.EPISODIC))
+        assert len(results) == 2
+        keys = {r.key for r in results}
+        assert keys == {"k1", "k3"}
+        _run(b.close())
+
+    def test_list_all(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        for i in range(5):
+            _run(b.save(MemoryEntry(key=f"key_{i}", value=f"val_{i}", memory_type=MemoryType.SEMANTIC)))
+        all_entries = _run(b.list_all())
+        assert len(all_entries) == 5
+        _run(b.close())
+
+    def test_stats(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        _run(b.save(MemoryEntry(key="s1", value="v1", memory_type=MemoryType.SEMANTIC)))
+        _run(b.save(MemoryEntry(key="e1", value="v2", memory_type=MemoryType.EPISODIC)))
+        stats = _run(b.stats())
+        assert stats["total_entries"] == 2
+        assert stats["schema_version"] == 1
+        _run(b.close())
+
+
+class TestSQLiteLegacyValueCompatibility:
+    def test_stateplane_init_treats_legacy_raw_text_value_as_string(self, tmp_db_path: str):
+        """Legacy/plain-text SQLite values should not crash semantic preload."""
+        b = _make_backend(tmp_db_path)
+        assert b._conn is not None
+        now = time.time()
+        b._conn.execute(
+            """
+            INSERT INTO memories (
+                id, key, memory_type, value, metadata, ccs_dimensions,
+                source, session_id, created_at, updated_at,
+                last_accessed, access_count, is_verified, verification_score,
+                verification_method, importance, decay_rate, current_strength
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-raw-id",
+                "legacy_raw_value",
+                MemoryType.SEMANTIC.value,
+                "raw text captured before JSON encoding was enforced",
+                "{}",
+                "{}",
+                "legacy-import",
+                "",
+                now,
+                now,
+                0.0,
+                0,
+                0,
+                0.0,
+                "",
+                0.9,
+                0.01,
+                1.0,
+            ),
+        )
+        b._conn.commit()
+
+        plane = StatePlane(backend=b, enable_verification=False, enable_audit=False)
+        _run(plane.init())
+        loaded = _run(b.load("legacy_raw_value"))
+
+        assert loaded is not None
+        assert loaded.value == "raw text captured before JSON encoding was enforced"
+        _run(b.close())
+
+
+class TestSQLitePersistenceAcrossProcesses:
+    """Test that data persists across separate CLI invocations."""
+
+    def test_commit_then_recall(self, tmp_db_path: str):
+        """Process 1 commits, Process 2 recalls — data must persist."""
+        b1 = _make_backend(tmp_db_path)
+        _run(b1.save(MemoryEntry(key="cross_process", value="persists", memory_type=MemoryType.SEMANTIC)))
+        _run(b1.close())
+
+        b2 = _make_backend(tmp_db_path)
+        loaded = _run(b2.load("cross_process"))
+        assert loaded is not None
+        assert loaded.value == "persists"
+        _run(b2.close())
+
+    def test_commit_update_recall(self, tmp_db_path: str):
+        """Process 1 commits, Process 2 updates, Process 3 recalls updated value."""
+        b1 = _make_backend(tmp_db_path)
+        _run(b1.save(MemoryEntry(key="mutable", value="original", memory_type=MemoryType.SEMANTIC)))
+        _run(b1.close())
+
+        b2 = _make_backend(tmp_db_path)
+        _run(b2.save(MemoryEntry(key="mutable", value="updated", memory_type=MemoryType.SEMANTIC)))
+        _run(b2.close())
+
+        b3 = _make_backend(tmp_db_path)
+        loaded = _run(b3.load("mutable"))
+        assert loaded.value == "updated"
+        _run(b3.close())
+
+    def test_delete_persists(self, tmp_db_path: str):
+        """Process 1 commits, Process 2 deletes, Process 3 verifies deletion."""
+        b1 = _make_backend(tmp_db_path)
+        _run(b1.save(MemoryEntry(key="to_delete", value="gone", memory_type=MemoryType.SEMANTIC)))
+        _run(b1.close())
+
+        b2 = _make_backend(tmp_db_path)
+        _run(b2.delete("to_delete"))
+        _run(b2.close())
+
+        b3 = _make_backend(tmp_db_path)
+        loaded = _run(b3.load("to_delete"))
+        assert loaded is None
+        _run(b3.close())
+
+
+class TestStatePlaneWithSQLite:
+    """Integration tests for StatePlane with SQLite backend."""
+
+    def test_commit_and_recall(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane = StatePlane(backend=b, enable_verification=False, enable_audit=True)
+        _run(plane.init())
+        _run(plane.commit(key="sp_key", value="sp_value", memory_type=MemoryType.SEMANTIC))
+        results = _run(plane.recall(key="sp_key"))
+        assert len(results) > 0
+        assert results[0].value == "sp_value"
+        _run(b.close())
+
+    def test_forget(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane = StatePlane(backend=b, enable_verification=False, enable_audit=True)
+        _run(plane.init())
+        _run(plane.commit(key="forget_me", value="val", memory_type=MemoryType.SEMANTIC))
+        removed = _run(plane.forget("forget_me"))
+        assert removed is True
+        results = _run(plane.recall(key="forget_me"))
+        assert len(results) == 0
+        _run(b.close())
+
+    def test_stats_with_backend(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane = StatePlane(backend=b, enable_verification=False, enable_audit=True)
+        _run(plane.init())
+        _run(plane.commit(key="stat1", value="v1", memory_type=MemoryType.SEMANTIC))
+        _run(plane.commit(key="stat2", value="v2", memory_type=MemoryType.EPISODIC))
+        stats = _run(plane.stats())
+        assert "backend" in stats
+        assert stats["backend"]["total_entries"] == 2
+        _run(b.close())
+
+    def test_snapshot_includes_entries(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane = StatePlane(backend=b, enable_verification=False, enable_audit=True)
+        _run(plane.init())
+        _run(plane.commit(key="snap_key", value={"v": 1}, memory_type=MemoryType.SEMANTIC))
+        snap = _run(plane.snapshot())
+        assert snap["total_entries"] == 1
+        assert "snap_key" in snap["entries"]
+        assert snap["entries"]["snap_key"]["value"] == {"v": 1}
+        _run(b.close())
+
+    def test_diff_reports_added_modified_removed(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane = StatePlane(backend=b, enable_verification=False, enable_audit=True)
+        _run(plane.init())
+
+        t0 = time.time()
+        _run(plane.commit(key="diff_key", value="v1", memory_type=MemoryType.SEMANTIC))
+        _run(plane.commit(key="remove_me", value="bye", memory_type=MemoryType.SEMANTIC))
+        t1 = time.time()
+        _run(plane.commit(key="diff_key", value="v2", memory_type=MemoryType.SEMANTIC))
+        _run(plane.forget("remove_me"))
+        _run(plane.commit(key="new_key", value="new", memory_type=MemoryType.SEMANTIC))
+        t2 = time.time()
+
+        diff = _run(plane.diff(t1, t2))
+        assert diff["counts"] == {"added": 1, "modified": 1, "removed": 1}
+        assert diff["added"][0]["key"] == "new_key"
+        assert diff["modified"][0]["key"] == "diff_key"
+        assert diff["removed"][0]["key"] == "remove_me"
+        assert t0 < t1 < t2
+        _run(b.close())
+
+    def test_rollback_restores_updated_and_deleted_state(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane = StatePlane(backend=b, enable_verification=False, enable_audit=True)
+        _run(plane.init())
+
+        _run(plane.commit(key="pref", value="dark", memory_type=MemoryType.SEMANTIC))
+        _run(plane.commit(key="delete_later", value="keep", memory_type=MemoryType.SEMANTIC))
+        target_ts = time.time()
+
+        _run(plane.commit(key="pref", value="light", memory_type=MemoryType.SEMANTIC))
+        _run(plane.forget("delete_later"))
+        _run(plane.commit(key="added_later", value="temp", memory_type=MemoryType.SEMANTIC))
+
+        result = _run(plane.rollback(target_ts))
+        assert result["counts"] == {"created": 1, "updated": 1, "deleted": 1}
+
+        pref = _run(plane.recall(key="pref"))[0]
+        assert pref.value == "dark"
+        restored = _run(plane.recall(key="delete_later"))[0]
+        assert restored.value == "keep"
+        assert _run(plane.recall(key="added_later")) == []
+        _run(b.close())
+
+    def test_commit_mem_persists_and_recall_falls_back_to_backend(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane = StatePlane(backend=b, enable_verification=True, enable_audit=True)
+        plane.init_agm()
+        plane.init_knowledge_graph()
+        _run(plane.init())
+
+        commit_result = _parse_mcp_result(_run(_handle_commit_mem(plane, {
+            "key": "server_info",
+            "value": "host=prod.db port=5432 engine=postgresql",
+            "memory_type": "semantic",
+            "importance": 0.8,
+        })))
+        assert commit_result["success"] is True
+
+        stored = _run(b.load("server_info"))
+        assert stored is not None
+        assert stored.is_verified is True
+
+        # Simulate a fresh process with the same backend but without hydrated AGM state.
+        fresh_plane = StatePlane(backend=b, enable_verification=True, enable_audit=True)
+        fresh_plane.init_agm()
+        fresh_plane.init_knowledge_graph()
+        _run(fresh_plane.init())
+
+        recall_result = _parse_mcp_result(_run(_handle_recall(fresh_plane, {"key": "server_info"})))
+        assert recall_result["count"] == 1
+        assert recall_result["entries"][0]["key"] == "server_info"
+        assert recall_result["entries"][0]["value"] == "host=prod.db port=5432 engine=postgresql"
+
+        verify_result = _parse_mcp_result(_run(_handle_verify(fresh_plane, {"key": "server_info"})))
+        assert verify_result["exists"] is True
+        assert verify_result["is_verified"] is True
+
+        _run(b.close())
+
+    def test_revise_and_forget_keep_backend_in_sync(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane = StatePlane(backend=b, enable_verification=True, enable_audit=True)
+        plane.init_agm()
+        plane.init_knowledge_graph()
+        _run(plane.init())
+
+        _parse_mcp_result(_run(_handle_commit_mem(plane, {
+            "key": "deploy_mode",
+            "value": "staging",
+            "memory_type": "semantic",
+            "importance": 0.4,
+        })))
+
+        revise_result = _parse_mcp_result(_run(_handle_revise(plane, {
+            "key": "deploy_mode",
+            "value": "production",
+            "importance": 0.9,
+            "strategy": "importance",
+        })))
+        assert revise_result["success"] is True
+
+        stored = _run(b.load("deploy_mode"))
+        assert stored is not None
+        assert stored.value == "production"
+
+        forget_result = _parse_mcp_result(_run(_handle_forget(plane, {
+            "key": "deploy_mode",
+            "reason": "cleanup",
+        })))
+        assert forget_result["removed"] is True
+        assert _run(b.load("deploy_mode")) is None
+
+        _run(b.close())
+
+    def test_working_memory_roundtrip_persists(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane1 = StatePlane(backend=b, enable_verification=False, enable_audit=True)
+        _run(plane1.init())
+        _run(plane1.commit(key="wm_sqlite", value={"x": 1}, memory_type=MemoryType.WORKING))
+        _run(b.close())
+
+        b2 = _make_backend(tmp_db_path)
+        plane2 = StatePlane(backend=b2, enable_verification=False, enable_audit=True)
+        _run(plane2.init())
+        restored = plane2.working_memory.get("wm_sqlite")
+        assert restored is not None
+        assert restored.value == {"x": 1}
+        _run(b2.close())
+
+    def test_entity_linking_roundtrip_with_agm_commit(self, tmp_db_path: str):
+        b = _make_backend(tmp_db_path)
+        plane = StatePlane(backend=b, enable_verification=False, enable_audit=True)
+        plane.init_agm()
+        plane.init_knowledge_graph()
+        _run(plane.init())
+
+        _run(
+            plane.commit_with_agm_async(
+                key="entity_mem_1",
+                value="Atakan builds Bilinc at ReARCLabs.",
+                memory_type="semantic",
+                importance=0.9,
+            )
+        )
+        _run(
+            plane.commit_with_agm_async(
+                key="entity_mem_2",
+                value="ReARCLabs uses Bilinc in production.",
+                memory_type="semantic",
+                importance=0.8,
+            )
+        )
+
+        linked = plane.knowledge_graph.query_memories_by_entity("ReARCLabs")
+        assert "entity_mem_1" in linked
+        assert "entity_mem_2" in linked
+
+        edges = plane.knowledge_graph.get_relations("entity_mem_2")
+        assert any(
+            e.get("target") == "entity_mem_1" and e.get("metadata", {}).get("cross_memory") is True
+            for e in edges
+        )
+        _run(b.close())
