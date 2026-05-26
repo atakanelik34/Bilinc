@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core.event_ledger import MemoryEvent, create_memory_event, event_from_dict, stable_json
 from bilinc.storage.backend import StorageBackend
 
 
@@ -117,6 +118,38 @@ class SQLiteBackend(StorageBackend):
         """)
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_candidates_created_at ON eval_candidates (created_at)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_candidates_tool ON eval_candidates (tool_name)")
+
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_events (
+                id TEXT PRIMARY KEY,
+                schema_version INTEGER NOT NULL,
+                specversion TEXT NOT NULL,
+                type TEXT NOT NULL,
+                source TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                time REAL NOT NULL,
+                operation TEXT NOT NULL,
+                memory_key TEXT,
+                memory_type TEXT,
+                project_id TEXT,
+                org_id TEXT,
+                actor_type TEXT NOT NULL DEFAULT 'unknown',
+                actor_id_hash TEXT,
+                request_id TEXT,
+                before_hash TEXT,
+                after_hash TEXT,
+                payload_ref TEXT,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                audit_log_id INTEGER,
+                prev_event_hash TEXT,
+                event_hash TEXT NOT NULL,
+                checkpoint_root TEXT,
+                datacontenttype TEXT NOT NULL DEFAULT 'application/json'
+            )
+        """)
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_events_time ON memory_events (time, id)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_events_operation ON memory_events (operation)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_events_memory_key ON memory_events (memory_key)")
 
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS claims (
@@ -602,6 +635,161 @@ class SQLiteBackend(StorageBackend):
             "metadata": json.loads(row["metadata"] or "{}"),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+        })
+
+    async def append_memory_event(
+        self,
+        *,
+        operation: str,
+        subject: str,
+        source: str = "bilinc.core.stateplane",
+        memory_key: Optional[str] = None,
+        memory_type: Optional[str] = None,
+        payload_json: Optional[dict] = None,
+        before_value=None,
+        after_value=None,
+        project_id: Optional[str] = None,
+        org_id: Optional[str] = None,
+        actor_type: str = "unknown",
+        actor_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        payload_ref: Optional[str] = None,
+        audit_log_id: Optional[int] = None,
+        checkpoint_root: Optional[str] = None,
+    ) -> MemoryEvent:
+        """Append one semantic memory event with SQLite write serialization."""
+        conn = self._get_conn()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            previous = conn.execute(
+                "SELECT event_hash FROM memory_events ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            prev_event_hash = previous["event_hash"] if previous else None
+            event = create_memory_event(
+                operation=operation,
+                subject=subject,
+                source=source,
+                memory_key=memory_key,
+                memory_type=memory_type,
+                payload_json=payload_json,
+                before_value=before_value,
+                after_value=after_value,
+                project_id=project_id,
+                org_id=org_id,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                request_id=request_id,
+                payload_ref=payload_ref,
+                audit_log_id=audit_log_id,
+                prev_event_hash=prev_event_hash,
+                checkpoint_root=checkpoint_root,
+            )
+            conn.execute(
+                """
+                INSERT INTO memory_events (
+                    id, schema_version, specversion, type, source, subject, time,
+                    operation, memory_key, memory_type, project_id, org_id,
+                    actor_type, actor_id_hash, request_id, before_hash, after_hash,
+                    payload_ref, payload_json, audit_log_id, prev_event_hash,
+                    event_hash, checkpoint_root, datacontenttype
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.id,
+                    event.schema_version,
+                    event.specversion,
+                    event.type,
+                    event.source,
+                    event.subject,
+                    event.time,
+                    event.operation,
+                    event.memory_key,
+                    event.memory_type,
+                    event.project_id,
+                    event.org_id,
+                    event.actor_type,
+                    event.actor_id_hash,
+                    event.request_id,
+                    event.before_hash,
+                    event.after_hash,
+                    event.payload_ref,
+                    stable_json(event.payload_json),
+                    event.audit_log_id,
+                    event.prev_event_hash,
+                    event.event_hash,
+                    event.checkpoint_root,
+                    event.datacontenttype,
+                ),
+            )
+            conn.commit()
+            return event
+        except Exception:
+            conn.rollback()
+            raise
+
+    async def list_memory_events(
+        self,
+        *,
+        operation: Optional[str] = None,
+        memory_key: Optional[str] = None,
+        ids: Optional[List[str]] = None,
+        limit: Optional[int] = None,
+    ) -> List[MemoryEvent]:
+        """Return semantic memory events ordered oldest-first."""
+        params: list[object] = []
+        clauses: list[str] = []
+        if operation is not None:
+            clauses.append("operation = ?")
+            params.append(operation)
+        if memory_key is not None:
+            clauses.append("memory_key = ?")
+            params.append(memory_key)
+        if ids is not None:
+            ids_l = [str(item) for item in ids]
+            if not ids_l:
+                return []
+            clauses.append("id IN (" + ",".join("?" for _ in ids_l) + ")")
+            params.extend(ids_l)
+        sql = "SELECT * FROM memory_events"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY rowid ASC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        rows = self._get_conn().execute(sql, tuple(params)).fetchall()
+        events = [self._row_to_memory_event(row) for row in rows]
+        if ids is not None:
+            order = {str(event_id): idx for idx, event_id in enumerate(ids)}
+            events.sort(key=lambda event: order.get(event.id, len(order)))
+        return events
+
+    def _row_to_memory_event(self, row) -> MemoryEvent:
+        return event_from_dict({
+            "id": row["id"],
+            "schema_version": row["schema_version"],
+            "specversion": row["specversion"],
+            "type": row["type"],
+            "source": row["source"],
+            "subject": row["subject"],
+            "time": row["time"],
+            "operation": row["operation"],
+            "memory_key": row["memory_key"],
+            "memory_type": row["memory_type"],
+            "project_id": row["project_id"],
+            "org_id": row["org_id"],
+            "actor_type": row["actor_type"],
+            "actor_id_hash": row["actor_id_hash"],
+            "request_id": row["request_id"],
+            "before_hash": row["before_hash"],
+            "after_hash": row["after_hash"],
+            "payload_ref": row["payload_ref"],
+            "payload_json": json.loads(row["payload_json"] or "{}"),
+            "audit_log_id": row["audit_log_id"],
+            "prev_event_hash": row["prev_event_hash"],
+            "event_hash": row["event_hash"],
+            "checkpoint_root": row["checkpoint_root"],
+            "datacontenttype": row["datacontenttype"],
         })
 
     async def record_eval_candidate(self, row) -> bool:
