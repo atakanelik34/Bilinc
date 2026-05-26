@@ -1,4 +1,4 @@
-"""Bilinc: Verifiable State Plane for Autonomous Agents — v1.2.5"""
+"""Bilinc: Verifiable agent brain runtime — v2.1.0"""
 
 # Lazy imports — avoid heavy deps (z3, networkx) at package level
 __all__ = [
@@ -7,10 +7,11 @@ __all__ = [
     "Arbiter", "ConfidenceEstimator", "ConfidenceScore",
     "MemoryType", "MemoryEntry", "BeliefState", "CCSDimension",
     "KnowledgeGraph", "NodeType", "EdgeType",
-    "CognitiveWorkspace", "BilincAgentRuntime",
+    "ContextAssembler", "CognitiveWorkspace", "BilincAgentRuntime",
+    "LangGraphWorkspace", "ProjectRuntimeManager", "EvalReceipt",
 ]
 
-__version__ = "1.2.5"
+__version__ = "2.1.0"
 
 
 def __getattr__(name: str):
@@ -34,8 +35,12 @@ def __getattr__(name: str):
         "KnowledgeGraph": "bilinc.core.knowledge_graph",
         "NodeType": "bilinc.core.knowledge_graph",
         "EdgeType": "bilinc.core.knowledge_graph",
+        "ContextAssembler": "bilinc.core.context_assembler",
         "CognitiveWorkspace": "bilinc.core.cognitive_workspace",
         "BilincAgentRuntime": "bilinc.integrations.agent_runtime",
+        "LangGraphWorkspace": "bilinc.integrations.langgraph_workspace",
+        "ProjectRuntimeManager": "bilinc.cloud.runtime",
+        "EvalReceipt": "bilinc.eval.receipts",
     }
     if name in _lazy:
         import importlib
