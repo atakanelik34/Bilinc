@@ -17,7 +17,7 @@ class TestBasicFlow:
         """import bilinc should succeed."""
         import bilinc
         assert hasattr(bilinc, '__version__')
-        assert bilinc.__version__.startswith('1.')
+        assert bilinc.__version__ == '2.1.0'
 
     def test_create_stateplane_safe(self):
         """Default StatePlane() should not crash."""

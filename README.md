@@ -1,6 +1,6 @@
 # Bilinc
 
-**Verifiable state plane for autonomous agents.**
+**Verifiable agent brain runtime for autonomous systems.**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/atakanelik34/Bilinc/main/assets/bilinc-architecture.png" alt="Bilinc architecture diagram showing the Bilinc State Plane connected to memory types, AGM belief revision, LangGraph checkpointing, MCP server integration, hybrid recall, SQLite/PostgreSQL storage, Z3 verification, and a Merkle audit trail." />
@@ -12,8 +12,8 @@
   <a href="https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/atakanelik34/Bilinc/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=ci" alt="CI"></a>
   <a href="https://github.com/atakanelik34/Bilinc/tags"><img src="https://img.shields.io/github/v/tag/atakanelik34/Bilinc?sort=semver&style=flat-square&logo=github&label=tag" alt="GitHub tag"></a>
   <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/pyversions/bilinc?style=flat-square&logo=python&logoColor=white" alt="Python versions"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-orange?style=flat-square" alt="License: BSL 1.1"></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/tests-247%20passing-brightgreen?style=flat-square&logo=pytest&logoColor=white" alt="Tests"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BUSL--1.1-orange?style=flat-square" alt="License: BUSL 1.1"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-380%20passing%20%7C%205%20skipped-brightgreen?style=flat-square&logo=pytest&logoColor=white" alt="Tests"></a>
   <a href="https://github.com/atakanelik34/Bilinc/stargazers"><img src="https://img.shields.io/github/stars/atakanelik34/Bilinc?style=flat-square&logo=github&color=yellow" alt="Stars"></a>
 </p>
 
@@ -21,9 +21,20 @@
 pip install bilinc
 ```
 
-Most agent memory systems are a vector store with a wrapper. Bilinc is a **state plane**: every belief can be verified before it lands, logically revised when it conflicts, and audited so an agent can explain what changed and why.
+Most agent memory systems are a vector store with a wrapper. Bilinc is a **verifiable agent brain runtime**: it assembles context, decides what deserves memory, verifies and revises beliefs, and records auditable receipts for what changed and why.
 
 **Others store memories. Bilinc manages truth.**
+
+## What's new in 2.1
+
+Bilinc 2.1 turns the state plane into a runtime layer for agents:
+
+- Cognitive runtime and workspace primitives for normal agent turn lifecycles
+- Context assembly for prompt-safe memory packets with evidence references
+- Salience/writeback policy for deciding what should be remembered
+- Event ledger and eval receipts for verifiable memory operations
+- LangGraph and framework-agnostic runtime adapters
+- Project-isolated Cloud runtime sidecar foundation
 
 ## Why Bilinc
 
@@ -44,8 +55,10 @@ Bilinc gives agents a state layer with verification, belief revision, provenance
 | Evidence-aware recall | Opt-in recall replay, structured claim projection, read-only contradiction probes, named recall profiles, and conservative entity/backlink projection |
 | Belief revision | AGM-style EXPAND / CONTRACT / REVISE for conflict-aware updates |
 | Verification | Z3 SMT checks at the commit gate |
-| Auditability | Merkle-chain provenance, snapshots, diffs, and rollback |
-| Agent integration | MCP server, LangGraph checkpoint adapter, Claude Code / Cursor / VS Code / OpenClaw translation |
+| Auditability | Merkle-chain provenance, event ledger, eval receipts, snapshots, diffs, and rollback |
+| Cognitive runtime | Context assembly, workspace frames, salience/writeback routing, and runtime adapters |
+| Agent integration | MCP server/admin preview, LangGraph checkpoint/workspace adapters, framework-agnostic runtime adapter, Claude Code / Cursor / VS Code / OpenClaw translation |
+| Cloud foundation | Project-isolated runtime sidecar with service-token auth and snapshot endpoints |
 | Storage | SQLite by default, PostgreSQL optional |
 
 ## Quick start
@@ -105,6 +118,70 @@ Bilinc ships as an MCP server for Claude Code, Cursor, and any MCP-compatible ag
 
 MCP tools include: `commit_mem`, `recall`, `revise`, `forget`, `consolidate`, `contradictions`, `diff`, `snapshot`, `rollback`, `status`, `verify`, `query_graph`, `bilinc_recall_smart`, `bilinc_query_analysis`, `bilinc_event_segment`, `bilinc_summarize`, `bilinc_health`, `bilinc_benchmark`, `bilinc_export`, and `bilinc_import`.
 
+## Cognitive runtime
+
+Use Bilinc as the runtime memory/context layer around an agent turn:
+
+```python
+import asyncio
+from bilinc.integrations import BilincAgentRuntime
+
+async def main():
+    runtime = await BilincAgentRuntime.local("agent_state.db", agent_id="agent-1")
+
+    model_input = await runtime.before_model_call(
+        session_id="session-1",
+        user_input="What changed since last run?",
+        messages=[{"role": "user", "content": "What changed since last run?"}],
+    )
+    # Send model_input.messages to your model, execute tools, then assimilate the result.
+    await runtime.after_model_call(
+        session_id="session-1",
+        user_input="What changed since last run?",
+        assistant_output="Release state verified.",
+    )
+
+asyncio.run(main())
+```
+
+## Event ledger and eval receipts
+
+Bilinc 2.1 can record memory operations as events and bind evaluation results to those event IDs:
+
+```python
+from bilinc.core import EventOperation, create_memory_event
+
+event = create_memory_event(
+    operation=EventOperation.COMMIT.value,
+    subject="release_status",
+    memory_key="release_status",
+    payload_json={"status": "verified"},
+)
+
+print(event.id, event.event_hash)
+```
+
+Eval receipts bind benchmark or smoke-test results to persisted event IDs through a backend that supports the memory event ledger.
+
+These receipts are for auditability and evaluation traceability; they do not imply a hosted Cloud deployment by themselves.
+
+## Cloud runtime sidecar foundation
+
+For internal/hosted deployments, Bilinc 2.1 includes project-isolated runtime primitives:
+
+```bash
+pip install "bilinc[server]"
+```
+
+```python
+from bilinc.cloud import ProjectRuntimeManager
+
+manager = ProjectRuntimeManager("./bilinc-runtime")
+snapshot = manager.snapshot_project("550e8400-e29b-41d4-a716-446655440000")
+```
+
+Each project gets its own runtime database under the configured runtime directory. The sidecar path uses service-token auth and is a foundation for hosted Bilinc Cloud, not a claim that paid self-serve Cloud is generally available.
+
 ## LangGraph checkpointing
 
 Use Bilinc as a verified persistent checkpoint store for LangGraph agents:
@@ -127,6 +204,8 @@ Every checkpoint can flow through Bilinc's revision and verification pipeline, m
 
 ```text
 StatePlane
+├── Cognitive Runtime      context assembly, workspace frames, salience/writeback
+├── Event Ledger           memory-operation events and eval receipts
 ├── WorkingMemory          PFC-inspired active slots and eviction
 ├── AGM Engine             EXPAND / CONTRACT / REVISE
 ├── Dual-Process Arbiter   fast path + deliberate verification path
@@ -136,7 +215,8 @@ StatePlane
 ├── Hybrid Recall          FTS5 → vector → KG → RRF fusion
 ├── ContextBudgetRL        adaptive token allocation by memory type
 ├── Storage                SQLite / PostgreSQL
-└── MCP Server v2          stdio + authenticated HTTP
+├── Cloud Sidecar          project-isolated runtime foundation
+└── MCP Server v2          stdio + authenticated HTTP/admin preview
 ```
 
 ## Benchmarks
