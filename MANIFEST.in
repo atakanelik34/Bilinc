@@ -1,0 +1,14 @@
+prune src/bilinc/adaptive
+prune src/bilinc/cloud
+prune src/bilinc/core
+prune src/bilinc/eval
+prune src/bilinc/integrations
+prune src/bilinc/jobs
+prune src/bilinc/mcp_server
+prune src/bilinc/observability
+prune src/bilinc/retrieval
+prune src/bilinc/security
+prune src/bilinc/storage
+prune tests
+include tests/test_cloud_only_package.py
+exclude src/bilinc/scheduler.py
