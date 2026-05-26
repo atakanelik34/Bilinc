@@ -14,6 +14,8 @@ __all__ = [
     "KGSpreadingActivation", "ActivationResult", "kg_enhanced_recall",
     # Vector search (Fix #7)
     "VectorStore", "HybridSearch",
+    # Cognitive runtime
+    "ContextAssembler", "ContextBundle", "ContextSection",
 ]
 
 # Lazy imports for all core classes
@@ -44,6 +46,10 @@ _IMPORTS = {
     # Vector search
     "VectorStore": "bilinc.core.vector_search",
     "HybridSearch": "bilinc.core.vector_search",
+    # Cognitive runtime
+    "ContextAssembler": "bilinc.core.context_assembler",
+    "ContextBundle": "bilinc.core.context_assembler",
+    "ContextSection": "bilinc.core.context_assembler",
 }
 # Models are lightweight, always import
 from bilinc.core.models import MemoryType, MemoryEntry, BeliefState, CCSDimension
