@@ -7,6 +7,7 @@ __all__ = [
     "Arbiter", "ConfidenceEstimator", "ConfidenceScore",
     "MemoryType", "MemoryEntry", "BeliefState", "CCSDimension",
     "KnowledgeGraph", "NodeType", "EdgeType",
+    "CognitiveWorkspace",
 ]
 
 __version__ = "1.2.5"
@@ -33,6 +34,7 @@ def __getattr__(name: str):
         "KnowledgeGraph": "bilinc.core.knowledge_graph",
         "NodeType": "bilinc.core.knowledge_graph",
         "EdgeType": "bilinc.core.knowledge_graph",
+        "CognitiveWorkspace": "bilinc.core.cognitive_workspace",
     }
     if name in _lazy:
         import importlib

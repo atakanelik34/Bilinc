@@ -17,6 +17,7 @@ __all__ = [
     # Cognitive runtime
     "ContextAssembler", "ContextBundle", "ContextSection",
     "SalienceEngine", "SalienceDecision", "MemoryWriteProposal", "WritebackRouter",
+    "CognitiveWorkspace", "TurnFrame",
 ]
 
 # Lazy imports for all core classes
@@ -55,6 +56,8 @@ _IMPORTS = {
     "SalienceDecision": "bilinc.core.salience",
     "MemoryWriteProposal": "bilinc.core.salience",
     "WritebackRouter": "bilinc.core.salience",
+    "CognitiveWorkspace": "bilinc.core.cognitive_workspace",
+    "TurnFrame": "bilinc.core.cognitive_workspace",
 }
 # Models are lightweight, always import
 from bilinc.core.models import MemoryType, MemoryEntry, BeliefState, CCSDimension
