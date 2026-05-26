@@ -1,7 +1,5 @@
 # Architecture
 
-> Legacy/private runtime note: this architecture describes the local StatePlane/runtime stack. Bilinc 2.0 on PyPI does not ship these internals; public installs use the hosted Cloud SDK, CLI, and MCP adapter.
-
 Bilinc is a **Verifiable State Plane** for autonomous AI agents. Unlike traditional memory systems that "dump" context, Bilinc implements a brain-inspired, neuro-symbolic pipeline where every memory is verified, consolidated, and subject to formal belief revision.
 
 ## 7-Layer Architecture

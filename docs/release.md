@@ -48,19 +48,14 @@ python -c "import bilinc; print(bilinc.__version__)"
 ## Pre-publish Smoke
 
 ```bash
-export BILINC_API_KEY=bil_live_...
-bilinc --version
-bilinc signup
-bilinc status
-bilinc commit --key smoke_key --value '{"hello":"world"}'
-bilinc recall --query smoke_key
+bilinc --db ./tmp.db commit --key smoke_key --value hello
+bilinc --db ./tmp.db recall --key smoke_key
 ```
 
-Hosted API smoke:
+HTTP deployment smoke:
 
-- authenticated `GET /api/cloud/health`
-- authenticated `POST /api/cloud/memory/commit`
-- authenticated `POST /api/cloud/memory/recall`
+- authenticated `/health`
+- authenticated `/metrics`
 
 ## Publish
 
@@ -75,11 +70,11 @@ Hosted API smoke:
 3. Import smoke:
 
 ```bash
-python -c "import bilinc; print(bilinc.version)"
-python -c "from bilinc import CloudClient, Bilinc; print(CloudClient is Bilinc)"
+python -c "import bilinc; print(bilinc.__version__)"
+python -c "from bilinc import StatePlane; print(type(StatePlane()).__name__)"
 ```
 
 4. If HTTP surface is part of the release notes, verify:
    - authenticated requests succeed and unauthenticated ones fail
-   - `GET /api/cloud/health` returns the hosted Cloud health envelope
-   - `POST /api/cloud/memory/commit` and `POST /api/cloud/memory/recall` are smoke-tested only with approved live credentials
+   - `/health` returns readiness/liveness
+   - `/metrics` exposes `bilinc_` metrics
