@@ -15,6 +15,7 @@ Usage:
 """
 
 from __future__ import annotations
+import asyncio
 import json
 import logging
 from typing import Any, Dict, Optional, Sequence, Tuple, Iterator
@@ -62,16 +63,18 @@ class LangGraphCheckpointer(BaseCheckpointSaver):
 
         if checkpoint_id:
             key = self._checkpoint_key(thread_id, checkpoint_id, checkpoint_ns)
-            entry = self.state_plane._storage.get(key)
+            entry = _run_sync(self.state_plane.backend.load(key)) if self.state_plane.backend else None
             if entry:
                 return self._entry_to_tuple(entry, thread_id, checkpoint_ns)
 
-        result = self.state_plane.recall(
-            intent=f"checkpoint thread {thread_id}",
-            budget_tokens=4096,
-        )
-        if result.memories:
-            latest = max(result.memories, key=lambda m: m.updated_at)
+        entries = _run_sync(self.state_plane.backend.list_all()) if self.state_plane.backend else []
+        candidates = [
+            entry for entry in entries
+            if entry.key.startswith(f"{self.checkpoint_prefix}:{thread_id}")
+            and not entry.key.startswith(f"{self.checkpoint_prefix}:pending:")
+        ]
+        if candidates:
+            latest = max(candidates, key=lambda m: m.updated_at)
             return self._entry_to_tuple(latest, thread_id, checkpoint_ns)
         return None
 
@@ -87,9 +90,11 @@ class LangGraphCheckpointer(BaseCheckpointSaver):
         thread_id = configurable.get("thread_id", "")
         checkpoint_ns = configurable.get("checkpoint_ns", "")
 
+        entries = _run_sync(self.state_plane.backend.list_all()) if self.state_plane.backend else []
         cps = [
-            e for e in self.state_plane._storage.values()
+            e for e in entries
             if e.key.startswith(f"{self.checkpoint_prefix}:{thread_id}")
+            and not e.key.startswith(f"{self.checkpoint_prefix}:pending:")
         ]
         cps.sort(key=lambda e: e.updated_at, reverse=True)
 
@@ -125,7 +130,7 @@ class LangGraphCheckpointer(BaseCheckpointSaver):
             "compressed": self.compress_checkpoints,
         }
 
-        self.state_plane.commit(
+        _run_sync(self.state_plane.commit(
             key=key,
             value=data,
             memory_type=MemoryType.EPISODIC,
@@ -133,11 +138,9 @@ class LangGraphCheckpointer(BaseCheckpointSaver):
                 "type": "checkpoint",
                 "thread_id": thread_id,
                 "checkpoint_id": checkpoint_id,
+                "source": "langgraph",
             },
-            source="langgraph",
-            session_id=thread_id,
-            verify=False,
-        )
+        ))
         return checkpoint_id
 
     def put_writes(
@@ -152,14 +155,17 @@ class LangGraphCheckpointer(BaseCheckpointSaver):
         checkpoint_id = configurable.get("checkpoint_id", "")
 
         key = f"{self.checkpoint_prefix}:pending:{thread_id}:{task_id}"
-        self.state_plane.commit(
+        _run_sync(self.state_plane.commit(
             key=key,
             value={"writes": list(writes), "task_path": task_path, "checkpoint_id": checkpoint_id},
             memory_type=MemoryType.EPISODIC,
-            source="langgraph_pending",
-            session_id=thread_id,
-            verify=False,
-        )
+            metadata={
+                "type": "pending_writes",
+                "source": "langgraph_pending",
+                "thread_id": thread_id,
+                "task_id": task_id,
+            },
+        ))
 
     # -- Internals --
 
@@ -233,3 +239,17 @@ class LangGraphCheckpointer(BaseCheckpointSaver):
             parent_config=parent_config,
             pending_writes=pending_writes,
         )
+
+
+def _run_sync(coro):
+    """Run StatePlane async APIs from LangGraph's synchronous checkpointer hooks."""
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    coro.close()
+    raise RuntimeError(
+        "LangGraphCheckpointer sync API cannot run inside an active event loop; "
+        "use LangGraphWorkspace for async node lifecycle integration."
+    )

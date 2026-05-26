@@ -7,6 +7,7 @@ from bilinc.integrations.agent_runtime import (
     RuntimeTurnResult,
     ToolEvent,
 )
+from bilinc.integrations.langgraph_workspace import LangGraphTurnResult, LangGraphWorkspace
 
 __all__ = [
     "CrossToolTranslator",
@@ -16,4 +17,6 @@ __all__ = [
     "RuntimeModelInput",
     "RuntimeTurnResult",
     "ToolEvent",
+    "LangGraphWorkspace",
+    "LangGraphTurnResult",
 ]
