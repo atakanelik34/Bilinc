@@ -2,6 +2,15 @@
 
 All notable changes to Bilinc.
 
+## [2.1.1] — 2026-05-26
+
+### Fixed
+- Restored the public PyPI package to the intended cloud-only SDK, CLI, and MCP adapter surface after the accidental `2.1.0` packaging regression.
+- Reconfirmed that public artifacts do not ship local `StatePlane`, storage, eval, observability, integration, local MCP server, adaptive, retrieval, security, or jobs internals.
+
+### Notes
+- `2.1.0` should be considered a bad public artifact for the cloud-only packaging model. Use `2.1.1` or newer.
+
 ## [2.1.0] — 2026-05-26
 
 ### Added
