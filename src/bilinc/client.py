@@ -1,6 +1,6 @@
 """Bilinc Cloud client.
 
-Bilinc 2.0 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
+Bilinc 2.1.1 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
 https://bilinc.space. Local self-hosted StatePlane internals are no longer
 shipped in the public package.
 """
@@ -14,7 +14,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable
 
-__version__ = "2.0.0"
+__version__ = "2.1.1"
 DEFAULT_BASE_URL = "https://bilinc.space"
 SIGNUP_URL = "https://bilinc.space/signup"
 
@@ -74,7 +74,7 @@ class CloudClient:
             self.api_key = os.environ.get("BILINC_API_KEY")
         if not self.api_key:
             raise BilincApiKeyRequired(
-                "Bilinc 2.0 requires a Bilinc Cloud API key. "
+                "Bilinc requires a Bilinc Cloud API key. "
                 f"Start a 7-day trial at {SIGNUP_URL}, then set BILINC_API_KEY."
             )
         self.base_url = self.base_url.rstrip("/")

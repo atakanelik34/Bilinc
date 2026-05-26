@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bilinc 2.0 cloud-only CLI."""
+"""Bilinc cloud-only CLI."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _client(args: argparse.Namespace) -> CloudClient:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bilinc",
-        description="Bilinc 2.0 cloud-only memory SDK. Local StatePlane is no longer bundled.",
+        description="Bilinc cloud-only memory SDK. Local StatePlane is no longer bundled.",
     )
     parser.add_argument("--version", action="version", version=f"bilinc {__version__}")
     parser.add_argument("--api-key", help="Bilinc Cloud API key. Defaults to BILINC_API_KEY.")
