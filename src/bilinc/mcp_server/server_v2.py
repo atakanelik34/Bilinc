@@ -21,6 +21,7 @@ import io
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -35,8 +36,10 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Mount, Route
 
 from bilinc.core.stateplane import PersistenceWriteError, StatePlane
-from bilinc.core.models import MemoryType
+from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.audit import OpType
+from bilinc.core.cognitive_workspace import CognitiveWorkspace
+from bilinc.integrations.agent_runtime import BilincAgentRuntime
 from bilinc.mcp_server.rate_limiter import TokenBucketLimiter
 from bilinc.observability.logging import log_event
 from bilinc.security.validator import InputValidator
@@ -567,6 +570,49 @@ def _create_server_v2(
                 },
             ),
             Tool(
+                name="bilinc_workspace_preview",
+                description=(
+                    "Preview the SDK cognitive workspace context packet for debugging. "
+                    "Optional admin/debug surface only; normal agents should use BilincAgentRuntime."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "default": "mcp-preview"},
+                        "user_input": {"type": "string", "description": "User turn to preview context for"},
+                        "agent_id": {"type": "string", "default": "mcp-admin"},
+                        "profile": {"type": "string", "enum": ["fast", "balanced", "verified", "deep"], "default": "balanced"},
+                        "budget_tokens": {"type": "integer", "default": 4096},
+                        "limit": {"type": "integer", "default": 10},
+                        "memory_types": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["episodic", "procedural", "semantic", "working", "spatial"]},
+                        },
+                    },
+                    "required": ["user_input"],
+                },
+            ),
+            Tool(
+                name="bilinc_workspace_status",
+                description="Inspect local cognitive runtime/admin availability and storage counts.",
+                inputSchema={"type": "object", "properties": {}, "required": []},
+            ),
+            Tool(
+                name="bilinc_workspace_replay_session",
+                description=(
+                    "Read-only replay preview of workspace-related memories for a session. "
+                    "Optional admin/debug surface, not the primary runtime path."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "limit": {"type": "integer", "default": 50},
+                    },
+                    "required": ["session_id"],
+                },
+            ),
+            Tool(
                 name="bilinc_health",
                 description="Return full health + metrics report.",
                 inputSchema={"type": "object", "properties": {}, "required": []},
@@ -700,6 +746,12 @@ def _create_server_v2(
                 result = await _handle_bilinc_event_segment(plane, arguments)
             elif name == "bilinc_summarize":
                 result = await _handle_bilinc_summarize(plane, arguments)
+            elif name == "bilinc_workspace_preview":
+                result = await _handle_bilinc_workspace_preview(plane, arguments)
+            elif name == "bilinc_workspace_status":
+                result = await _handle_bilinc_workspace_status(plane, arguments)
+            elif name == "bilinc_workspace_replay_session":
+                result = await _handle_bilinc_workspace_replay_session(plane, arguments)
             elif name == "bilinc_health":
                 result = await _handle_bilinc_health(plane, arguments)
             elif name == "bilinc_benchmark":
@@ -718,6 +770,7 @@ def _create_server_v2(
                         "consolidate, snapshot, diff, rollback, query_graph, contradictions, "
                         "claims_list, claims_search, claims_for_entity, claim_contradictions, "
                         "bilinc_recall_smart, bilinc_query_analysis, bilinc_event_segment, bilinc_summarize, "
+                        "bilinc_workspace_preview, bilinc_workspace_status, bilinc_workspace_replay_session, "
                         "bilinc_health, bilinc_benchmark, bilinc_export, bilinc_import"
                     ),
                 )
@@ -1775,6 +1828,149 @@ async def _handle_bilinc_summarize(plane: StatePlane, args: Dict[str, Any]) -> L
         "count": len(summaries),
         "summaries": [_json_safe(s) for s in summaries],
     })
+
+
+async def _handle_bilinc_workspace_preview(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    user_input = (args.get("user_input") or "").strip()
+    if not user_input:
+        return _result_text({"tool": "bilinc_workspace_preview", "success": False, "error": "user_input is required"})
+    session_id = (args.get("session_id") or "mcp-preview").strip() or "mcp-preview"
+    agent_id = (args.get("agent_id") or "mcp-admin").strip() or "mcp-admin"
+    profile = args.get("profile") or "balanced"
+    budget_tokens = max(128, int(args.get("budget_tokens", 4096)))
+    limit = max(1, min(50, int(args.get("limit", 10))))
+    memory_types = _parse_memory_type_list(args.get("memory_types") or [])
+
+    workspace = CognitiveWorkspace(state_plane=plane, agent_id=agent_id, default_profile=profile)
+    bundle = await workspace.prepare_context(
+        session_id,
+        user_input,
+        budget_tokens=budget_tokens,
+        profile=profile,
+        limit=limit,
+        memory_types=memory_types or None,
+        metadata={"surface": "mcp_admin_preview", "admin_debug_only": True},
+    )
+    return _result_text({
+        "tool": "bilinc_workspace_preview",
+        "success": True,
+        "admin_debug_only": True,
+        "primary_runtime_path": "sdk_runtime",
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "context": _redact_admin_payload(bundle.to_dict()),
+        "selected_memory_keys": list(bundle.selected_memory_keys),
+        "warnings": _redact_admin_payload(bundle.warnings),
+    })
+
+
+async def _handle_bilinc_workspace_status(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    entries = await _workspace_admin_entries(plane)
+    counts: Dict[str, int] = {mt.value: 0 for mt in MemoryType}
+    for entry in entries:
+        mt = entry.memory_type.value if hasattr(entry.memory_type, "value") else str(entry.memory_type)
+        counts[mt] = counts.get(mt, 0) + 1
+    storage_stats = {}
+    if plane.backend and hasattr(plane.backend, "stats"):
+        try:
+            storage_stats = await plane.backend.stats()
+        except Exception as exc:  # pragma: no cover - defensive diagnostics
+            storage_stats = {"error": type(exc).__name__}
+    return _result_text({
+        "tool": "bilinc_workspace_status",
+        "success": True,
+        "admin_debug_only": True,
+        "primary_runtime_path": "sdk_runtime",
+        "runtime": {
+            "workspace_available": True,
+            "agent_runtime_available": True,
+            "workspace_class": CognitiveWorkspace.__name__,
+            "agent_runtime_class": BilincAgentRuntime.__name__,
+        },
+        "storage": {
+            "backend": type(plane.backend).__name__ if plane.backend else "working_memory_only",
+            "entry_count": len(entries),
+            "memory_type_counts": counts,
+            "stats": _redact_admin_payload(storage_stats),
+        },
+    })
+
+
+async def _handle_bilinc_workspace_replay_session(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
+    session_id = (args.get("session_id") or "").strip()
+    if not session_id:
+        return _result_text({"tool": "bilinc_workspace_replay_session", "success": False, "error": "session_id is required"})
+    limit = max(1, min(500, int(args.get("limit", 50))))
+    entries = await _workspace_admin_entries(plane)
+    selected = [entry for entry in entries if _entry_session_id(entry) == session_id]
+    selected.sort(key=lambda entry: getattr(entry, "created_at", 0) or getattr(entry, "updated_at", 0) or 0)
+    selected = selected[:limit]
+    events = []
+    for entry in selected:
+        events.append({
+            "key": entry.key,
+            "memory_type": entry.memory_type.value if hasattr(entry.memory_type, "value") else str(entry.memory_type),
+            "created_at": getattr(entry, "created_at", None),
+            "updated_at": getattr(entry, "updated_at", None),
+            "metadata": _redact_admin_payload(entry.metadata or {}),
+            "value": _redact_admin_payload(entry.value),
+        })
+    return _result_text({
+        "tool": "bilinc_workspace_replay_session",
+        "success": True,
+        "admin_debug_only": True,
+        "primary_runtime_path": "sdk_runtime",
+        "session_id": session_id,
+        "event_count": len(events),
+        "events": events,
+    })
+
+
+def _parse_memory_type_list(raw_types: List[Any]) -> List[MemoryType]:
+    memory_types: List[MemoryType] = []
+    for raw in raw_types:
+        try:
+            memory_types.append(MemoryType(raw))
+        except Exception:
+            continue
+    return memory_types
+
+
+async def _workspace_admin_entries(plane: StatePlane) -> List[MemoryEntry]:
+    if plane.backend:
+        return list(await plane.backend.list_all())
+    if hasattr(plane, "working_memory"):
+        return list(plane.working_memory.get_all())
+    return []
+
+
+def _entry_session_id(entry: MemoryEntry) -> Optional[str]:
+    metadata = entry.metadata or {}
+    if isinstance(metadata, dict) and metadata.get("session_id"):
+        return str(metadata.get("session_id"))
+    value = entry.value
+    if isinstance(value, dict) and value.get("session_id"):
+        return str(value.get("session_id"))
+    return None
+
+
+_SENSITIVE_ADMIN_KEYS = {"token", "secret", "password", "api_key", "apikey", "authorization", "bearer", "credential"}
+_SECRET_PATTERN = re.compile(r"(?i)(bearer\s+[a-z0-9._-]{12,}|sk-[a-z0-9]{20,}|pypi-[a-z0-9_-]{20,}|secret-token)")
+
+
+def _redact_admin_payload(value: Any, *, key_hint: str = "") -> Any:
+    key_l = key_hint.lower()
+    if any(sensitive in key_l for sensitive in _SENSITIVE_ADMIN_KEYS):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {str(k): _redact_admin_payload(v, key_hint=str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_admin_payload(item, key_hint=key_hint) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_admin_payload(item, key_hint=key_hint) for item in value]
+    if isinstance(value, str):
+        return _SECRET_PATTERN.sub("[REDACTED]", value)
+    return value
 
 
 async def _handle_bilinc_health(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
