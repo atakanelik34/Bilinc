@@ -2,6 +2,30 @@
 
 All notable changes to Bilinc.
 
+## [2.1.0] — 2026-05-26
+
+### Added
+- Cognitive runtime primitives for agent turn lifecycle, workspace framing, and runtime handoff.
+- Context assembler for prompt-safe memory packets with evidence references.
+- Deterministic salience/writeback policy for deciding what should become durable memory.
+- Framework-agnostic agent runtime adapter and LangGraph workspace adapter.
+- MCP admin/debug workspace preview tools for inspecting assembled runtime state.
+- Event ledger for memory operations with append-order hash chaining.
+- Eval receipts anchored to event IDs and checkpoint roots.
+- Project-isolated Cloud runtime sidecar foundation with service-token auth and snapshot endpoints.
+- Repository `AGENTS.md` operating contract for future agent maintainers.
+
+### Changed
+- README and package metadata now frame Bilinc as a verifiable agent brain/runtime, not only a memory database.
+- Server optional dependency now covers the internal Cloud sidecar path via FastAPI/Uvicorn.
+
+### Security / Safety
+- Recursive redaction coverage for secret-like payloads in event/eval surfaces.
+- Cloud sidecar requires service-token auth and validates project UUID path segments.
+
+### Caveats
+- Hosted Cloud self-serve runtime and billing flow remain separate live-product surfaces; this package release provides the SDK/runtime foundation.
+
 ## [Unreleased] — 2026-05-17
 
 ### Added
