@@ -1,7 +1,5 @@
 # Security Guide
 
-> Legacy/private runtime note: this document describes local StatePlane security controls from the private/runtime stack. Bilinc 2.0 on PyPI does not ship those internals; public users authenticate to hosted Bilinc Cloud with `BILINC_API_KEY`.
-
 Bilinc implements defense-in-depth security for memory operations.
 
 ## Input Validation
