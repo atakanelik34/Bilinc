@@ -1,6 +1,6 @@
 """Bilinc Cloud client.
 
-Bilinc 2.1.1 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
+Bilinc 2.1.2 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
 https://bilinc.space. Local self-hosted StatePlane internals are no longer
 shipped in the public package.
 """
@@ -12,11 +12,14 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
-__version__ = "2.1.1"
+__version__ = "2.1.2"
 DEFAULT_BASE_URL = "https://bilinc.space"
 SIGNUP_URL = "https://bilinc.space/signup"
+CONFIG_DIR_ENV = "BILINC_CONFIG_DIR"
+CONFIG_FILE_NAME = "config.json"
 
 
 class BilincError(RuntimeError):
@@ -32,6 +35,59 @@ class BilincCloudError(BilincError):
 
 
 Transport = Callable[..., dict[str, Any]]
+
+
+def config_path() -> Path:
+    """Return the local Bilinc CLI config path."""
+
+    override = os.environ.get(CONFIG_DIR_ENV)
+    if override:
+        return Path(override).expanduser() / CONFIG_FILE_NAME
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_config_home:
+        return Path(xdg_config_home).expanduser() / "bilinc" / CONFIG_FILE_NAME
+    return Path.home() / ".config" / "bilinc" / CONFIG_FILE_NAME
+
+
+def load_config() -> dict[str, Any]:
+    """Load local CLI config without raising on missing or malformed files."""
+
+    path = config_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def load_config_api_key() -> str | None:
+    """Return a stored API key if one was saved with `bilinc login`."""
+
+    value = load_config().get("api_key")
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def save_config_api_key(api_key: str, *, base_url: str = DEFAULT_BASE_URL) -> Path:
+    """Persist the Cloud API key for local CLI use with user-only permissions."""
+
+    key = api_key.strip()
+    if not key:
+        raise BilincApiKeyRequired(
+            "Bilinc requires a Bilinc Cloud API key. "
+            f"Start a 7-day trial at {SIGNUP_URL}, then run bilinc login --api-key <key>."
+        )
+
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"api_key": key, "base_url": base_url.rstrip("/") or DEFAULT_BASE_URL}
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return path
 
 
 def _default_transport(
@@ -71,12 +127,14 @@ class CloudClient:
 
     def __post_init__(self) -> None:
         if self.api_key is None:
-            self.api_key = os.environ.get("BILINC_API_KEY")
+            self.api_key = os.environ.get("BILINC_API_KEY") or load_config_api_key()
         if not self.api_key:
             raise BilincApiKeyRequired(
                 "Bilinc requires a Bilinc Cloud API key. "
-                f"Start a 7-day trial at {SIGNUP_URL}, then set BILINC_API_KEY."
+                f"Start a 7-day trial at {SIGNUP_URL}, then run bilinc login --api-key <key>."
             )
+        if self.base_url == DEFAULT_BASE_URL:
+            self.base_url = os.environ.get("BILINC_BASE_URL", self.base_url)
         self.base_url = self.base_url.rstrip("/")
 
     def commit(
@@ -158,6 +216,9 @@ __all__ = [
     "BilincCloudError",
     "BilincError",
     "CloudClient",
+    "config_path",
     "DEFAULT_BASE_URL",
+    "load_config_api_key",
+    "save_config_api_key",
     "SIGNUP_URL",
 ]

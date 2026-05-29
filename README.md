@@ -1,92 +1,62 @@
 # Bilinc
 
-**Cloud-only memory SDK, CLI, and MCP adapter for autonomous agents.**
+Bilinc is a ReARC Labs product for hosted, verifiable AI agent memory.
 
-<p align="center">
-  <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/v/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7" alt="PyPI"></a>
-  <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pepy/dt/bilinc?style=flat-square&logo=pypi&logoColor=white&color=0073b7&label=downloads" alt="All-time downloads"></a>
-  <a href="https://github.com/ReARCLabs/Bilinc/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ReARCLabs/Bilinc/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=ci" alt="CI"></a>
-  <a href="https://github.com/ReARCLabs/Bilinc/tags"><img src="https://img.shields.io/github/v/tag/ReARCLabs/Bilinc?sort=semver&style=flat-square&logo=github&label=tag" alt="GitHub tag"></a>
-  <a href="https://pypi.org/project/bilinc/"><img src="https://img.shields.io/pypi/pyversions/bilinc?style=flat-square&logo=python&logoColor=white" alt="Python versions"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-BUSL--1.1-orange?style=flat-square" alt="License: BUSL 1.1"></a>
-</p>
+Bilinc 2.1.2 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
+
+## Start in 60 Seconds
 
 ```bash
-pip install bilinc
+pip install -U bilinc
+bilinc start
 ```
 
-Bilinc 2.1.1 is the current public package. It is intentionally thin: install from PyPI, start a 7-day Bilinc Cloud trial, create a hosted API key, then use the Python SDK, CLI, or MCP adapter against hosted Bilinc Cloud.
+`bilinc start` shows the shortest path from install to first hosted memory:
 
-Start here: [https://bilinc.space/signup](https://bilinc.space/signup)
+1. Start the 7-day Bilinc Cloud trial at https://bilinc.space/signup.
+2. Confirm email.
+3. Create one hosted API key in the Cloud dashboard.
+4. Connect the CLI:
 
-## Public package boundary
+```bash
+bilinc login --api-key bil_live_...
+bilinc quicktest
+```
 
-The public PyPI package ships only the cloud-facing surface:
+`bilinc quicktest` performs one hosted commit, one hosted recall, and one Cloud status check.
 
-- `CloudClient`
-- `Bilinc` alias
-- `BilincApiKeyRequired`
-- `BilincCloudError`
-- `bilinc` CLI
-- `bilinc.cloud_mcp` hosted MCP adapter
+## Python SDK
 
-It does not ship the previous local runtime, storage backends, eval stack, observability stack, local server internals, or private deployment paths.
+```python
+from bilinc import CloudClient
 
-`2.1.0` was yanked because it exposed the wrong public package boundary for the cloud-only release. Use `2.1.1` or newer.
+client = CloudClient()  # reads BILINC_API_KEY or a key saved by `bilinc login`
+client.commit("agent.goal", {"ship": "reliable memory"}, memory_type="semantic")
+results = client.recall("agent goal", limit=5)
+status = client.status()
+```
 
-## Quick start
-
-1. Start a 7-day Cloud trial:
-
-   [https://bilinc.space/signup](https://bilinc.space/signup)
-
-2. Create a hosted API key in the Bilinc dashboard.
-
-3. Set the API key:
-
-   ```bash
-   export BILINC_API_KEY="bil_live_..."
-   ```
-
-4. Install and use the SDK:
-
-   ```bash
-   pip install bilinc
-   ```
-
-   ```python
-   from bilinc import CloudClient
-
-   client = CloudClient()
-
-   commit = client.commit(
-       key="agent.memory.release",
-       value={"status": "verified", "version": "2.1.1"},
-       memory_type="semantic",
-       importance=0.9,
-   )
-
-   recall = client.recall("release status", limit=5)
-
-   print(commit)
-   print(recall)
-   ```
+For server, CI, and hosted agent runtimes, store the key as `BILINC_API_KEY`.
 
 ## CLI
 
 ```bash
-bilinc --version
-bilinc signup
 bilinc status
-bilinc commit --key agent.memory.release --value '{"status":"verified"}'
-bilinc recall --query "release status"
+bilinc commit --key agent.goal --value '{"ship":"reliable memory"}'
+bilinc recall --query "agent goal"
+bilinc doctor
 ```
 
-The CLI reads `BILINC_API_KEY` from the environment unless `--api-key` is passed.
+Useful first-run commands:
 
-## MCP adapter
+```bash
+bilinc start
+bilinc login --api-key bil_live_...
+bilinc quicktest
+bilinc mcp install
+```
 
-Bilinc includes a hosted Cloud MCP adapter for MCP-compatible agents:
+## MCP Adapter
 
 ```json
 {
@@ -94,63 +64,32 @@ Bilinc includes a hosted Cloud MCP adapter for MCP-compatible agents:
     "bilinc": {
       "command": "python",
       "args": ["-m", "bilinc.cloud_mcp"],
-      "env": {
-        "BILINC_API_KEY": "bil_live_..."
-      }
+      "env": { "BILINC_API_KEY": "bil_live_..." }
     }
   }
 }
 ```
 
-Use this adapter when you want an agent to commit and recall hosted Bilinc Cloud memory without running a local backend.
+The adapter exposes hosted commit, recall, and status operations. It does not bundle local runtime internals.
 
-## Hosted Cloud endpoints
+## Hosted Endpoints
 
-The SDK targets the hosted Bilinc Cloud API:
+- Health: `GET https://bilinc.space/api/cloud/health`
+- Commit: `POST https://bilinc.space/api/cloud/memory/commit`
+- Recall: `POST https://bilinc.space/api/cloud/memory/recall`
 
-- `GET /api/cloud/health`
-- `POST /api/cloud/memory/commit`
-- `POST /api/cloud/memory/recall`
+Authenticated memory operations require an active Bilinc Cloud entitlement.
 
-Unauthenticated memory operations return `401`. Runtime access is controlled by Bilinc Cloud entitlements.
+## Links
 
-## Plans
-
-Public signup starts with a 7-day Cloud Free Trial. Pro and Team checkout are handled through the authenticated billing console on [bilinc.space](https://bilinc.space).
-
-See current pricing: [https://bilinc.space/pricing](https://bilinc.space/pricing)
-
-## What Bilinc is for
-
-Bilinc Cloud gives autonomous agents a hosted memory layer for:
-
-- durable memory commit and recall
-- API-key scoped runtime access
-- project/workspace isolation
-- audit-friendly hosted operations
-- MCP-compatible agent workflows
-
-The public package is an acquisition and integration surface for the hosted product, not a bundle of the full private runtime.
-
-## Verification
-
-The release process checks that public artifacts do not contain private runtime packages and that the wheel/sdist expose only the intended cloud-facing modules.
-
-Expected public import surface:
-
-```python
-import bilinc
-from bilinc import CloudClient, Bilinc, BilincApiKeyRequired, BilincCloudError
-
-print(bilinc.version)
-```
-
-Expected version:
-
-```text
-2.1.1
-```
+- Website: https://bilinc.space
+- Signup: https://bilinc.space/signup
+- Install guide: https://bilinc.space/install
+- Quickstart: https://bilinc.space/docs/quickstart
+- Cloud quickstart: https://bilinc.space/docs/cloud-quickstart
+- Migration guide: https://bilinc.space/docs/migration-v2
+- PyPI: https://pypi.org/project/bilinc/
 
 ## License
 
-[BUSL 1.1](LICENSE). Hosted Bilinc Cloud access is governed by active Cloud entitlements and plan limits.
+BUSL-1.1. See `LICENSE`.
