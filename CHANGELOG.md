@@ -2,6 +2,17 @@
 
 All notable changes to Bilinc.
 
+## [2.1.2] — 2026-05-29
+
+### Added
+- Added the CLI-led activation path: `bilinc start`, `bilinc login`, `bilinc quicktest`, `bilinc doctor`, and `bilinc mcp install`.
+- Added local CLI config support so `bilinc login --api-key <key>` can store a hosted Cloud key without requiring repeated shell exports.
+- Added `BILINC_BASE_URL` override support for mock, staging, and docs smoke verification.
+
+### Changed
+- Updated the public README to the cloud-only PyPI package surface and removed legacy local `StatePlane` quickstart framing.
+- Kept the public package boundary cloud-only: CloudClient, CLI, and Cloud MCP adapter only.
+
 ## [2.1.1] — 2026-05-26
 
 ### Fixed

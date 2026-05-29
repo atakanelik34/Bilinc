@@ -11,8 +11,8 @@ import pytest
 def test_public_api_is_cloud_only():
     import bilinc
 
-    assert bilinc.__version__ == "2.1.1"
-    assert bilinc.version == "2.1.1"
+    assert bilinc.__version__ == "2.1.2"
+    assert bilinc.version == "2.1.2"
     assert hasattr(bilinc, "Bilinc")
     assert hasattr(bilinc, "CloudClient")
     assert not hasattr(bilinc, "StatePlane")
@@ -37,6 +37,23 @@ def test_cloud_client_requires_api_key():
     assert "https://bilinc.space/signup" in str(exc.value)
 
 
+def test_cloud_client_reads_saved_cli_config(monkeypatch, tmp_path):
+    from bilinc import CloudClient
+    from bilinc.client import config_path, save_config_api_key
+
+    monkeypatch.delenv("BILINC_API_KEY", raising=False)
+    monkeypatch.setenv("BILINC_CONFIG_DIR", str(tmp_path))
+
+    saved_path = save_config_api_key("bil_live_saved_test")
+    transport = RecordingTransport({"status": "ok"})
+    client = CloudClient(transport=transport)
+
+    client.status()
+
+    assert saved_path == config_path()
+    assert transport.calls[0]["headers"]["Authorization"] == "Bearer bil_live_saved_test"
+
+
 def test_cloud_client_normalizes_base_url():
     from bilinc import CloudClient
 
@@ -46,6 +63,18 @@ def test_cloud_client_normalizes_base_url():
     client.status()
 
     assert transport.calls[0]["url"] == "https://bilinc.space/api/cloud/health"
+
+
+def test_cloud_client_base_url_can_come_from_env(monkeypatch):
+    from bilinc import CloudClient
+
+    monkeypatch.setenv("BILINC_BASE_URL", "http://127.0.0.1:9999/")
+    transport = RecordingTransport({"status": "ok"})
+    client = CloudClient(api_key="bil_live_test", transport=transport)
+
+    client.status()
+
+    assert transport.calls[0]["url"] == "http://127.0.0.1:9999/api/cloud/health"
 
 
 def test_cloud_client_commit_posts_to_hosted_api():
@@ -64,7 +93,7 @@ def test_cloud_client_commit_posts_to_hosted_api():
             "headers": {
                 "Authorization": "Bearer bil_live_test",
                 "Content-Type": "application/json",
-                "User-Agent": "bilinc-python/2.1.1",
+                "User-Agent": "bilinc-python/2.1.2",
             },
             "body": json.dumps(
                 {
@@ -111,7 +140,7 @@ def test_cloud_client_status_reads_hosted_health_endpoint():
             "url": "https://bilinc.space/api/cloud/health",
             "headers": {
                 "Authorization": "Bearer bil_live_test",
-                "User-Agent": "bilinc-python/2.1.1",
+                "User-Agent": "bilinc-python/2.1.2",
             },
             "body": None,
             "timeout": 30.0,
@@ -132,6 +161,7 @@ def test_cli_signup_and_missing_key_failure(monkeypatch, capsys):
     from bilinc.cli.main import main
 
     monkeypatch.delenv("BILINC_API_KEY", raising=False)
+    monkeypatch.setenv("BILINC_CONFIG_DIR", os.devnull)
 
     assert main(["signup"]) == 0
     signup_out = capsys.readouterr()
@@ -146,6 +176,52 @@ def test_cli_signup_and_missing_key_failure(monkeypatch, capsys):
     recall_out = capsys.readouterr()
     assert "https://bilinc.space/signup" in recall_out.err
     assert "Traceback" not in recall_out.err
+
+
+def test_cli_start_login_doctor_quicktest_and_mcp_config(monkeypatch, capsys, tmp_path):
+    from bilinc.cli import main as cli_main
+
+    class FakeClient:
+        def __init__(self, api_key=None, base_url="https://bilinc.space", timeout=30.0):
+            self.api_key = api_key
+            self.base_url = base_url
+            self.timeout = timeout
+
+        def status(self):
+            return {"status": "ok", "mode": "test"}
+
+        def commit(self, key, value, *, memory_type="semantic", importance=1.0, metadata=None):
+            return {"success": True, "key": key, "value": value, "metadata": metadata}
+
+        def recall(self, query, *, profile="balanced", limit=10):
+            return {"results": [{"key": query}], "profile": profile, "limit": limit}
+
+    monkeypatch.delenv("BILINC_API_KEY", raising=False)
+    monkeypatch.setenv("BILINC_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(cli_main, "CloudClient", FakeClient)
+
+    assert cli_main.main(["start"]) == 0
+    start_out = capsys.readouterr()
+    assert "bilinc login --api-key <key>" in start_out.out
+
+    assert cli_main.main(["login", "--api-key", "bil_live_cli_test"]) == 0
+    login_out = capsys.readouterr()
+    assert "bil_live_cli_test" not in login_out.out
+    assert "quicktest" in login_out.out
+
+    assert cli_main.main(["doctor"]) == 0
+    doctor_out = capsys.readouterr()
+    assert '"api_key_configured": true' in doctor_out.out
+
+    assert cli_main.main(["quicktest", "--key", "agent.memory.bootstrap"]) == 0
+    quicktest_out = capsys.readouterr()
+    assert '"ok": true' in quicktest_out.out
+    assert "agent.memory.bootstrap" in quicktest_out.out
+
+    assert cli_main.main(["mcp", "install"]) == 0
+    mcp_out = capsys.readouterr()
+    assert "bilinc.cloud_mcp" in mcp_out.out
+    assert "bil_live_cli_test" not in mcp_out.out
 
 
 def _forbidden_package_prefixes(root: str = "") -> tuple[str, ...]:
