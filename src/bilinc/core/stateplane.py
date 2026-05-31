@@ -56,6 +56,21 @@ class StatePlane:
     INTELLIGENT_RECALL_ENTITY_WEIGHT = 0.2
     REFLECTION_DEFAULT_THRESHOLD = 0.55
     REFLECTION_MAX_PASSES = 3
+    RECALL_EXPLAIN_SENSITIVE_KEYS = {
+        "token",
+        "secret",
+        "password",
+        "api_key",
+        "apikey",
+        "authorization",
+        "bearer",
+        "credential",
+        "private",
+    }
+    RECALL_EXPLAIN_FIELD_REDACT_KEYS = {"source", "session_id", "provenance_id"}
+    RECALL_EXPLAIN_SECRET_PATTERN = re.compile(
+        r"(?i)(bearer\s+[a-z0-9._-]{12,}|sk-[a-z0-9_-]{20,}|pypi-[a-z0-9_-]{20,}|bil_live_[a-z0-9_-]{12,}|secret-token|token-[a-z0-9_-]{3,})"
+    )
     
     def __init__(self, backend=None, working_memory=None, max_working_slots=8,
                  enable_verification=False, enable_audit=False):
@@ -539,6 +554,7 @@ class StatePlane:
         query: str,
         limit: int = 10,
         memory_types: Optional[List[MemoryType]] = None,
+        explain: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Multi-path retrieval with lightweight fusion:
@@ -594,13 +610,14 @@ class StatePlane:
                 bucket["entity"] = boost
 
             ranked_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]]
+            claims_by_key = await self._active_claims_by_memory_key(ranked_keys) if explain else {}
             results = []
             for key in ranked_keys:
                 entry = candidates.get(key)
                 if not entry:
                     continue
                 entry_signals = signals.get(key, {"lexical": 0.0, "hybrid": 0.0, "entity": 0.0, "entity_rrf": 0.0})
-                results.append({
+                result = {
                     "key": entry.key,
                     "value": entry.value,
                     "memory_type": entry.memory_type.value,
@@ -611,7 +628,18 @@ class StatePlane:
                         "hybrid": round(entry_signals.get("hybrid", 0.0), 6),
                         "entity": round(entry_signals.get("entity", 0.0), 6),
                     },
-                })
+                }
+                if explain:
+                    result.update(
+                        self._recall_explain_envelope(
+                            query=query,
+                            entry=entry,
+                            score=fused_scores.get(key, 0.0),
+                            signals=entry_signals,
+                            supporting_claims=claims_by_key.get(key, []),
+                        )
+                    )
+                results.append(result)
 
             self._record_success(
                 "recall_intelligent",
@@ -669,6 +697,7 @@ class StatePlane:
         memory_types: Optional[List[MemoryType]] = None,
         max_reflections: Optional[int] = None,
         adequacy_threshold: Optional[float] = None,
+        explain: bool = False,
     ) -> Dict[str, Any]:
         """Run recall with a named profile and attach optional read-only evidence metadata."""
         resolved = self.resolve_recall_profile(profile)
@@ -682,6 +711,7 @@ class StatePlane:
             max_reflections=resolved["max_reflections"],
             adequacy_threshold=resolved["adequacy_threshold"],
             memory_types=memory_types,
+            explain=explain,
         )
         payload["profile"] = resolved["name"]
         payload["recall_profile"] = resolved
@@ -705,6 +735,152 @@ class StatePlane:
             evidence["contradictions"] = ContradictionReport.from_findings(findings).to_dict()
         return evidence
 
+    async def _active_claims_by_memory_key(self, memory_keys: List[str]) -> Dict[str, List[Any]]:
+        """Return active claims grouped by memory key without mutating backend state."""
+        if not self.backend or not hasattr(self.backend, "list_claims"):
+            return {}
+        wanted = {str(key) for key in memory_keys}
+        if not wanted:
+            return {}
+        try:
+            if hasattr(self.backend, "list_claims_for_memory_keys"):
+                claims = await self.backend.list_claims_for_memory_keys(sorted(wanted), active=True)
+            else:
+                claims = await self.backend.list_claims(active=True, limit=max(1000, len(wanted) * 100))
+        except Exception:
+            return {}
+        grouped: Dict[str, List[Any]] = {}
+        for claim in claims:
+            if claim.memory_key in wanted:
+                grouped.setdefault(claim.memory_key, []).append(claim)
+        return grouped
+
+    def _recall_explain_envelope(
+        self,
+        query: str,
+        entry: MemoryEntry,
+        score: float,
+        signals: Dict[str, float],
+        supporting_claims: List[Any],
+    ) -> Dict[str, Any]:
+        return {
+            "why_retrieved": self._why_retrieved(query, entry, score, signals),
+            "provenance": self._recall_provenance(entry),
+            "risk_flags": self._recall_risk_flags(entry),
+            "supporting_claims": [self._safe_claim_dict(claim) for claim in supporting_claims],
+        }
+
+    def _why_retrieved(
+        self,
+        query: str,
+        entry: MemoryEntry,
+        score: float,
+        signals: Dict[str, float],
+    ) -> List[str]:
+        reasons: List[str] = []
+        tokens = set(self._tokenize_query(query))
+        text = f"{entry.key} {entry.value}".lower()
+        matching_tokens = sorted(token for token in tokens if token and token in text)
+        if signals.get("lexical", 0.0) > 0:
+            token_note = f" ({', '.join(matching_tokens[:5])})" if matching_tokens else ""
+            reasons.append(f"lexical match{token_note}")
+        if signals.get("hybrid", 0.0) > 0:
+            reasons.append("hybrid/vector rerank match")
+        if signals.get("entity", 0.0) > 0:
+            reasons.append("entity overlap match")
+        if entry.importance >= 0.8:
+            reasons.append(f"high importance {entry.importance:.2f}")
+        if isinstance(entry.metadata, dict) and entry.metadata.get("canonical"):
+            reasons.append("canonical memory")
+        if not reasons:
+            reasons.append(f"fused recall score {score:.6f}")
+        return reasons
+
+    def _recall_provenance(self, entry: MemoryEntry) -> Dict[str, Any]:
+        metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+        provenance: Dict[str, Any] = {
+            "memory_key": entry.key,
+            "memory_type": entry.memory_type.value,
+            "source": self._redact_recall_explain_value(entry.source, key_hint="source"),
+            "session_id": self._redact_recall_explain_value(entry.session_id, key_hint="session_id"),
+            "created_at": entry.created_at,
+            "updated_at": entry.updated_at,
+            "valid_at": entry.valid_at,
+            "invalid_at": entry.invalid_at,
+            "ttl": entry.ttl,
+            "is_verified": entry.is_verified,
+            "verification_score": entry.verification_score,
+            "verification_method": entry.verification_method,
+            "current_strength": entry.current_strength,
+            "access_count": entry.access_count,
+        }
+        for field in ("source_hash", "provenance_id", "authority", "sensitivity"):
+            if field in metadata:
+                provenance[field] = self._redact_recall_explain_value(metadata[field], key_hint=field)
+        return provenance
+
+    def _recall_risk_flags(self, entry: MemoryEntry) -> List[str]:
+        flags: List[str] = []
+        now = time.time()
+        metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+        if entry.current_strength < 0.25:
+            flags.append("low_strength")
+        if not entry.is_verified:
+            flags.append("unverified")
+        if entry.invalid_at is not None:
+            try:
+                flags.append("expired" if float(entry.invalid_at) <= now else "stale_possible")
+            except (TypeError, ValueError):
+                flags.append("stale_possible")
+        if entry.ttl is not None:
+            try:
+                if entry.created_at + float(entry.ttl) <= now:
+                    flags.append("expired")
+            except (TypeError, ValueError):
+                flags.append("stale_possible")
+        sensitivity = str(metadata.get("sensitivity") or metadata.get("classification") or "").lower()
+        if sensitivity in {"internal", "private", "secret", "confidential"}:
+            flags.append("sensitive_metadata")
+        if metadata.get("private") or metadata.get("secret"):
+            flags.append("sensitive_metadata")
+        deduped: List[str] = []
+        for flag in flags:
+            if flag not in deduped:
+                deduped.append(flag)
+        return deduped
+
+    def _safe_claim_dict(self, claim: Any) -> Dict[str, Any]:
+        return {
+            "id": claim.id,
+            "memory_key": claim.memory_key,
+            "holder": claim.holder,
+            "subject": claim.subject,
+            "claim": claim.claim,
+            "kind": claim.kind.value if hasattr(claim.kind, "value") else str(claim.kind),
+            "confidence": claim.confidence,
+            "source": self._redact_recall_explain_value(claim.source, key_hint="source"),
+            "provenance_id": self._redact_recall_explain_value(claim.provenance_id, key_hint="provenance_id"),
+            "valid_at": claim.valid_at,
+            "invalid_at": claim.invalid_at,
+            "active": claim.active,
+        }
+
+    def _redact_recall_explain_value(self, value: Any, *, key_hint: str = "") -> Any:
+        key_l = key_hint.lower()
+        if key_l in self.RECALL_EXPLAIN_FIELD_REDACT_KEYS and value not in (None, ""):
+            return "[REDACTED]"
+        if any(sensitive in key_l for sensitive in self.RECALL_EXPLAIN_SENSITIVE_KEYS):
+            return "[REDACTED]"
+        if isinstance(value, str):
+            return self.RECALL_EXPLAIN_SECRET_PATTERN.sub("[REDACTED]", value)
+        if isinstance(value, list):
+            return [self._redact_recall_explain_value(item, key_hint=key_hint) for item in value]
+        if isinstance(value, tuple):
+            return [self._redact_recall_explain_value(item, key_hint=key_hint) for item in value]
+        if isinstance(value, dict):
+            return {str(k): self._redact_recall_explain_value(v, key_hint=str(k)) for k, v in value.items()}
+        return value
+
     async def recall_reflective(
         self,
         query: str,
@@ -712,6 +888,7 @@ class StatePlane:
         max_reflections: int = 3,
         adequacy_threshold: float = 0.55,
         memory_types: Optional[List[MemoryType]] = None,
+        explain: bool = False,
     ) -> Dict[str, Any]:
         """
         Reflection loop:
@@ -731,6 +908,7 @@ class StatePlane:
                 current_query,
                 limit=limit,
                 memory_types=memory_types,
+                explain=explain,
             )
             adequacy = self._evaluate_recall_adequacy(current_query, results)
 
@@ -748,6 +926,7 @@ class StatePlane:
                     current_query,
                     limit=limit,
                     memory_types=memory_types,
+                    explain=explain,
                 )
                 next_adequacy = self._evaluate_recall_adequacy(current_query, next_results)
 

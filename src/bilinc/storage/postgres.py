@@ -280,6 +280,31 @@ class PostgresBackend(StorageBackend):
             rows = await conn.fetch(sql, *params)
         return [self._row_to_claim(row) for row in rows]
 
+    async def list_claims_for_memory_keys(self, memory_keys: list[str], active: bool | None = True, limit: int | None = None):
+        if not self._initialized:
+            await self.init()
+        keys = [str(key) for key in memory_keys if key is not None]
+        if not keys:
+            return []
+        sql = "SELECT * FROM bilinc_claims WHERE memory_key = ANY($1::text[])"
+        params: list[Any] = [keys]
+        if active is not None:
+            params.append(bool(active))
+            sql += f" AND active = ${len(params)}"
+            if active:
+                now = time.time()
+                params.append(now)
+                sql += f" AND (valid_at IS NULL OR valid_at <= ${len(params)})"
+                params.append(now)
+                sql += f" AND (invalid_at IS NULL OR invalid_at > ${len(params)})"
+        sql += " ORDER BY updated_at DESC"
+        if limit is not None:
+            params.append(int(limit))
+            sql += f" LIMIT ${len(params)}"
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [self._row_to_claim(row) for row in rows]
+
     async def search_claims(self, query: str, limit: int = 10):
         if not self._initialized:
             await self.init()
