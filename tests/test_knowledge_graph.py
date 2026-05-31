@@ -10,12 +10,9 @@ Covering:
 
 import pytest
 import json
-import time
 from bilinc.core.models import MemoryType, MemoryEntry
 from bilinc.core.knowledge_graph import (
     KnowledgeGraph,
-    KGNode,
-    KGEdge,
     NodeType,
     EdgeType,
 )
@@ -57,7 +54,7 @@ class TestKGBasicOps:
 
     def test_kg_add_relation_auto_create_nodes(self, kg: KnowledgeGraph):
         """add_relation should auto-create nodes if missing."""
-        edge = kg.add_relation("A", "B", EdgeType.CAUSES)
+        kg.add_relation("A", "B", EdgeType.CAUSES)
         assert kg.query_entity("A") is not None
         assert kg.query_entity("B") is not None
 
@@ -333,3 +330,166 @@ class TestKGSerialization:
         kg2.import_from_json({"nodes": [], "edges": []})
         assert kg2.stats["nodes"] == 0
         assert kg2.stats["edges"] == 0
+
+
+class TestKGProjectionPreview:
+    def test_projection_preview_from_claim_and_metadata(self):
+        from bilinc.core.graph_doctor import preview_projection
+
+        entry = MemoryEntry(
+            key="project:bilinc:status",
+            value="Bilinc is the verifiable memory/state layer for ReARC agents.",
+            memory_type=MemoryType.SEMANTIC,
+            source="vault",
+            importance=0.92,
+            metadata={
+                "product": "Bilinc",
+                "concerns": ["agent-memory"],
+                "claims": [
+                    {
+                        "holder": "hermes",
+                        "subject": "Bilinc",
+                        "claim": "Bilinc is a verifiable memory/state layer",
+                        "kind": "fact",
+                        "confidence": 0.91,
+                        "provenance_id": "project:bilinc:status",
+                        "valid_at": 1780260000.0,
+                    }
+                ],
+            },
+        )
+
+        preview = preview_projection([entry])
+
+        assert preview["read_only"] is True
+        assert preview["memory_count"] == 1
+        assert preview["stats"]["claim_count"] == 1
+        node_names = {node["name"] for node in preview["candidate_nodes"]}
+        assert {"project:bilinc:status", "Bilinc", "agent-memory", "hermes"}.issubset(node_names)
+        assert any(edge["source"] == "project:bilinc:status" and edge["target"] == "Bilinc" for edge in preview["candidate_edges"])
+        assert any(edge["source"] == "hermes" and edge["target"] == "Bilinc" for edge in preview["candidate_edges"])
+        assert all(edge["metadata"].get("memory_key") or edge["metadata"].get("provenance_id") for edge in preview["candidate_edges"])
+
+    def test_projection_preview_reports_memories_without_projection(self):
+        from bilinc.core.graph_doctor import preview_projection
+
+        entry = MemoryEntry(
+            key="session:empty",
+            value="lowercase scratch only",
+            memory_type=MemoryType.PROCEDURAL,
+            metadata={},
+        )
+
+        preview = preview_projection([entry])
+
+        assert preview["stats"]["memories_without_projection"] == 1
+        assert any(issue["type"] == "no_projection_candidates" for issue in preview["issues"])
+
+    def test_projection_preview_reports_malformed_claims_without_throwing(self):
+        from bilinc.core.graph_doctor import preview_projection
+
+        entry = MemoryEntry(
+            key="mem:bad-claim",
+            value="source",
+            memory_type=MemoryType.SEMANTIC,
+            metadata={"claims": [{"holder": "hermes", "claim": "missing subject"}]},
+        )
+
+        preview = preview_projection([entry])
+
+        assert any(issue["type"] == "malformed_claim" for issue in preview["issues"])
+
+    def test_projection_preview_reports_duplicate_alias_candidates(self):
+        from bilinc.core.graph_doctor import preview_projection
+
+        entries = [
+            MemoryEntry(key="mem:1", value="source", memory_type=MemoryType.SEMANTIC, metadata={"product": "Bilinc"}),
+            MemoryEntry(key="mem:2", value="source", memory_type=MemoryType.SEMANTIC, metadata={"product": "bilinc"}),
+        ]
+
+        preview = preview_projection(entries)
+
+        assert any(issue["type"] == "possible_duplicate_entity" for issue in preview["issues"])
+
+    def test_projection_preview_reports_expired_claim_window(self):
+        from bilinc.core.graph_doctor import preview_projection
+
+        entry = MemoryEntry(
+            key="mem:expired",
+            value="source",
+            memory_type=MemoryType.SEMANTIC,
+            metadata={
+                "claims": [
+                    {
+                        "holder": "hermes",
+                        "subject": "Bilinc",
+                        "claim": "stale claim",
+                        "kind": "fact",
+                        "invalid_at": 1.0,
+                    }
+                ]
+            },
+        )
+
+        preview = preview_projection([entry], now=10.0)
+
+        assert any(issue["type"] == "expired_claim" for issue in preview["issues"])
+        expired_edges = [edge for edge in preview["candidate_edges"] if edge["metadata"].get("claim") == "stale claim"]
+        assert expired_edges
+        assert expired_edges[0]["metadata"]["active"] is False
+
+    def test_projection_preview_temporal_eval_requires_explicit_now(self):
+        from bilinc.core.graph_doctor import preview_projection
+
+        entry = MemoryEntry(
+            key="mem:temporal",
+            value="source",
+            memory_type=MemoryType.SEMANTIC,
+            metadata={"claims": [{"holder": "hermes", "subject": "Bilinc", "claim": "timeless by default", "invalid_at": 1.0}]},
+        )
+
+        first = preview_projection([entry])
+        second = preview_projection([entry])
+
+        assert first == second
+        assert not any(issue["type"] == "expired_claim" for issue in first["issues"])
+
+    def test_projection_preview_suppresses_secret_like_value_entities(self):
+        from bilinc.core.graph_doctor import preview_projection
+
+        entry = MemoryEntry(
+            key="mem:sensitive",
+            value="Do not project AKIAABCDEFGHIJKLMNOP or SECRET_TOKEN_VALUE from this text",
+            memory_type=MemoryType.SEMANTIC,
+        )
+
+        preview = preview_projection([entry])
+
+        node_names = {node["name"] for node in preview["candidate_nodes"]}
+        assert "AKIAABCDEFGHIJKLMNOP" not in node_names
+        assert "SECRET_TOKEN_VALUE" not in node_names
+
+    @pytest.mark.asyncio
+    async def test_stateplane_preview_graph_projection_is_read_only(self, tmp_path):
+        from bilinc.core.stateplane import StatePlane
+        from bilinc.storage.sqlite import SQLiteBackend
+
+        backend = SQLiteBackend(str(tmp_path / "projection.db"))
+        await backend.init()
+        plane = StatePlane(backend=backend, enable_verification=False, enable_audit=False)
+        await plane.init()
+        plane.init_knowledge_graph()
+        await plane.commit(
+            "project:bilinc:status",
+            "Bilinc is a verifiable memory/state layer",
+            MemoryType.SEMANTIC,
+            metadata={"product": "Bilinc", "concerns": ["agent-memory"]},
+        )
+        before_entries = len(await backend.list_all())
+
+        preview = await plane.preview_graph_projection(memory_types=[MemoryType.SEMANTIC])
+
+        assert preview["read_only"] is True
+        assert preview["source"] == "backend"
+        assert preview["stats"]["candidate_node_count"] >= 2
+        assert len(await backend.list_all()) == before_entries
