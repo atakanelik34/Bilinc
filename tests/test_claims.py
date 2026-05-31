@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.core.claims import claim_id_for, extract_claims_from_entry, normalize_claim_kind
 from bilinc.core.models import Claim, ClaimKind, MemoryEntry, MemoryType
 from bilinc.mcp_server.server_v2 import (

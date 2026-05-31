@@ -5,7 +5,7 @@ Shows how to integrate Bilinc as a persistent memory layer
 for autonomous coding agents.
 """
 
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
 
 # Initialize the state plane
