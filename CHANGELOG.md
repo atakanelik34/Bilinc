@@ -2,6 +2,13 @@
 
 All notable changes to Bilinc.
 
+## [2.1.3] — 2026-06-01
+
+### Changed
+- Tightened the first-run activation path so `bilinc start` points users to the 7-day trial, hosted API key creation, `bilinc login`, and `bilinc quicktest`.
+- Added tracked CLI signup/install URLs for measuring PyPI-to-Cloud activation without changing the Cloud entitlement gate.
+- Updated README first-run copy to make a passing `bilinc quicktest` the first success milestone.
+
 ## [2.1.2] — 2026-05-29
 
 ### Added

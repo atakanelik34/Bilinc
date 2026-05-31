@@ -1,6 +1,6 @@
 """Bilinc Cloud client.
 
-Bilinc 2.1.2 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
+Bilinc 2.1.3 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
 https://bilinc.space. Local self-hosted StatePlane internals are no longer
 shipped in the public package.
 """
@@ -15,9 +15,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-__version__ = "2.1.2"
+__version__ = "2.1.3"
 DEFAULT_BASE_URL = "https://bilinc.space"
 SIGNUP_URL = "https://bilinc.space/signup"
+ACTIVATION_CAMPAIGN = "activation_2_1_3"
+ACTIVATION_SIGNUP_URL = (
+    f"{SIGNUP_URL}?utm_source=pypi&utm_medium=cli&utm_campaign={ACTIVATION_CAMPAIGN}"
+)
+INSTALL_URL = (
+    f"{DEFAULT_BASE_URL}/install?utm_source=pypi&utm_medium=cli&utm_campaign={ACTIVATION_CAMPAIGN}"
+)
 CONFIG_DIR_ENV = "BILINC_CONFIG_DIR"
 CONFIG_FILE_NAME = "config.json"
 
@@ -76,7 +83,8 @@ def save_config_api_key(api_key: str, *, base_url: str = DEFAULT_BASE_URL) -> Pa
     if not key:
         raise BilincApiKeyRequired(
             "Bilinc requires a Bilinc Cloud API key. "
-            f"Start a 7-day trial at {SIGNUP_URL}, then run bilinc login --api-key <key>."
+            f"Start a 7-day trial at {ACTIVATION_SIGNUP_URL}, "
+            "then run bilinc login --api-key <key> and bilinc quicktest."
         )
 
     path = config_path()
@@ -131,7 +139,8 @@ class CloudClient:
         if not self.api_key:
             raise BilincApiKeyRequired(
                 "Bilinc requires a Bilinc Cloud API key. "
-                f"Start a 7-day trial at {SIGNUP_URL}, then run bilinc login --api-key <key>."
+                f"Start a 7-day trial at {ACTIVATION_SIGNUP_URL}, "
+                "then run bilinc login --api-key <key> and bilinc quicktest."
             )
         if self.base_url == DEFAULT_BASE_URL:
             self.base_url = os.environ.get("BILINC_BASE_URL", self.base_url)
@@ -216,8 +225,10 @@ __all__ = [
     "BilincCloudError",
     "BilincError",
     "CloudClient",
+    "ACTIVATION_SIGNUP_URL",
     "config_path",
     "DEFAULT_BASE_URL",
+    "INSTALL_URL",
     "load_config_api_key",
     "save_config_api_key",
     "SIGNUP_URL",
