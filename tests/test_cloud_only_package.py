@@ -11,8 +11,9 @@ import pytest
 def test_public_api_is_cloud_only():
     import bilinc
 
-    assert bilinc.__version__ == "2.1.2"
-    assert bilinc.version == "2.1.2"
+    assert bilinc.__version__ == "2.1.3"
+    assert bilinc.version == "2.1.3"
+    assert "utm_campaign=activation_2_1_3" in bilinc.ACTIVATION_SIGNUP_URL
     assert hasattr(bilinc, "Bilinc")
     assert hasattr(bilinc, "CloudClient")
     assert not hasattr(bilinc, "StatePlane")
@@ -93,7 +94,7 @@ def test_cloud_client_commit_posts_to_hosted_api():
             "headers": {
                 "Authorization": "Bearer bil_live_test",
                 "Content-Type": "application/json",
-                "User-Agent": "bilinc-python/2.1.2",
+                "User-Agent": "bilinc-python/2.1.3",
             },
             "body": json.dumps(
                 {
@@ -140,7 +141,7 @@ def test_cloud_client_status_reads_hosted_health_endpoint():
             "url": "https://bilinc.space/api/cloud/health",
             "headers": {
                 "Authorization": "Bearer bil_live_test",
-                "User-Agent": "bilinc-python/2.1.2",
+                "User-Agent": "bilinc-python/2.1.3",
             },
             "body": None,
             "timeout": 30.0,
@@ -166,6 +167,8 @@ def test_cli_signup_and_missing_key_failure(monkeypatch, capsys):
     assert main(["signup"]) == 0
     signup_out = capsys.readouterr()
     assert "https://bilinc.space/signup" in signup_out.out
+    assert "activation_2_1_3" in signup_out.out
+    assert "quicktest" in signup_out.out
 
     assert main(["commit", "--key", "smoke_key", "--value", "hello"]) == 1
     commit_out = capsys.readouterr()
@@ -203,6 +206,9 @@ def test_cli_start_login_doctor_quicktest_and_mcp_config(monkeypatch, capsys, tm
     assert cli_main.main(["start"]) == 0
     start_out = capsys.readouterr()
     assert "bilinc login --api-key <key>" in start_out.out
+    assert "bilinc quicktest" in start_out.out
+    assert "install_guide" in start_out.out
+    assert "activation_2_1_3" in start_out.out
 
     assert cli_main.main(["login", "--api-key", "bil_live_cli_test"]) == 0
     login_out = capsys.readouterr()

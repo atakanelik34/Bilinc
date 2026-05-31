@@ -2,7 +2,7 @@
 
 Bilinc is a ReARC Labs product for hosted, verifiable AI agent memory.
 
-Bilinc 2.1.2 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
+Bilinc 2.1.3 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
 
 ## Start in 60 Seconds
 
@@ -11,7 +11,9 @@ pip install -U bilinc
 bilinc start
 ```
 
-`bilinc start` shows the shortest path from install to first hosted memory:
+`bilinc start` is the first-run guide. The activation target is simple: reach a
+passing `bilinc quicktest`, which performs one hosted commit, one hosted recall,
+and one Cloud status check.
 
 1. Start the 7-day Bilinc Cloud trial at https://bilinc.space/signup.
 2. Confirm email.
@@ -23,7 +25,8 @@ bilinc login --api-key bil_live_...
 bilinc quicktest
 ```
 
-`bilinc quicktest` performs one hosted commit, one hosted recall, and one Cloud status check.
+If you prefer a browser guide, open https://bilinc.space/install and follow the
+same four-step path.
 
 ## Python SDK
 
