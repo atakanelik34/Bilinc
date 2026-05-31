@@ -8,8 +8,7 @@ import time
 
 import pytest
 
-from bilinc import StatePlane
-from bilinc.observability.health import HealthCheck
+from bilinc.core.stateplane import StatePlane
 from bilinc.observability.metrics import MetricsCollector
 from bilinc.storage.sqlite import SQLiteBackend
 

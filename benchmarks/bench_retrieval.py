@@ -9,7 +9,7 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
 
 
@@ -79,7 +79,7 @@ def run():
         plane_100.commit_sync(**e)
 
     result_100_recall = bench_recall_latency(plane_100, 100)
-    print(f"\n--- 100 entries ---")
+    print("\n--- 100 entries ---")
     print(f"  Recall p50: {result_100_recall['p50_ms']}ms")
     print(f"  Recall p95: {result_100_recall['p95_ms']}ms")
     print(f"  Recall p99: {result_100_recall['p99_ms']}ms")
@@ -91,7 +91,7 @@ def run():
     commit_result = bench_commit_latency(plane_1000, entries_1000)
     result_1000_recall = bench_recall_latency(plane_1000, 1000)
 
-    print(f"\n--- 1000 entries ---")
+    print("\n--- 1000 entries ---")
     print(f"  Commit p50: {commit_result['p50_ms']}ms")
     print(f"  Commit p95: {commit_result['p95_ms']}ms")
     print(f"  Commit p99: {commit_result['p99_ms']}ms")
