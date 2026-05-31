@@ -1,11 +1,15 @@
 """Integration tests: cross-tool translation, full pipeline."""
-import sys, os, json, tempfile
+import json
+import os
+import sys
+import tempfile
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
 from bilinc.integrations.cross_tool import CrossToolTranslator, ToolFormat
-from bilinc.adaptive.policy import ContextBudgetPolicy, BudgetState, BudgetAction
+from bilinc.adaptive.policy import ContextBudgetPolicy, BudgetState
 
 
 class TestCrossTool:

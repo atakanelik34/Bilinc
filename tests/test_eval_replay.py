@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
 from bilinc.eval.capture import EvalCaptureRow, row_from_jsonl
 from bilinc.eval.replay import jaccard, replay_rows, top1_same

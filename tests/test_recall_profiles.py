@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import ClaimKind, MemoryType
 from bilinc.mcp_server.server_v2 import _handle_bilinc_recall_smart
 from bilinc.storage.sqlite import SQLiteBackend
