@@ -13,9 +13,11 @@ from typing import Any
 
 from bilinc import __version__
 from bilinc.client import (
+    ACTIVATION_SIGNUP_URL,
     BilincApiKeyRequired,
     BilincCloudError,
     CloudClient,
+    INSTALL_URL,
     SIGNUP_URL,
     config_path,
     load_config_api_key,
@@ -45,14 +47,16 @@ def _has_key(args: argparse.Namespace) -> bool:
 def _print_start_guide(*, opened: bool = False) -> None:
     _print(
         {
-            "next": "Connect Bilinc Cloud",
+            "next": "Run the 60-second Bilinc Cloud activation path",
+            "goal": "Create one hosted API key and finish with bilinc quicktest.",
             "steps": [
-                "Start a 7-day trial and confirm email",
-                "Create one Cloud API key in the dashboard",
-                "Run: bilinc login --api-key <key>",
-                "Run: bilinc quicktest",
+                "1. Start the 7-day Cloud trial and confirm email",
+                "2. Create one hosted API key in the dashboard",
+                "3. Run: bilinc login --api-key <key>",
+                "4. Run: bilinc quicktest",
             ],
-            "signup": SIGNUP_URL,
+            "signup": ACTIVATION_SIGNUP_URL,
+            "install_guide": INSTALL_URL,
             "opened_browser": opened,
         }
     )
@@ -127,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "start":
         opened = False
         if args.open:
-            opened = webbrowser.open(SIGNUP_URL)
+            opened = webbrowser.open(ACTIVATION_SIGNUP_URL)
         if not _has_key(args):
             _print_start_guide(opened=opened)
             return 0
@@ -149,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "login":
         opened = False
         if args.open:
-            opened = webbrowser.open(SIGNUP_URL)
+            opened = webbrowser.open(ACTIVATION_SIGNUP_URL)
         if not args.api_key:
             _print_start_guide(opened=opened)
             return 0
@@ -162,7 +166,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "signup":
-        _print({"signup": SIGNUP_URL, "trial": "7 days"})
+        _print(
+            {
+                "signup": ACTIVATION_SIGNUP_URL,
+                "base_signup": SIGNUP_URL,
+                "trial": "7 days",
+                "next": "Confirm email, create one API key, run bilinc login, then bilinc quicktest",
+            }
+        )
         return 0
     if args.command == "mcp" and args.mcp_command == "install":
         _print(_mcp_config())
