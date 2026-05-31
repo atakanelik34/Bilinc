@@ -869,14 +869,18 @@ def create_mcp_http_app(
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette):
         nonlocal scheduler
-        from bilinc.scheduler import BackgroundScheduler
 
         async with session_manager.run():
             if os.getenv("BILINC_ENABLE_SCHEDULER", "1").strip().lower() in {"1", "true", "yes", "on"}:
-                scheduler = BackgroundScheduler(plane)
-                scheduler.register_phase7_jobs()
-                tick_seconds = float(os.getenv("BILINC_SCHEDULER_TICK_SECONDS", "5.0"))
-                await scheduler.start(tick_seconds=tick_seconds)
+                try:
+                    from bilinc.scheduler import BackgroundScheduler
+                except ModuleNotFoundError:
+                    logger.warning("Background scheduler module is unavailable; continuing without scheduled jobs")
+                else:
+                    scheduler = BackgroundScheduler(plane)
+                    scheduler.register_phase7_jobs()
+                    tick_seconds = float(os.getenv("BILINC_SCHEDULER_TICK_SECONDS", "5.0"))
+                    await scheduler.start(tick_seconds=tick_seconds)
             try:
                 yield
             finally:

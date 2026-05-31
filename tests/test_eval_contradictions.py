@@ -131,7 +131,7 @@ def test_detect_claim_contradictions_can_disable_optional_judge_seam():
 
 @pytest.mark.asyncio
 async def test_probe_claim_contradictions_for_queries_uses_recall_linked_claims(tmp_path):
-    from bilinc import StatePlane
+    from bilinc.core.stateplane import StatePlane
     from bilinc.core.models import MemoryType
 
     backend = SQLiteBackend(str(tmp_path / "probe.db"))
