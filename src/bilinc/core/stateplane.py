@@ -501,6 +501,39 @@ class StatePlane:
     async def recall_all_working(self):
         return self.working_memory.get_all()
 
+    async def preview_graph_projection(
+        self,
+        memory_types: Optional[List[MemoryType]] = None,
+        limit: int = 1000,
+    ) -> Dict[str, Any]:
+        """Read-only graph projection preview over backend or working memory entries."""
+        from bilinc.core.graph_doctor import preview_projection
+
+        limit = max(0, int(limit))
+        source = "backend" if self.backend else "working_memory"
+        if self.backend:
+            candidates = await self._collect_recall_candidates(memory_types=memory_types)
+            entries = list(candidates.values())[:limit]
+        else:
+            allowed_types = None
+            if memory_types:
+                allowed_types = {
+                    mt.value if hasattr(mt, "value") else str(mt)
+                    for mt in memory_types
+                }
+            entries = []
+            for entry in self.working_memory.get_all():
+                if allowed_types and entry.memory_type.value not in allowed_types:
+                    continue
+                entries.append(entry)
+                if len(entries) >= limit:
+                    break
+
+        preview = preview_projection(entries)
+        preview["read_only"] = True
+        preview["source"] = source
+        return preview
+
     async def recall_intelligent(
         self,
         query: str,
