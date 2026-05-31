@@ -7,14 +7,13 @@ import logging
 import os
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 from mcp.server.stdio import stdio_server
 
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.mcp_server.server_v2 import create_mcp_server_v2
-from bilinc.scheduler import BackgroundScheduler
 from bilinc.storage.sqlite import SQLiteBackend
+
+logger = logging.getLogger(__name__)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -58,10 +57,15 @@ async def _build_server():
     )
     scheduler = None
     if _env_bool("BILINC_ENABLE_SCHEDULER", True):
-        scheduler = BackgroundScheduler(plane)
-        scheduler.register_phase7_jobs()
-        tick_seconds = float(os.getenv("BILINC_SCHEDULER_TICK_SECONDS", "5.0"))
-        await scheduler.start(tick_seconds=tick_seconds)
+        try:
+            from bilinc.scheduler import BackgroundScheduler
+        except ModuleNotFoundError:
+            logger.warning("Background scheduler module is unavailable; continuing without scheduled jobs")
+        else:
+            scheduler = BackgroundScheduler(plane)
+            scheduler.register_phase7_jobs()
+            tick_seconds = float(os.getenv("BILINC_SCHEDULER_TICK_SECONDS", "5.0"))
+            await scheduler.start(tick_seconds=tick_seconds)
     return server, scheduler
 
 

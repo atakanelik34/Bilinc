@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
 from bilinc.eval.capture import (
     EvalCaptureRow,

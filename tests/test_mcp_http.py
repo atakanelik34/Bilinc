@@ -1,12 +1,10 @@
 """HTTP MCP transport tests for auth and rate limiting."""
 
-import json
-
 import pytest
 from mcp.types import ClientCapabilities, Implementation, InitializeRequestParams
 from starlette.testclient import TestClient
 
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.mcp_server.server_v2 import (
     _extract_bearer_token,
     _hash_client_token,

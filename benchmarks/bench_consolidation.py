@@ -12,7 +12,7 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
 
 
@@ -32,7 +32,7 @@ def run():
             importance=0.3 + (i * 0.1),
         )
 
-    print(f"\nBefore consolidation:")
+    print("\nBefore consolidation:")
     print(f"  Working memory slots: {plane.working_memory.count}/{plane.working_memory.max_slots}")
 
     # Check which entries are stale (low strength)
@@ -51,12 +51,12 @@ def run():
     latencies.sort()
     n = len(latencies)
 
-    print(f"\nConsolidation timing (100 runs):")
+    print("\nConsolidation timing (100 runs):")
     print(f"  p50: {latencies[n // 2]:.3f}ms")
     print(f"  p95: {latencies[int(n * 0.95)]:.3f}ms")
     print(f"  p99: {latencies[int(n * 0.99)]:.3f}ms")
 
-    print(f"\nAfter consolidation:")
+    print("\nAfter consolidation:")
     print(f"  Working memory slots used: {plane.working_memory.count}/{plane.working_memory.max_slots}")
 
     return {

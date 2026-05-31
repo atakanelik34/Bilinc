@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.core import ContextAssembler as LazyContextAssembler
 from bilinc.core.context_assembler import ContextAssembler
 from bilinc.core.models import ClaimKind, MemoryType

@@ -1,6 +1,6 @@
 import pytest
 
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.core.entities import (
     Entity,
     EntityMention,

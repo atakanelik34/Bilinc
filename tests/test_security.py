@@ -1,12 +1,10 @@
 """
 Tests for Security Layer and Validation
 """
-import json
 import pytest
 
 from bilinc.security.validator import InputValidator
-from bilinc.security.resource_limits import ResourceLimits
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.core.audit import AuditTrail, OpType
 from bilinc.core.models import MemoryType
 
