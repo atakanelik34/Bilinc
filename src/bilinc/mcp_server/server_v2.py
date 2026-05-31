@@ -68,10 +68,18 @@ def _json_safe(obj: Any) -> Any:
     return str(obj)
 
 
-def _result_text(data: Any) -> List[TextContent]:
-    """Helper to create a TextContent response from any JSON-serializable data."""
-    text = json.dumps(_json_safe(data), indent=2, default=str, ensure_ascii=False)
-    return [TextContent(type="text", text=text)]
+def _result_text(payload: Dict[str, Any]) -> List[TextContent]:
+    return [TextContent(type="text", text=json.dumps(_json_safe(payload), ensure_ascii=False, indent=2))]
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _error_text(tool_name: str, error: Exception) -> List[TextContent]:
@@ -523,6 +531,7 @@ def _create_server_v2(
                         "max_reflections": {"type": "integer", "default": 2},
                         "adequacy_threshold": {"type": "number", "default": 0.55},
                         "profile": {"type": "string", "enum": ["fast", "balanced", "verified", "deep"]},
+                        "explain": {"type": "boolean", "default": False},
                         "memory_types": {
                             "type": "array",
                             "items": {"type": "string", "enum": ["episodic", "procedural", "semantic", "working", "spatial"]},
@@ -1684,6 +1693,7 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
     profile = args.get("profile")
     max_reflections = int(args.get("max_reflections", 2))
     adequacy_threshold = float(args.get("adequacy_threshold", 0.55))
+    explain = _coerce_bool(args.get("explain"), default=False)
     raw_types = args.get("memory_types") or []
     memory_types = []
     for mt in raw_types:
@@ -1699,6 +1709,7 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
             memory_types=memory_types or None,
             max_reflections=args.get("max_reflections") if "max_reflections" in args else None,
             adequacy_threshold=args.get("adequacy_threshold") if "adequacy_threshold" in args else None,
+            explain=explain,
         )
         max_reflections = int(payload.get("max_reflections", max_reflections))
         adequacy_threshold = float(payload.get("adequacy_threshold", adequacy_threshold))
@@ -1709,6 +1720,7 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
             max_reflections=max_reflections,
             adequacy_threshold=adequacy_threshold,
             memory_types=memory_types or None,
+            explain=explain,
         )
     if hasattr(plane, "_record_eval_capture"):
         await plane._record_eval_capture(
