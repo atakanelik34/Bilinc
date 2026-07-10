@@ -2,7 +2,7 @@
 
 Bilinc is a ReARC Labs product for hosted, verifiable AI agent memory.
 
-Bilinc 2.1.3 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
+Bilinc 2.1.4 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
 
 ## Start in 60 Seconds
 
