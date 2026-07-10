@@ -1,5 +1,4 @@
 import time
-import pytest
 from bilinc.core.consolidation import ConsolidationStage, ConsolidationResult, ConsolidationReport, ConsolidationPipeline
 
 class TestResult:

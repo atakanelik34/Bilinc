@@ -27,7 +27,6 @@ from bilinc.mcp_server.server_v2 import (
     _handle_forget,
     _handle_revise,
     _handle_status,
-    _handle_verify,
     _handle_snapshot,
     _handle_query_graph,
     _handle_contradictions,

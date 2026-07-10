@@ -7,7 +7,7 @@ name = "bilinc"
 version = "2.1.4"
 description = "Cloud-only memory SDK and MCP adapter for autonomous agents"
 readme = "README.md"
-license = "BUSL-1.1"
+license = {text = "BUSL-1.1"}
 authors = [{name = "Bilinc Team"}]
 requires-python = ">=3.10"
 keywords = [
@@ -44,6 +44,12 @@ dev = [
     "pytest-asyncio>=0.23,<1.0",
     "mypy>=1.0,<2.0",
     "ruff>=0.1,<1.0",
+]
+internal = [
+    "fastapi>=0.110,<2.0",
+    "networkx>=3.0,<4.0",
+    "starlette>=0.36,<2.0",
+    "z3-solver>=4.12,<5.0",
 ]
 [project.scripts]
 bilinc = "bilinc.cli.main:main"

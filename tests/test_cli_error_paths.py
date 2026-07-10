@@ -1,52 +1,43 @@
-"""CLI error-shape tests for deterministic failure envelopes."""
+"""Public cloud-only CLI error-path tests."""
 
 from __future__ import annotations
 
-import json
-import sqlite3
-from types import SimpleNamespace
-
-import pytest
-
-from bilinc.cli.main import _run_commit, _run_recall, _structured_error_payload
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 
-def test_structured_error_payload_maps_sqlite_lock_to_retryable_code():
-    payload = _structured_error_payload(sqlite3.OperationalError("database is locked"), "commit_failed")
-    assert payload["success"] is False
-    assert payload["error"] == "database_locked"
-    assert payload["retryable"] is True
+def _public_cli_env() -> dict[str, str]:
+    """Run subprocesses without forwarding ambient credentials."""
+    src = Path(__file__).resolve().parents[1] / "src"
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONPATH": str(src),
+        "HOME": os.environ.get("HOME", ""),
+        "LANG": "C",
+    }
 
 
-def test_run_commit_returns_deterministic_json_on_lock_error(capsys):
-    class LockedPlane:
-        def commit_sync(self, **kwargs):
-            raise sqlite3.OperationalError("database is locked")
+def test_cloud_cli_requires_api_key_for_memory_operations():
+    result = subprocess.run(
+        [sys.executable, "-m", "bilinc.cli.main", "commit", "--key", "k1", "--value", "v1"],
+        text=True,
+        capture_output=True,
+        env=_public_cli_env(),
+    )
 
-    args = SimpleNamespace(key="k1", type="semantic", importance=1.0)
-    with pytest.raises(SystemExit):
-        _run_commit(LockedPlane(), backend=None, args=args, value="v1", backend_type="sqlite")
-
-    err = capsys.readouterr().err
-    payload = json.loads(err)
-    assert payload["success"] is False
-    assert payload["error"] == "database_locked"
-    assert payload["key"] == "k1"
+    assert result.returncode == 1
+    assert "API key" in result.stderr
 
 
-def test_run_recall_returns_deterministic_json_on_lock_error(capsys):
-    class BrokenBackend:
-        async def list_all(self):
-            raise sqlite3.OperationalError("database is locked")
+def test_cloud_cli_signup_is_available_without_api_key():
+    result = subprocess.run(
+        [sys.executable, "-m", "bilinc.cli.main", "signup"],
+        text=True,
+        capture_output=True,
+        env=_public_cli_env(),
+    )
 
-    class DummyPlane:
-        pass
-
-    args = SimpleNamespace(key=None, limit=5)
-    with pytest.raises(SystemExit):
-        _run_recall(DummyPlane(), backend=BrokenBackend(), args=args, backend_type="sqlite")
-
-    err = capsys.readouterr().err
-    payload = json.loads(err)
-    assert payload["success"] is False
-    assert payload["error"] == "database_locked"
+    assert result.returncode == 0
+    assert "signup" in result.stdout

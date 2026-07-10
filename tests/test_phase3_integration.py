@@ -12,7 +12,7 @@ import pytest
 from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
 from bilinc.adaptive.agm_engine import AGMEngine, ConflictStrategy
-from bilinc.core.knowledge_graph import KnowledgeGraph, EdgeType
+from bilinc.core.knowledge_graph import EdgeType
 from bilinc.core.belief_sync import BeliefSyncEngine
 
 
