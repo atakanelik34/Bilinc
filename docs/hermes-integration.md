@@ -20,7 +20,7 @@ The bootstrap command creates:
 | Mode | Transport | Auth | Rate Limit | Recommended Use |
 |------|-----------|------|------------|-----------------|
 | Local | `stdio` | Optional (trusted-local) | Enabled | Hermes local agent runtime |
-| Production | HTTP wrapper around MCP | Required token (`STATEMEL_API_KEY`) | Required | Shared service / remote agents |
+| Production | HTTP wrapper around MCP | Required token (`BILINC_MCP_AUTH_TOKEN`) | Required | Shared service / remote agents |
 
 ## Auth Modes
 
@@ -40,7 +40,7 @@ See [Hermes Integration Contract](./hermes-integration-contract.md).
 
 2. **Auth failures in HTTP mode**
 - Symptom: `unauthorized` error payload.
-- Fix: set `STATEMEL_API_KEY` and pass `_auth_token` in request args.
+- Fix: set `BILINC_MCP_AUTH_TOKEN` and pass `_auth_token` in request args.
 
 3. **Wrong DB path / no persistence**
 - Symptom: data disappears after restart.

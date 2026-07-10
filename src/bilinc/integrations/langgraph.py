@@ -220,7 +220,6 @@ class LangGraphCheckpointer(BaseCheckpointSaver):
             parents=meta_data.get("parents", {}),
         )
 
-        pending_key = f"langgraph:pending:{thread_id}"
         pending_writes = []
 
         parent_config = None

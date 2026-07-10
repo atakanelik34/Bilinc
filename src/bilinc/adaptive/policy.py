@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import time
-import math
 import random
 import logging
 import os
@@ -389,7 +388,6 @@ class ContextBudgetPolicy:
 try:
     import torch
     import torch.nn as nn
-    import torch.optim as optim
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False

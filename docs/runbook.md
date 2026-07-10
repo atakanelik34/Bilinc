@@ -1,4 +1,7 @@
-# Operator Runbook
+# Internal Runtime Operator Runbook
+
+> Source-only/internal runtime. Public PyPI users should follow the Cloud quickstart
+> instead of this document.
 
 This runbook covers the supported Bilinc deployment surfaces in the current production gate.
 
@@ -15,22 +18,20 @@ This runbook covers the supported Bilinc deployment surfaces in the current prod
 
 Set either:
 
-- `STATEMEL_API_KEY`
+- `BILINC_MCP_AUTH_TOKEN`
 - or pass `auth_token=...` when creating the HTTP app
 
 ### Persistence
 
-- SQLite:
-  - `bilinc --db ./bilinc.db ...`
-- PostgreSQL:
-  - `bilinc --db postgresql://user:pass@host/db ...`
+- SQLite/PostgreSQL configuration is supplied by the internal runtime launcher;
+  the public `bilinc` CLI has no local `--db` mode.
 
 ## HTTP Deployment
 
 Minimal example:
 
 ```python
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 from bilinc.mcp_server.server_v2 import create_mcp_http_app
 
 plane = StatePlane(enable_verification=False, enable_audit=False)
@@ -92,8 +93,7 @@ uvicorn yourmodule:app --host 0.0.0.0 --port 8000
 4. Re-run local smoke:
 
 ```bash
-bilinc --db ./tmp.db commit --key smoke_key --value hello
-bilinc --db ./tmp.db recall --key smoke_key
+python -m bilinc.mcp_server.hermes_stdio
 ```
 
 5. If PostgreSQL is failing, validate the service independently and then re-run the targeted integration tests with:

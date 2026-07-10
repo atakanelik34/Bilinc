@@ -6,8 +6,8 @@ import tempfile
 import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from bilinc.core.models import MemoryEntry, MemoryType, BeliefState
-from bilinc.adaptive.agm_engine import AGMEngine, AGMOperation
+from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.adaptive.agm_engine import AGMEngine
 from bilinc.core.verification import VerificationGate, VerificationStatus
 from bilinc.core.stateplane import StatePlane
 from bilinc.storage.sqlite import SQLiteBackend
@@ -452,7 +452,7 @@ class TestStatePlane:
     def test_forget_sync(self):
         plane = StatePlane(enable_verification=False, enable_audit=False)
         plane.commit_sync(key="temp", value="forget_me", memory_type=MemoryType.WORKING)
-        result = plane.forget_sync("temp")
+        plane.forget_sync("temp")
         # forget_sync may return True/False depending on implementation
         # Main check: entry should be gone
         wm_entry = plane.working_memory.get("temp")

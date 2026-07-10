@@ -1,7 +1,4 @@
 import json
-import os
-import subprocess
-import sys
 
 import pytest
 
@@ -9,8 +6,6 @@ from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import ClaimKind, MemoryType
 from bilinc.mcp_server.server_v2 import _handle_bilinc_recall_smart
 from bilinc.storage.sqlite import SQLiteBackend
-
-
 async def make_temp_plane(tmp_path):
     backend = SQLiteBackend(str(tmp_path / "profiles.db"))
     plane = StatePlane(backend=backend, enable_verification=False, enable_audit=False)
@@ -18,14 +13,6 @@ async def make_temp_plane(tmp_path):
     plane.init_agm()
     plane.init_knowledge_graph()
     return plane
-
-
-def cli_env():
-    src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
-    env = os.environ.copy()
-    env["PYTHONPATH"] = src_path + os.pathsep + env.get("PYTHONPATH", "")
-    return env
-
 
 @pytest.mark.asyncio
 async def test_resolve_recall_profiles_are_stable():
@@ -166,53 +153,3 @@ async def test_mcp_profile_does_not_override_explicit_reflection_parameters(tmp_
     assert payload["max_reflections"] == 0
     assert payload["adequacy_threshold"] == 0.99
     assert len(payload["queries_tried"]) == 1
-
-
-def test_cli_recall_profile_query_prints_json(tmp_path):
-    db_path = tmp_path / "cli.db"
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "bilinc.cli.main",
-            "--db",
-            str(db_path),
-            "commit",
-            "--key",
-            "mem:cli",
-            "--value",
-            "Bilinc CLI profile",
-            "--type",
-            "semantic",
-        ],
-        check=True,
-        text=True,
-        capture_output=True,
-        env=cli_env(),
-    )
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "bilinc.cli.main",
-            "--db",
-            str(db_path),
-            "recall",
-            "--query",
-            "Bilinc CLI",
-            "--profile",
-            "fast",
-            "--json",
-        ],
-        check=True,
-        text=True,
-        capture_output=True,
-        env=cli_env(),
-    )
-    payload = json.loads(result.stdout)
-
-    assert payload["tool"] == "recall"
-    assert payload["profile"] == "fast"
-    assert payload["recall_profile"]["max_reflections"] == 0
-    assert payload["results"]

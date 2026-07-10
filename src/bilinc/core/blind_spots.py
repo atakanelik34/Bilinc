@@ -7,7 +7,7 @@ ORIGINAL implementation.
 from __future__ import annotations
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List
 from enum import Enum
 
 
@@ -141,7 +141,7 @@ class BlindSpotDetector:
                     report.blind_spots.append(BlindSpot(
                         spot_type=BlindSpotType.CONTRADICTORY, entity_key=node, severity=0.8,
                         description=f"'{node}' has unresolved conflict",
-                        suggestion=f"Resolve using AGM belief revision"))
+                        suggestion="Resolve using AGM belief revision"))
 
         report.health_score = self._calculate_health(report)
         report.blind_spots.sort(key=lambda s: s.severity, reverse=True)

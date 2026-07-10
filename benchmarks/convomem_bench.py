@@ -1,5 +1,5 @@
 """ConvoMem Benchmark for Bilinc - v0.2"""
-import json, re
+import re
 
 CONVOMEM_QUERIES = [
     {"id": "fr_001", "category": "fact_recall",

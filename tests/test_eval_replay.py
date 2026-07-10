@@ -1,14 +1,8 @@
-import asyncio
-import json
-import os
-import subprocess
-import sys
-
 import pytest
 
 from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
-from bilinc.eval.capture import EvalCaptureRow, row_from_jsonl
+from bilinc.eval.capture import EvalCaptureRow
 from bilinc.eval.replay import jaccard, replay_rows, top1_same
 from bilinc.storage.sqlite import SQLiteBackend
 
@@ -20,14 +14,6 @@ async def make_temp_plane(tmp_path):
     plane.init_agm()
     plane.init_knowledge_graph()
     return plane
-
-
-def cli_env():
-    src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
-    env = os.environ.copy()
-    env["PYTHONPATH"] = src_path + os.pathsep + env.get("PYTHONPATH", "")
-    return env
-
 
 def test_replay_metrics_jaccard_and_top1():
     assert jaccard(["a", "b"], ["b", "c"]) == pytest.approx(1 / 3)
@@ -136,68 +122,3 @@ async def test_replay_rows_detects_order_regression(tmp_path, monkeypatch):
     assert report.summary["rows_replayed"] == 1
     assert report.summary["top1_stability_rate"] == 0.0
     assert report.regressions[0]["query"] == "anything"
-
-
-def test_eval_export_cli_prints_jsonl(tmp_path, monkeypatch):
-    db_path = tmp_path / "cli.db"
-
-    async def seed():
-        backend = SQLiteBackend(str(db_path))
-        await backend.init()
-        await backend.record_eval_candidate(
-            EvalCaptureRow(1, "recall", "cli query", ["alpha"], [1.0], ["semantic"], 4, 123.0, {})
-        )
-
-    asyncio.run(seed())
-
-    result = subprocess.run(
-        [sys.executable, "-m", "bilinc.cli.main", "--db", str(db_path), "eval", "export"],
-        check=True,
-        text=True,
-        capture_output=True,
-        env=cli_env(),
-    )
-
-    rows = [row_from_jsonl(line) for line in result.stdout.splitlines() if line.strip()]
-    assert len(rows) == 1
-    assert rows[0].query == "cli query"
-
-
-def test_eval_replay_cli_prints_json_summary(tmp_path):
-    baseline = tmp_path / "baseline.jsonl"
-    baseline.write_text(
-        json.dumps({
-            "schema_version": 1,
-            "tool_name": "bilinc_recall_smart",
-            "query": "missing",
-            "retrieved_keys": [],
-            "retrieved_scores": [],
-            "memory_types": [],
-            "latency_ms": 0,
-            "created_at": 123.0,
-            "detail": {},
-        }) + "\n"
-    )
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "bilinc.cli.main",
-            "--db",
-            str(tmp_path / "cli.db"),
-            "eval",
-            "replay",
-            "--against",
-            str(baseline),
-        ],
-        check=True,
-        text=True,
-        capture_output=True,
-        env=cli_env(),
-    )
-
-    payload = json.loads(result.stdout)
-    assert payload["schema_version"] == 1
-    assert payload["summary"]["rows_total"] == 1
-    assert "regressions" in payload

@@ -1,4 +1,7 @@
-# MCP Server Reference
+# Internal MCP Server Reference
+
+> Source-only/internal runtime. This document does not describe the public PyPI
+> Cloud SDK or its `bilinc.cloud_mcp` adapter.
 
 Bilinc exposes full memory functionality via **Model Context Protocol (MCP)**, enabling any MCP-compatible agent (Claude Code, Cursor, OpenClaw, VS Code Copilot) to use Bilinc as a cross-tool memory layer.
 
@@ -6,7 +9,7 @@ Bilinc exposes full memory functionality via **Model Context Protocol (MCP)**, e
 
 ```python
 from bilinc.mcp_server.server_v2 import create_mcp_server_v2
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 import asyncio
 from mcp.server.stdio import stdio_server
 
@@ -15,7 +18,7 @@ plane = StatePlane()
 plane.init_agm()
 plane.init_knowledge_graph()
 
-# Create MCP server (12 tools exposed)
+# Create the internal MCP server
 server = create_mcp_server_v2(plane)
 
 # Run (stdio transport — Claude Code compatible)
@@ -30,7 +33,7 @@ asyncio.run(main())
 
 ```python
 from bilinc.mcp_server.server_v2 import create_mcp_http_app
-from bilinc import StatePlane
+from bilinc.core.stateplane import StatePlane
 
 plane = StatePlane()
 plane.init_agm()
@@ -202,9 +205,14 @@ Query the Knowledge Graph for entities and relations.
 }
 ```
 
-### 12. contradictions
+### Core tool inventory
 
-List all detected contradictions in the Knowledge Graph. Returns pairs of conflicting relations that require resolution.
+The server exposes 27 internal tools in this source tree. The exact tool schema is
+the runtime source of truth: use `list_tools()` from `server_v2` in a source checkout
+when integrating or documenting a release. The numbered examples below illustrate
+the original core operations only and are not a complete public API declaration.
+
+`contradictions` lists detected contradictions in the Knowledge Graph.
 
 ## Security
 

@@ -7,7 +7,8 @@ These tests verify the most basic user flows:
 - recall retrieves from working memory
 - Knowledge graph can be initialized
 """
-import pytest
+import tomllib
+from pathlib import Path
 from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
 
@@ -17,7 +18,10 @@ class TestBasicFlow:
         """import bilinc should succeed."""
         import bilinc
         assert hasattr(bilinc, '__version__')
-        assert bilinc.__version__ == '2.1.0'
+        pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        with pyproject.open("rb") as handle:
+            expected_version = tomllib.load(handle)["project"]["version"]
+        assert bilinc.__version__ == expected_version
 
     def test_create_stateplane_safe(self):
         """Default StatePlane() should not crash."""
