@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "benchmark": "legacy-local-benchmark-results",
+  "lane": "historical",
+  "evidence_status": "archived-unverifiable",
+  "git": {
+    "commit": "unknown",
+    "tree": "unknown",
+    "dirty": "unknown",
+    "archive_commit": "92eccbb7ca2d4b131558038883d71ad8426ff0a2"
+  },
+  "dataset": {
+    "source": "legacy repository-local fixtures and an external LongMemEval copy",
+    "version": "unknown",
+    "sha256": "unknown",
+    "license": "not recorded in the legacy evidence"
+  },
+  "runner": {
+    "path": "benchmarks/longmemeval_bench.py and legacy local scripts",
+    "sha256": "unknown",
+    "command": "not reproducible from the archived evidence alone"
+  },
+  "environment": {
+    "python": "unknown",
+    "dependencies": "unknown",
+    "platform": "macOS local benchmark environment"
+  },
+  "raw_results": [
+    {
+      "path": "results/longmemeval_results.json",
+      "sha256": "c3313594385ef8eb8acafa82cadecc3ff4c212fa720a6acfb9c8f85a06f9a9a1"
+    },
+    {
+      "path": "results/locomo_results.json",
+      "sha256": "bf219f18c1aef1c23d1415bf7f2abca464ac731da21f8ba517eb51646e420e25"
+    },
+    {
+      "path": "results/convomem_results.json",
+      "sha256": "108f87d645201d0d9f458defead83c66b46f2475e7ddb1324b42fdddbca35217"
+    }
+  ],
+  "metrics": {
+    "longmemeval_label": "legacy R@5 label; it may be any-hit rather than true Recall@5",
+    "locomo_label": "legacy keyword-overlap score, not an official LoCoMo metric",
+    "ndcg": "legacy output cannot be assumed to use the current normalized metric implementation"
+  },
+  "limitations": [
+    "No clean commit/tree, dataset hash, dependency lock or captured command output accompanies these files.",
+    "These files predate the metric contract and are not reproducible evidence for the current product.",
+    "LongMemEval is a ChromaDB retrieval component run, not an end-to-end StatePlane result."
+  ],
+  "disallowed_claims": [
+    "Do not use these results for current product-core performance claims.",
+    "Do not describe the 98.0 percent value as fresh, official, or directly comparable to LLM answer-quality benchmarks.",
+    "Do not describe the LoCoMo value as an official LoCoMo score."
+  ]
+}

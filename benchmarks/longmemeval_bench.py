@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Bilinc LongMemEval Benchmark v3."""
 import json
-import math
 import re
 import argparse
 from collections import defaultdict
+
+from benchmarks.metrics import hit_at_k, ndcg_at_k
 
 STOP = {"what","when","where","who","how","which","did","do","was","were","have","has","had",
         "is","are","the","a","an","my","me","i","you","your","their","it","its","in","on",
@@ -16,17 +17,9 @@ STOP = {"what","when","where","who","how","which","did","do","was","were","have"
         "always","often","sometimes","usually","here","there","now","today","yesterday",
         "tomorrow","really","actually","probably","perhaps","maybe","sure","yes","no","not"}
 
-def dcg(rels, k):
-    return sum(relevance / math.log2(index + 2) for index, relevance in enumerate(rels[:k]))
-
 def evaluate(rankings, correct_ids, corpus_ids, k):
-    top_k = set(corpus_ids[idx] for idx in rankings[:k])
-    hit_at_k = float(bool(top_k & correct_ids))
-    rels = [1.0 if corpus_ids[idx] in correct_ids else 0.0 for idx in rankings[:k]]
-    ideal = [1.0] * min(len(correct_ids), k)
-    idcg = dcg(ideal, k)
-    ndcg = dcg(rels, k)/idcg if idcg > 0 else 0.0
-    return hit_at_k, ndcg
+    retrieved = [corpus_ids[index] for index in rankings]
+    return hit_at_k(retrieved, correct_ids, k), ndcg_at_k(retrieved, correct_ids, k)
 
 def kws(text):
     return [w for w in re.findall(r"[a-zA-Z]{3,}", text.lower()) if w not in STOP]
