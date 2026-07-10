@@ -14,9 +14,9 @@ Based on:
 from __future__ import annotations
 import time
 import logging
-from typing import Any, Dict, List, Optional, Callable
-from dataclasses import dataclass, field
-from bilinc.core.models import MemoryEntry, MemoryType
+from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from bilinc.core.models import MemoryEntry
 from bilinc.core.confidence import ConfidenceEstimator, ConfidenceScore
 
 

@@ -74,21 +74,21 @@ def run():
     latencies.sort()
     n = len(latencies)
 
-    print(f"\n--- Results ---")
+    print("\n--- Results ---")
     print(f"  Total revise operations: {n}")
     print(f"  Conflicts resolved: {conflict_count}")
     print(f"  Revisions rejected: {rejected_count}")
     print(f"  Final belief count: {len(engine.belief_state.beliefs)}")
     print(f"  Operation log size: {len(engine.operation_log)}")
 
-    print(f"\n--- Timing ---")
+    print("\n--- Timing ---")
     print(f"  p50: {latencies[n // 2]:.3f}ms")
     print(f"  p95: {latencies[int(n * 0.95)]:.3f}ms")
     print(f"  p99: {latencies[int(n * 0.99)]:.3f}ms")
     print(f"  Total time: {sum(latencies):.1f}ms")
 
     # Phase 3: Multi-conflict resolution stress
-    print(f"\n--- Phase 3: Multi-conflict resolution ---")
+    print("\n--- Phase 3: Multi-conflict resolution ---")
     multi_conflict_times = []
     for _ in range(100):
         entries = [
@@ -105,7 +105,7 @@ def run():
     print(f"  Multi-conflict p50: {multi_conflict_times[mn // 2]:.3f}ms")
     print(f"  Multi-conflict p95: {multi_conflict_times[int(mn * 0.95)]:.3f}ms")
 
-    print(f"\n--- Summary ---")
+    print("\n--- Summary ---")
     print(f"{'Metric':<35} {'Value':<15}")
     print(f"{'-' * 50}")
     print(f"{'Total revise operations':<35} {n}")

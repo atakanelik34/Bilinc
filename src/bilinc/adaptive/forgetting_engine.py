@@ -14,8 +14,7 @@ Also includes:
 """
 from __future__ import annotations
 import time
-import logging
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 from dataclasses import dataclass, field
 from bilinc.core.models import MemoryEntry, MemoryType
 

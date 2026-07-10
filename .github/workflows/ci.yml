@@ -10,6 +10,22 @@ on:
   workflow_dispatch:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608
+
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d
+        with:
+          python-version: "3.12"
+
+      - name: Run Ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+          ruff check src tests benchmarks
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -24,10 +40,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install editable test dependencies
+      - name: Install internal runtime test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e '.[dev]'
+          pip install -e '.[dev,internal]'
+
+      - name: Run internal runtime test suite
+        run: pytest -q tests
 
       - name: Run cloud-only package tests
         run: PYTHONPATH=src pytest -q tests/test_cloud_only_package.py
@@ -72,6 +91,8 @@ jobs:
     needs: package
 
     steps:
+      - uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608
+
       - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d
         with:
           python-version: "3.12"
@@ -85,11 +106,16 @@ jobs:
       - name: Validate wheel
         run: |
           pip install dist/*.whl
-          bilinc --version
-          bilinc signup
+          python -I -c "import bilinc; assert not hasattr(bilinc, 'StatePlane'); print(bilinc.__version__)"
+          bilinc --version && bilinc signup
 
       - name: Validate sdist
         run: |
           pip install --force-reinstall dist/*.tar.gz
-          bilinc --version
-          bilinc signup
+          python -I -c "import bilinc; assert not hasattr(bilinc, 'StatePlane'); print(bilinc.__version__)"
+          bilinc --version && bilinc signup
+
+      - name: Assert distribution contents
+        run: |
+          pip install pytest
+          BILINC_TEST_WHEEL="$(echo dist/*.whl)" BILINC_TEST_SDIST="$(echo dist/*.tar.gz)" pytest -q tests/test_cloud_only_package.py -k built

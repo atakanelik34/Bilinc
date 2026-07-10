@@ -43,6 +43,7 @@ env/
 *.log
 tmp/
 temp/
+benchmarks/runs/
 
 # Editor/OS
 .DS_Store

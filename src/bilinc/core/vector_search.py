@@ -13,8 +13,7 @@ from __future__ import annotations
 import json
 import struct
 import time
-import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 def serialize_float32(vector: List[float]) -> bytes:

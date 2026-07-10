@@ -11,10 +11,9 @@ Returns: ConfidenceScore (float 0.0-1.0) with breakdown.
 """
 from __future__ import annotations
 import time
-import math
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 from dataclasses import dataclass
-from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core.models import MemoryEntry
 
 
 @dataclass

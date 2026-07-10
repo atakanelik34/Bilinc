@@ -1,4 +1,9 @@
-import json, sys, os, time, sqlite3, re
+import json
+import sys
+import os
+import time
+import sqlite3
+import re
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 def create_test_db(entries):
@@ -49,7 +54,6 @@ def bilinc_recall(query, conn):
         fts_q = " OR ".join(list(words)[:15])
         rows = conn.execute("SELECT m.*, f.rank FROM mem_fts f JOIN memories m ON m.rowid=f.rowid WHERE mem_fts MATCH ? ORDER BY f.rank LIMIT 10", (fts_q,)).fetchall()
         if rows:
-            now = time.time()
             scored = []
             for r in rows:
                 s = 0.5 + r["current_strength"]*0.5
@@ -113,7 +117,8 @@ def run_all():
         {"key":"bilinc_roadmap","value":"Bilinc future priorities semantic search retrieval quality knowledge graph query engine improvements operator UX dashboard integrations PostgreSQL hardening security polish products ecosystem","memory_type":"semantic","importance":0.8,"access_count":4},
     ]
     conn = create_test_db(es)
-    recall_fn = lambda q, _: bilinc_recall(q, conn)
+    def recall_fn(query, _entries):
+        return bilinc_recall(query, conn)
 
     from benchmarks.convomem_bench import run_convomem_benchmark
     cm = run_convomem_benchmark(recall_fn, es)
@@ -138,7 +143,7 @@ def run_all():
         json.dump(lm, f, indent=2)
 
     print(f"\n{'='*50}")
-    print(f"BENCHMARK SUMMARY")
+    print("BENCHMARK SUMMARY")
     print(f"{'='*50}")
     print(f"ConvoMem: {cm['overall_score']*100:.1f}% ({cm['total_queries']} queries)")
     print(f"LoCoMo:   {lm['overall_score']*100:.1f}% ({lm['total_queries']} queries)")

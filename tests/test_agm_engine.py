@@ -12,13 +12,11 @@ Covering:
 
 import pytest
 import time
-from bilinc.core.models import MemoryType, MemoryEntry, BeliefState
+from bilinc.core.models import MemoryType, MemoryEntry
 from bilinc.adaptive.agm_engine import (
     AGMEngine,
     AGMOperation,
-    AGMResult,
     ConflictStrategy,
-    ExplanationStep,
 )
 
 

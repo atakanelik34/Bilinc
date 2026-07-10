@@ -1,9 +1,3 @@
-import asyncio
-import json
-import os
-import subprocess
-import sys
-
 import pytest
 
 from bilinc.core.models import Claim, ClaimKind
@@ -172,48 +166,3 @@ async def test_probe_claim_contradictions_for_queries_uses_recall_linked_claims(
     assert payload["queries_evaluated"] == 1
     assert payload["queries_with_contradiction"] == 1
     assert payload["count"] == 1
-
-
-def cli_env():
-    src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
-    env = os.environ.copy()
-    env["PYTHONPATH"] = src_path + os.pathsep + env.get("PYTHONPATH", "")
-    return env
-
-
-def test_eval_contradictions_cli_prints_json_report(tmp_path):
-    db_path = tmp_path / "claims.db"
-
-    async def seed():
-        backend = SQLiteBackend(str(db_path))
-        await backend.init()
-        await backend.save_claim(make_claim("Bilinc", "tier paid", metadata={"predicate": "tier", "object": "paid"}))
-        await backend.save_claim(make_claim("Bilinc", "tier free", metadata={"predicate": "tier", "object": "free"}))
-        await backend.close()
-
-    asyncio.run(seed())
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "bilinc.cli.main",
-            "--db",
-            str(db_path),
-            "eval",
-            "contradictions",
-            "--subject",
-            "Bilinc",
-            "--json",
-        ],
-        check=True,
-        text=True,
-        capture_output=True,
-        env=cli_env(),
-    )
-
-    payload = json.loads(result.stdout)
-    assert payload["tool"] == "eval_contradictions"
-    assert payload["read_only"] is True
-    assert payload["count"] == 1
-    assert payload["findings"][0]["predicate"] == "tier"

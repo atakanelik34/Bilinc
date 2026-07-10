@@ -10,7 +10,6 @@ Edge types: related_to, causes, contradicts, supports, temporal_before
 
 from __future__ import annotations
 
-import json
 import time
 import re
 from collections import defaultdict
@@ -151,7 +150,7 @@ class KnowledgeGraph:
         """Remove a node and all its edges."""
         if name not in self._nodes:
             return False
-        node = self._nodes.pop(name)
+        self._nodes.pop(name)
         self.graph.remove_node(name)
         self._edges = [e for e in self._edges if e.source != name and e.target != name]
         self._updated_at = time.time()

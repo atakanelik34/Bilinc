@@ -45,11 +45,13 @@ pip install dist/*.tar.gz
 python -c "import bilinc; print(bilinc.__version__)"
 ```
 
-## Pre-publish Smoke
+## Pre-publish Cloud CLI Smoke
 
 ```bash
-bilinc --db ./tmp.db commit --key smoke_key --value hello
-bilinc --db ./tmp.db recall --key smoke_key
+bilinc signup
+bilinc --version
+# With a deliberately configured test Cloud key only:
+bilinc quicktest
 ```
 
 HTTP deployment smoke:
@@ -71,7 +73,7 @@ HTTP deployment smoke:
 
 ```bash
 python -c "import bilinc; print(bilinc.__version__)"
-python -c "from bilinc import StatePlane; print(type(StatePlane()).__name__)"
+python -c "from bilinc import CloudClient; print(CloudClient.__name__)"
 ```
 
 4. If HTTP surface is part of the release notes, verify:

@@ -1,13 +1,16 @@
 # Architecture
 
-Bilinc is a **Verifiable State Plane** for autonomous AI agents. Unlike traditional memory systems that "dump" context, Bilinc implements a brain-inspired, neuro-symbolic pipeline where every memory is verified, consolidated, and subject to formal belief revision.
+Bilinc's source-only runtime is a **Verifiable State Plane** for autonomous AI
+agents. Verification and audit are opt-in runtime policies; they are not enabled by
+default on every `StatePlane` instance. The public PyPI artifact is a separate
+cloud-only SDK surface.
 
 ## 7-Layer Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────┐
 │  LAYER 7: MCP + ECOSYSTEM                               │
-│  12 Tools | Claude Code, Cursor, OpenClaw Integration    │
+│  Internal MCP tools | source-runtime integrations         │
 ├──────────────────────────────────────────────────────────┤
 │  LAYER 6: OBSERVABILITY & SECURITY                      │
 │  MetricsCollector | HealthCheck | InputValidator         │
@@ -95,7 +98,9 @@ Learnable context allocation across memory types, inspired by ContextBudget RL (
 
 ### LAYER 4: Verification Gate
 
-Every memory passes through a verification gate before being committed. Z3 SMT solver checks formal invariants (temporal consistency, uniqueness, type safety). A Merkle audit trail ensures cryptographic integrity of the entire belief history.
+When enabled, the verification gate checks formal invariants before commit and the
+audit trail records operations. Deployments that require these guarantees must set
+`enable_verification=True` and `enable_audit=True` and verify those settings.
 
 ### LAYER 5: Belief Engine
 

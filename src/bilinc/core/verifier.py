@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import time
 import logging
-from typing import Any, Dict, List, Optional, NamedTuple
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
 try:
@@ -130,7 +130,6 @@ class StateVerifier:
         Checks that transition doesn't violate any invariant.
         """
         # Verify both states are internally consistent
-        before_results = self.verify_state(before)
         after_results = self.verify_state(after)
         
         # Check transition-specific invariants

@@ -15,7 +15,6 @@ Instead of expiring memories by time, this engine:
 from __future__ import annotations
 
 import time
-import math
 import logging
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
@@ -144,12 +143,6 @@ class LearnableForgetting:
             "symbolic": self.config.symbolic_decay,
         }.get(entry.memory_type.value if hasattr(entry.memory_type, 'value') else str(entry.memory_type), 
               self.default_decay_rate)
-        
-        # Apply Ebbinghaus curve
-        ebbinghaus_strength = (
-            self.config.ebbinghaus_S * 
-            math.exp(-self.config.ebbinghaus_k * elapsed_hours)
-        )
         
         # Exponential decay
         base_decay = type_decay * elapsed_hours

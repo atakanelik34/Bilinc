@@ -1,5 +1,4 @@
 import time
-import pytest
 from bilinc.core.blind_spots import BlindSpotType, BlindSpot, BlindSpotReport, BlindSpotDetector
 
 class TestReport:

@@ -9,8 +9,8 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
-from bilinc.core.verifier import StateVerifier, VerificationResult
-from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core.verifier import StateVerifier
+from bilinc.core.models import MemoryType
 
 
 def generate_valid_entries(count: int):
@@ -103,7 +103,7 @@ def run():
     print(f"  False Positives (wrongly accepted): {false_positives}")
     print(f"  False Positive Rate: {fpr:.2%}")
 
-    print(f"\n--- Overall ---")
+    print("\n--- Overall ---")
     print(f"  False Negative Rate: {fnr:.2%}")
     print(f"  Accuracy: {(true_positives + true_negatives) / (total_valid + total_invalid):.2%}")
 

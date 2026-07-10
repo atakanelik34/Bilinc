@@ -52,7 +52,7 @@ Bilinc enforces transport-specific auth behavior:
 - **HTTP transport**: Bearer API key auth is enforced
 
 For HTTP deployments:
-- set `STATEMEL_API_KEY` or pass `auth_token=...`
+- set `BILINC_MCP_AUTH_TOKEN` or pass `auth_token=...`
 - send `Authorization: Bearer <token>`
 - token validation uses **constant-time comparison** (`hmac.compare_digest`)
 
@@ -118,6 +118,6 @@ The audit trail includes:
 
 1. **Always validate keys**: Use `InputValidator.validate_key()` for user-provided keys.
 2. **Enable audit in production**: `enable_audit=True` for compliance.
-3. **Set appropriate API keys**: Rotate `STATEMEL_API_KEY` periodically for HTTP deployments.
+3. **Set appropriate API keys**: Rotate `BILINC_MCP_AUTH_TOKEN` periodically for HTTP deployments.
 4. **Monitor health and metrics**: Use HTTP `/health` and `/metrics`, or `plane.health.readiness()` / `plane.metrics.export_prometheus()` in-process.
 5. **Backup database**: Regular SQLite/PostgreSQL backups for persistent storage.

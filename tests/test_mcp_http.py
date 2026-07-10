@@ -57,7 +57,7 @@ class TestHTTPHelpers:
 
 class TestHTTPAuthAndRateLimit:
     def test_http_app_requires_auth_by_default(self, monkeypatch):
-        monkeypatch.delenv("STATEMEL_API_KEY", raising=False)
+        monkeypatch.delenv("BILINC_MCP_AUTH_TOKEN", raising=False)
         with pytest.raises(ValueError):
             create_mcp_http_app()
 
@@ -96,7 +96,7 @@ class TestHTTPAuthAndRateLimit:
         assert second.json()["error"] == "rate_limited"
 
     def test_allow_unauthenticated_explicit_dev_mode(self, monkeypatch):
-        monkeypatch.delenv("STATEMEL_API_KEY", raising=False)
+        monkeypatch.delenv("BILINC_MCP_AUTH_TOKEN", raising=False)
         app = create_mcp_http_app(allow_unauthenticated=True, max_tokens=5, refill_rate=0.0)
         with TestClient(app) as client:
             response = client.post("/mcp", headers=_initialize_headers(), json=_initialize_payload())

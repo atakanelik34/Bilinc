@@ -11,9 +11,7 @@ Based on Allen's interval algebra.
 ORIGINAL implementation.
 """
 from __future__ import annotations
-import time
-from typing import Any, Dict, List, Optional, Tuple
-from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 from enum import Enum
 
 

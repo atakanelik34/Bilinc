@@ -31,7 +31,7 @@ import time
 import logging
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from bilinc.core.models import MemoryEntry, BeliefState
 
@@ -252,7 +252,7 @@ class AGMEngine:
 
         # Conflict detected
         if existing is not None and existing.value != entry.value:
-            conflicts = 1
+            conflicts += 1
             step += 1
             explanation.append(ExplanationStep(
                 step=step,
@@ -384,7 +384,6 @@ class AGMEngine:
         explanation: List[ExplanationStep] = []
         step = 0
         strategy = strategy or self.default_strategy
-        affected_keys: List[str] = []
         removed_keys: List[str] = []
 
         # No existing belief → just expand
@@ -398,7 +397,7 @@ class AGMEngine:
                 step=step,
                 action="expand_new_key",
                 belief_key=entry.key,
-                detail=f"Key not in beliefs — added directly via REVISE",
+                detail="Key not in beliefs — added directly via REVISE",
             ))
             result = AGMResult(
                 operation=AGMOperation.REVISE,
@@ -504,7 +503,7 @@ class AGMEngine:
                 step=step,
                 action="revision_rejected",
                 belief_key=entry.key,
-                detail=f"Old belief more entrenched/important — new belief rejected",
+                detail="Old belief more entrenched/important — new belief rejected",
             ))
             result = AGMResult(
                 operation=AGMOperation.REVISE,
@@ -728,7 +727,7 @@ class AGMEngine:
             success=True,
             affected_keys=[e.key for e in entries],
             new_beliefs={winner_entry.key: winner_entry},
-            removed_keys=[l.key for l in losers],
+            removed_keys=[loser.key for loser in losers],
             conflicts_resolved=len(losers),
             explanation=explanation,
         )

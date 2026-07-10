@@ -8,7 +8,7 @@ Baddeley model: max 4 +/- 1 chunks (Cowan's revision)
 """
 from __future__ import annotations
 import time
-from typing import Any, Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable
 from bilinc.core.models import MemoryEntry, MemoryType
 
 _WM_HEAT_KEY = "wm_heat"

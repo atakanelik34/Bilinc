@@ -9,7 +9,7 @@ ORIGINAL implementation. Not copied from any codebase.
 from __future__ import annotations
 import time
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 from dataclasses import dataclass, field
 
 
@@ -150,7 +150,6 @@ def kg_enhanced_recall(query: str, conn, seed_entries: List[Dict], top_k: int = 
     3. Retrieve memories for activated nodes
     4. Apply decay-aware reranking
     """
-    import json
     if now is None:
         now = time.time()
 

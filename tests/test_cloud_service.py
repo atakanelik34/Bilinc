@@ -3,9 +3,9 @@ from uuid import uuid4
 import pytest
 
 fastapi = pytest.importorskip("fastapi")
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient  # noqa: E402
 
-from bilinc.cloud.service import create_app
+from bilinc.cloud.service import create_app  # noqa: E402
 
 
 def test_cloud_sidecar_requires_internal_token(tmp_path):

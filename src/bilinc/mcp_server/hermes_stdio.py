@@ -25,7 +25,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 async def _build_server():
     db_path = os.getenv("BILINC_DB_PATH", str(Path.home() / "bilinc.db"))
-    auth_token = os.getenv("STATEMEL_API_KEY")
+    auth_token = os.getenv("BILINC_MCP_AUTH_TOKEN")
     max_tokens = int(os.getenv("BILINC_RATE_LIMIT_MAX_TOKENS", "10"))
     refill_rate = float(os.getenv("BILINC_RATE_LIMIT_REFILL_RATE", "1.0"))
     verify = _env_bool("BILINC_ENABLE_VERIFICATION", True)

@@ -94,7 +94,7 @@ def _error_text(tool_name: str, error: Exception) -> List[TextContent]:
 
 def _resolve_auth_token(auth_token: Optional[str]) -> Optional[str]:
     """Canonical auth token resolution."""
-    return auth_token or os.environ.get("STATEMEL_API_KEY")
+    return auth_token or os.environ.get("BILINC_MCP_AUTH_TOKEN")
 
 
 def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
@@ -847,7 +847,7 @@ def create_mcp_http_app(
     resolved_auth = _resolve_auth_token(auth_token)
     if not allow_unauthenticated and not resolved_auth:
         raise ValueError(
-            "HTTP MCP auth requires auth_token or STATEMEL_API_KEY unless allow_unauthenticated=True."
+            "HTTP MCP auth requires auth_token or BILINC_MCP_AUTH_TOKEN unless allow_unauthenticated=True."
         )
 
     route_prefix = "/" + route_prefix.strip("/")

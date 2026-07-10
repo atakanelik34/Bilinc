@@ -3,7 +3,6 @@ Tests for hybrid decay model.
 """
 import math
 import time
-import pytest
 from bilinc.core.decay import (
     DecayProfile, LTPStatus, compute_ltp_status, hybrid_decay_factor,
     access_frequency_boost, compute_new_strength, decay_for_entry,

@@ -66,7 +66,7 @@ _IMPORTS = {
     "replay_events_summary": "bilinc.core.event_ledger",
 }
 # Models are lightweight, always import
-from bilinc.core.models import MemoryType, MemoryEntry, BeliefState, CCSDimension
+from bilinc.core.models import BeliefState, CCSDimension, MemoryEntry, MemoryType  # noqa: E402
 
 
 def __getattr__(name: str):
