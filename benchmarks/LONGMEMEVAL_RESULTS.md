@@ -1,4 +1,9 @@
-# Bilinc LongMemEval Benchmark Results
+# Archived LongMemEval Component Result
+
+This is historical component evidence, not a current StatePlane result. The
+dataset hash, clean source SHA and captured environment were not retained, so the
+legacy `R@5` label cannot be promoted to a current `Hit@5` or `Recall@5` claim.
+See `benchmarks/evidence/2026-07-11/historical/manifest.json`.
 
 **Date:** May 17, 2026
 **System:** Bilinc v1.2.5
@@ -70,8 +75,10 @@ BILINC LongMemEval: R@5=98.0% NDCG=0.933 n=500
   temporal-reasoning             96.2% (n=133)
 ```
 
-## Public-Safe Claim
+## Claim status
 
-Bilinc reaches 98.0% R@5 on LongMemEval-s with no LLM reranker or paid API, placing it in the top no-LLM retrieval tier while adding verification, AGM belief revision, rollback, claims, contradictions, and entity projection that retrieval-only memory systems do not cover.
+Do not make a current performance claim from this archived result. A future
+component run must record a clean SHA, dataset license/hash, command, dependency
+versions, raw result checksum and explicit `Hit@K`/`Recall@K` semantics.
 
 Do not claim absolute SOTA unless the metric scope is stated.

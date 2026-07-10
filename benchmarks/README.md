@@ -19,3 +19,10 @@ the fraction of relevant evidence retrieved by K. `NDCG@K` must be normalized an
 always fall in the inclusive range `[0, 1]`.
 
 Local scratch outputs belong in `benchmarks/runs/` and must not be committed.
+
+## Evidence status
+
+The files under `benchmarks/results/` predate this contract. Their archived
+classification and checksums live in `benchmarks/evidence/2026-07-11/historical/`.
+They are retained for audit only and cannot support a current product claim. Run
+`python3 -m benchmarks.validate_evidence` to verify committed manifests.
