@@ -1,6 +1,7 @@
 import importlib
 import json
 import os
+import ssl
 import tarfile
 import zipfile
 from pathlib import Path
@@ -11,8 +12,8 @@ import pytest
 def test_public_api_is_cloud_only():
     import bilinc
 
-    assert bilinc.__version__ == "2.1.3"
-    assert bilinc.version == "2.1.3"
+    assert bilinc.__version__ == "2.1.4"
+    assert bilinc.version == "2.1.4"
     assert "utm_campaign=activation_2_1_3" in bilinc.ACTIVATION_SIGNUP_URL
     assert hasattr(bilinc, "Bilinc")
     assert hasattr(bilinc, "CloudClient")
@@ -94,7 +95,7 @@ def test_cloud_client_commit_posts_to_hosted_api():
             "headers": {
                 "Authorization": "Bearer bil_live_test",
                 "Content-Type": "application/json",
-                "User-Agent": "bilinc-python/2.1.3",
+                "User-Agent": "bilinc-python/2.1.4",
             },
             "body": json.dumps(
                 {
@@ -141,12 +142,47 @@ def test_cloud_client_status_reads_hosted_health_endpoint():
             "url": "https://bilinc.space/api/cloud/health",
             "headers": {
                 "Authorization": "Bearer bil_live_test",
-                "User-Agent": "bilinc-python/2.1.3",
+                "User-Agent": "bilinc-python/2.1.4",
             },
             "body": None,
             "timeout": 30.0,
         }
     ]
+
+
+def test_default_transport_uses_explicit_ssl_context(monkeypatch):
+    from bilinc.client import _default_transport
+
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"status":"ok"}'
+
+    def fake_urlopen(request, *, timeout, context):
+        captured["timeout"] = timeout
+        captured["context"] = context
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    result = _default_transport(
+        "GET",
+        "https://bilinc.space/api/cloud/health",
+        headers={},
+        body=None,
+        timeout=7.0,
+    )
+
+    assert result == {"status": "ok"}
+    assert captured["timeout"] == 7.0
+    assert isinstance(captured["context"], ssl.SSLContext)
 
 
 def test_cloud_mcp_import_does_not_require_api_key(monkeypatch):
