@@ -2,6 +2,11 @@
 
 All notable changes to Bilinc.
 
+## [2.1.4] — 2026-07-10
+
+### Fixed
+- Use a certifi-backed TLS context for Bilinc Cloud SDK/CLI requests so macOS Python installs with an empty OpenSSL CA path do not fail with `CERTIFICATE_VERIFY_FAILED`.
+
 ## [2.1.3] — 2026-06-01
 
 ### Changed
