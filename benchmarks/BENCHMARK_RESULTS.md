@@ -1,7 +1,12 @@
-# Bilinc Benchmark Results
+# Archived Benchmark Results — Not Current Product Evidence
 
-## LongMemEval (Existing)
-- **R@5: 98.0%** (no LLM)
+This file predates the benchmark evidence contract and is classified as
+`historical` in `benchmarks/evidence/2026-07-11/historical/manifest.json`.
+The score labels below must not be used as current product-core, official LoCoMo,
+or directly comparable public performance claims.
+
+## LongMemEval (Historical component run)
+- **Legacy label: R@5 98.0%** (no LLM; semantics not reproducibly verified)
 - Per-type: Knowledge Update 100%, Single-Session 100%, Multi-Session 99.2%, Assistant 96.4%, Temporal 96.2%, Preference 93.3%
 
 ## ConvoMem (New)
@@ -12,8 +17,8 @@
 - entity_linking: 90% (1 miss: `$300k` normalization)
 - multi_hop: 100%
 
-## LoCoMo (New)
-- **Overall: 90.35%** (11 queries, FTS5 + hybrid recall)
+## LoCoMo (Historical local keyword-overlap run)
+- **Legacy overall: 90.35%** (not an official LoCoMo score)
 - temporal_inference: 97.92%
 - multi_hop: 83.3%
 - causal: 100%
