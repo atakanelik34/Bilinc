@@ -1,6 +1,6 @@
 """Bilinc Cloud client.
 
-Bilinc 2.1.3 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
+Bilinc 2.1.4 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
 https://bilinc.space. Local self-hosted StatePlane internals are no longer
 shipped in the public package.
 """
@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-__version__ = "2.1.3"
+__version__ = "2.1.4"
 DEFAULT_BASE_URL = "https://bilinc.space"
 SIGNUP_URL = "https://bilinc.space/signup"
 ACTIVATION_CAMPAIGN = "activation_2_1_3"
@@ -42,6 +43,28 @@ class BilincCloudError(BilincError):
 
 
 Transport = Callable[..., dict[str, Any]]
+
+
+def _default_ssl_context() -> ssl.SSLContext:
+    """Return a CA-backed TLS context for Bilinc Cloud requests.
+
+    Some macOS Python installs do not populate OpenSSL's default CA file, which
+    makes stdlib urllib fail with CERTIFICATE_VERIFY_FAILED even when the
+    system browser and curl can reach bilinc.space. certifi gives the public SDK
+    a stable Mozilla CA bundle while still allowing explicit SSL_CERT_FILE or
+    BILINC_CA_BUNDLE overrides for locked-down enterprise environments.
+    """
+
+    ca_bundle = os.environ.get("BILINC_CA_BUNDLE") or os.environ.get("SSL_CERT_FILE")
+    if ca_bundle:
+        return ssl.create_default_context(cafile=ca_bundle)
+
+    try:
+        import certifi
+    except ImportError:
+        return ssl.create_default_context()
+
+    return ssl.create_default_context(cafile=certifi.where())
 
 
 def config_path() -> Path:
@@ -108,7 +131,11 @@ def _default_transport(
 ) -> dict[str, Any]:
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - configured endpoint
+        with urllib.request.urlopen(  # noqa: S310 - configured endpoint
+            request,
+            timeout=timeout,
+            context=_default_ssl_context(),
+        ) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
