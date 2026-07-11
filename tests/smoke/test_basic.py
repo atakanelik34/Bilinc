@@ -7,7 +7,10 @@ These tests verify the most basic user flows:
 - recall retrieves from working memory
 - Knowledge graph can be initialized
 """
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 compatibility
+    import tomli as tomllib
 from pathlib import Path
 from bilinc.core.stateplane import StatePlane
 from bilinc.core.models import MemoryType
