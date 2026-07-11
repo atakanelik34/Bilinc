@@ -26,3 +26,11 @@ The files under `benchmarks/results/` predate this contract. Their archived
 classification and checksums live in `benchmarks/evidence/2026-07-11/historical/`.
 They are retained for audit only and cannot support a current product claim. Run
 `python3 -m benchmarks.validate_evidence` to verify committed manifests.
+
+## Filesystem layout
+
+- `runners/`: reproducible, non-calibrated runner implementations.
+- `calibrated/`: explicitly benchmark-tuned adapters only.
+- `historical/`: superseded reports and methodology notes.
+- `evidence/YYYY-MM-DD/<lane>/`: manifests and checksummed outputs.
+- `runs/`: ignored local scratch outputs.
