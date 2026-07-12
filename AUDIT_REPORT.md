@@ -1,4 +1,7 @@
-# Bilinc God-Level Audit Report (Final)
+# Bilinc God-Level Audit Report (Historical archive)
+> Historical snapshot from 2026-04-13. Its health score, dependency details,
+> test counts, and benchmark numbers are not current release truth and must not
+> be used for public product, performance, or license claims.
 **Date:** 2026-04-13
 **Health Score:** 10/10 ✅
 
