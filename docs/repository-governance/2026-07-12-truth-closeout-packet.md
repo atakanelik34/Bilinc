@@ -7,17 +7,17 @@
 
 | Repository | Main commit | Tree |
 |---|---|---|
-| `atakanelik34/Bilinc` | `77deb837b34ade82a4cdcc1841e736c474242589` | `18468b3bd5dbdd8b9442ff0705040a1f4c1b0cf2` |
-| `ReARCLabs/Bilinc` | `77deb837b34ade82a4cdcc1841e736c474242589` | `18468b3bd5dbdd8b9442ff0705040a1f4c1b0cf2` |
+| `atakanelik34/Bilinc` | `bdf87b43d0557dc15a289b117d5d497ac2c92cb7` | `a071e358e562ff594b7dc9bb09c957593e50d44a` |
+| `ReARCLabs/Bilinc` | `bdf87b43d0557dc15a289b117d5d497ac2c92cb7` | `a071e358e562ff594b7dc9bb09c957593e50d44a` |
 
 ## CI and artifacts
 
-- Public CI run: `29204460640` — successful.
-- Mirror CI run: `29204461581` — successful.
+- Public CI run: `29205039092` — successful.
+- Mirror CI run: `29205040238` — successful.
 - Python 3.10, 3.11, and 3.12 public-source and internal-runtime gates passed.
 - Package build and artifact validation passed; wheel and sdist were installed
   in clean CI environments and checked for the cloud-only boundary.
-- Local final suite: `411 passed, 7 skipped`; Ruff clean.
+- Local final suite: `413 passed, 7 skipped`; Ruff clean.
 
 ## Public truth and evidence
 
@@ -29,7 +29,7 @@
 
 ## Production deployment
 
-- Site source commit: `0d630614203d6064a15b0d0860d3d2d425d08998`.
+- Site source commit: `ebc63cc4de7fb2e1a5a6889c1e51777f1a4036f2`.
 - Existing target retained: `/home/busecimen/apps/bilinc-site`, PM2 app
   `bilinc-site`.
 - Rollback archives retained on the approved VM under
