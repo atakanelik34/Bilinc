@@ -73,6 +73,7 @@ jobs:
 
       - name: Reject likely credentials without disclosing values
         run: |
+          python -m pip install --upgrade pip pytest
           python scripts/check_secret_safety.py
           pytest -q tests/test_secret_safety.py
 
