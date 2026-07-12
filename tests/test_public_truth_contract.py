@@ -18,8 +18,13 @@ def test_public_product_truth_matches_the_shipped_cloud_surface() -> None:
     assert payload["package"]["name"] == "bilinc"
     assert payload["package"]["version"] == "2.1.4"
     assert payload["cloud_mcp"]["tools"] == ["commit_mem", "recall", "status"]
-    assert payload["benchmark_claims"]["state"] == "historical_unverifiable"
-    assert payload["benchmark_claims"]["public_approved"] is False
+    benchmark = payload["benchmark_claims"]
+    assert benchmark["state"] == "historical_scoped"
+    assert benchmark["public_approved"] is True
+    assert benchmark["label"] == "Archived research receipt"
+    assert benchmark["scope"] == "LongMemEval-s cleaned retrieval fixture, 500 questions"
+    assert benchmark["metrics"] == {"legacy_r_at_5": "98.0%", "legacy_ndcg_at_5": "0.933"}
+    assert "not a current hosted SLA" in benchmark["qualification"]
 
 
 def test_public_product_truth_validator_accepts_the_committed_manifest() -> None:

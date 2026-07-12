@@ -24,6 +24,14 @@ Local storage and private runtime internals are not shipped in the public packag
 
 ## Benchmark policy
 
-Current state: `historical_unverifiable`. Numeric benchmark claims are public-approved: `False`.
+Current state: `historical_scoped`. Numeric benchmark claims are public-approved: `True`.
 
-Do not publish numeric benchmark or competitor-performance claims until a reproducible product-core evidence manifest is reviewed and approved.
+### Archived research receipt
+
+- Scope: LongMemEval-s cleaned retrieval fixture, 500 questions
+- Legacy R@5: 98.0%
+- Legacy NDCG@5: 0.933
+
+This is an archived retrieval-component result, not a current hosted SLA, end-to-end agent score, or competitor ranking.
+
+The archived receipt may be presented only with its retrieval-only scope and qualification; do not extend it into a current product-performance or competitor claim.

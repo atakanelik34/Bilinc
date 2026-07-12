@@ -54,6 +54,14 @@ def render(payload: dict[str, object]) -> str:
 
 Current state: `{benchmark['state']}`. Numeric benchmark claims are public-approved: `{benchmark['public_approved']}`.
 
+### {benchmark['label']}
+
+- Scope: {benchmark['scope']}
+- Legacy R@5: {benchmark['metrics']['legacy_r_at_5']}
+- Legacy NDCG@5: {benchmark['metrics']['legacy_ndcg_at_5']}
+
+{benchmark['qualification']}
+
 {benchmark['rule']}
 """
 
