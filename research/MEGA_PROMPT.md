@@ -1,4 +1,6 @@
 # SYNAPTIC AI — MEGA PROMT (v1.0.0)
+> Historical ideation archive. References to a hypothetical MIT-licensed
+> Synaptic-AI project do not describe the current Bilinc package or license.
 **"Context Control Plane for Long-Running AI Agents"**
 
 > Bu doküman, Bilinc'in sıfırdan kodlanması için gerekli **tüm** teknik kararları, mimari prensipleri, dosya yapısını ve implementasyon detaylarını içerir.

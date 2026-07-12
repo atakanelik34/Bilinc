@@ -1,0 +1,13 @@
+# Third-party notices
+
+This repository's public Python package directly declares the following runtime
+dependencies in `pyproject.toml`. Their licenses are stated from the installed
+package metadata used during this closeout.
+
+| Package | Version checked | License | Upstream |
+|---|---:|---|---|
+| certifi | 2026.2.25 | MPL-2.0 | https://github.com/certifi/python-certifi |
+| mcp | 1.27.0 | MIT | https://github.com/modelcontextprotocol/python-sdk |
+
+This notice does not alter upstream license terms. Transitive dependency
+notices remain available in the corresponding package distributions.
