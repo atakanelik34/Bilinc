@@ -100,10 +100,25 @@ def validate_product_truth(path: Path = MANIFEST) -> list[str]:
     tools = payload["cloud_mcp"].get("tools", []) if isinstance(payload["cloud_mcp"], dict) else []
     if tools != _cloud_mcp_tool_names(ROOT / "src" / "bilinc" / "cloud_mcp.py"):
         errors.append("Cloud MCP tools do not match cloud_mcp.py")
-    if payload["benchmark_claims"].get("public_approved") is not False:
-        errors.append("unapproved benchmark evidence must not be public-approved")
-    if payload["benchmark_claims"].get("state") != "historical_unverifiable":
-        errors.append("current benchmark state must preserve the historical-unverifiable boundary")
+    benchmark = payload["benchmark_claims"]
+    required_benchmark_fields = {"state", "public_approved", "label", "scope", "metrics", "qualification", "rule"}
+    errors.extend(
+        f"missing benchmark field: {field}"
+        for field in sorted(required_benchmark_fields - benchmark.keys())
+    )
+    if benchmark.get("state") != "historical_scoped":
+        errors.append("benchmark state must remain historical and scoped")
+    if benchmark.get("public_approved") is not True:
+        errors.append("archived benchmark receipt must be explicitly public-approved")
+    if benchmark.get("label") != "Archived research receipt":
+        errors.append("benchmark label must identify the result as archived research")
+    if benchmark.get("scope") != "LongMemEval-s cleaned retrieval fixture, 500 questions":
+        errors.append("benchmark scope must preserve the fixture boundary")
+    if benchmark.get("metrics") != {"legacy_r_at_5": "98.0%", "legacy_ndcg_at_5": "0.933"}:
+        errors.append("benchmark metrics must match the scoped archived receipt")
+    qualification = benchmark.get("qualification", "")
+    if not isinstance(qualification, str) or "not a current hosted SLA" not in qualification:
+        errors.append("benchmark qualification must rule out current hosted SLA claims")
 
     serialized = json.dumps(payload).lower()
     errors.extend(f"public truth contains forbidden internal term: {term}" for term in FORBIDDEN_PUBLIC_TERMS if term in serialized)
