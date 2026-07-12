@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "canonical_repository": "https://github.com/atakanelik34/Bilinc",
+  "source_commit": "3fc0f62bdb454850662d4913211d1e7134a78f42",
+  "verified_at": "2026-07-12",
+  "package": {
+    "name": "bilinc",
+    "version": "2.1.4",
+    "requires_python": ">=3.10",
+    "license": "BUSL-1.1",
+    "install": "pip install bilinc",
+    "exports": [
+      "Bilinc",
+      "BilincApiKeyRequired",
+      "BilincCloudError",
+      "BilincError",
+      "CloudClient"
+    ]
+  },
+  "cloud_mcp": {
+    "transport": "stdio",
+    "tools": ["commit_mem", "recall", "status"]
+  },
+  "public_urls": {
+    "documentation": "https://bilinc.space/docs",
+    "signup": "https://bilinc.space/signup",
+    "cloud_health": "https://bilinc.space/api/cloud/health"
+  },
+  "benchmark_claims": {
+    "state": "historical_unverifiable",
+    "public_approved": false,
+    "rule": "Do not publish numeric benchmark or competitor-performance claims until a reproducible product-core evidence manifest is reviewed and approved."
+  },
+  "boundary": {
+    "public_package": "Cloud-only SDK, CLI, and Cloud MCP adapter for hosted Bilinc Cloud.",
+    "not_shipped": "Local storage and private runtime internals are not shipped in the public package."
+  }
+}

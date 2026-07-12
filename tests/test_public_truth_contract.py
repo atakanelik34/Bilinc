@@ -1,0 +1,46 @@
+"""Public truth must be derived from the shipped Cloud package surface."""
+
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).parents[1]
+
+
+def test_public_product_truth_matches_the_shipped_cloud_surface() -> None:
+    manifest = ROOT / "docs" / "public" / "product-truth.json"
+
+    assert manifest.is_file(), "public product truth manifest is required"
+
+    payload = json.loads(manifest.read_text())
+    assert payload["package"]["name"] == "bilinc"
+    assert payload["package"]["version"] == "2.1.4"
+    assert payload["cloud_mcp"]["tools"] == ["commit_mem", "recall", "status"]
+    assert payload["benchmark_claims"]["state"] == "historical_unverifiable"
+    assert payload["benchmark_claims"]["public_approved"] is False
+
+
+def test_public_product_truth_validator_accepts_the_committed_manifest() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/validate_public_truth.py"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_generated_public_truth_document_matches_the_manifest() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/generate_public_truth_doc.py", "--check"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
