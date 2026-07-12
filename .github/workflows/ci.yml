@@ -61,6 +61,21 @@ jobs:
           python scripts/generate_public_truth_doc.py --check
           pytest -q tests/test_public_truth_contract.py
 
+  secret-safe:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608
+
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d
+        with:
+          python-version: "3.12"
+
+      - name: Reject likely credentials without disclosing values
+        run: |
+          python scripts/check_secret_safety.py
+          pytest -q tests/test_secret_safety.py
+
   public-source:
     runs-on: ubuntu-latest
     strategy:
