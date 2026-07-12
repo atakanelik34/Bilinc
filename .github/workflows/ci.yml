@@ -97,7 +97,7 @@ jobs:
 
       - name: Run cloud-only public contract
         run: |
-          PYTHONPATH=src pytest -q tests/test_cloud_only_package.py tests/test_public_truth_contract.py
+          PYTHONPATH=src pytest -q -m public_source
           python -c "import bilinc; assert not hasattr(bilinc, 'StatePlane')"
 
   internal-runtime:
@@ -120,7 +120,7 @@ jobs:
           pip install -e '.[dev,internal]'
 
       - name: Run internal runtime test suite
-        run: pytest -q tests
+        run: pytest -q -m internal_runtime
 
       - name: Run cloud-only package tests
         run: PYTHONPATH=src pytest -q tests/test_cloud_only_package.py

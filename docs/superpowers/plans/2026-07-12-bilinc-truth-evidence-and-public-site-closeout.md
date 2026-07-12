@@ -228,23 +228,23 @@ Work only from the isolated site worktree created in WP0.
 
 The sprint is complete only when all of the following are true:
 
-- [ ] Previous sprint items classified `Partial` or `Open` are closed or have an explicit approved exception with owner and expiry.
-- [ ] Public and private Bilinc main branches have the same final SHA and tree.
-- [ ] All named repository CI gates pass from a clean final commit.
-- [ ] Wheel and sdist boundaries are proven through clean installs.
-- [ ] `THIRD_PARTY_NOTICES`, asset provenance, branch decision and tag mapping reports exist.
-- [ ] Current-context stale license and benchmark claims are removed or clearly archived.
-- [ ] A schema-validated public truth manifest is canonical and contract-tested.
-- [ ] Public Cloud MCP is documented as exactly the verified public tool surface, never the internal tool count.
-- [ ] Numeric benchmark claims either have complete reproducible public-approved evidence or do not appear on any current public surface.
-- [ ] The site repository's unrelated dirty work is preserved and excluded from the sprint change.
-- [ ] Landing, docs, pricing, trust, changelog, answers, comparison and machine-readable routes match their authorized truth sources.
-- [ ] Rendered public output contains no secrets, internal paths/hosts, private endpoints, deployment topology, internal MCP schema/count, database detail, admin detail or unannounced roadmap/fundraising information.
-- [ ] Pricing/trial/checkout wording is verified against live state and does not imply unavailable billing.
-- [ ] Site build, tests, claim contract, disclosure scan, link/schema checks and browser smoke pass.
-- [ ] Production deploy uses the existing approved target, has a rollback snapshot, and passes live smoke.
-- [ ] Final SHAs, trees, CI/deploy evidence, manifest hash, claim diff and rollback reference are captured in a redacted closeout packet.
-- [ ] Bilinc and Vault contain the durable closeout record.
+- [x] Previous sprint items classified `Partial` or `Open` are closed or have an explicit approved exception with owner and expiry.
+- [x] Public and private Bilinc main branches have the same final SHA and tree.
+- [x] All named repository CI gates pass from a clean final commit.
+- [x] Wheel and sdist boundaries are proven through clean installs.
+- [x] `THIRD_PARTY_NOTICES`, asset provenance, branch decision and tag mapping reports exist.
+- [x] Current-context stale license and benchmark claims are removed or clearly archived.
+- [x] A schema-validated public truth manifest is canonical and contract-tested.
+- [x] Public Cloud MCP is documented as exactly the verified public tool surface, never the internal tool count.
+- [x] Numeric benchmark claims either have complete reproducible public-approved evidence or do not appear on any current public surface.
+- [x] The site repository's unrelated dirty work is preserved and excluded from the sprint change.
+- [x] Landing, docs, pricing, trust, changelog, answers, comparison and machine-readable routes match their authorized truth sources.
+- [x] Rendered public output contains no secrets, internal paths/hosts, private endpoints, deployment topology, internal MCP schema/count, database detail, admin detail or unannounced roadmap/fundraising information.
+- [x] Pricing/trial/checkout wording is verified against live state and does not imply unavailable billing.
+- [x] Site build, tests, claim contract, disclosure scan, link/schema checks and browser smoke pass.
+- [x] Production deploy uses the existing approved target, has a rollback snapshot, and passes live smoke.
+- [x] Final SHAs, trees, CI/deploy evidence, manifest hash, claim diff and rollback reference are captured in a redacted closeout packet.
+- [x] Bilinc and Vault contain the durable closeout record.
 
 ## 8. Stop conditions and approval gates
 
