@@ -1,0 +1,45 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.atakanelik34/bilinc",
+  "title": "Bilinc",
+  "description": "Hosted agent memory with provenance, contradiction surfacing, and snapshot rollback.",
+  "version": "2.1.5",
+  "websiteUrl": "https://bilinc.space",
+  "repository": {
+    "source": "github",
+    "url": "https://github.com/atakanelik34/Bilinc",
+    "id": "1200964155"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "bilinc",
+      "version": "2.1.5",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeHint": "python",
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "-m",
+          "valueHint": "module-flag"
+        },
+        {
+          "type": "positional",
+          "value": "bilinc.cloud_mcp",
+          "valueHint": "module"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "BILINC_API_KEY",
+          "description": "Bilinc Cloud API key (bil_live_...). Create one in the Bilinc Cloud dashboard at https://bilinc.space.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
