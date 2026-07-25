@@ -2,6 +2,15 @@
 
 All notable changes to Bilinc.
 
+## [2.1.5] — 2026-07-25
+
+### Added
+- Published package metadata now carries project URLs (homepage, documentation, repository, changelog, issues), so the PyPI page links back to the docs and source instead of standing alone.
+- `server.json` describing the Cloud MCP adapter for the official MCP Registry, plus the `mcp-name` ownership marker in the package description.
+
+### Changed
+- No functional change to the SDK, CLI, or MCP adapter. This release exists to make the published package discoverable from the MCP Registry and from PyPI search.
+
 ## [2.1.4] — 2026-07-10
 
 ### Fixed
