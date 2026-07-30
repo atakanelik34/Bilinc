@@ -2,6 +2,43 @@
 
 All notable changes to Bilinc.
 
+## [2.1.6] — 2026-07-30
+
+### Added
+- The Cloud MCP adapter and SDK now expose the full core memory lifecycle: `revise`, `forget`,
+  `snapshot`, `diff`, and `rollback` join `commit_mem`, `recall`, and `status`. One API key, no local
+  database configuration.
+- `CloudClient.health()` for public service health, plus `revise()`, `forget()`, `create_snapshot()`,
+  `list_snapshots()`, `snapshot()`, `diff()`, `rollback_preview()`, and `rollback()`.
+- CLI gains `health`, `revise`, `forget`, `snapshot create|list`, `diff`, and
+  `rollback preview|execute`.
+- Typed SDK errors behind a canonical public error-code table, so a caller can branch on
+  authenticate / upgrade / retry / resolve a conflict / fix input. All of them still subclass
+  `BilincCloudError`.
+- `commit` accepts the full provenance contract (`source`, `session_id`, `canonical`, `priority`,
+  `ttl`) and returns an opaque entry version for optimistic concurrency.
+- Writes accept an `idempotency_key`, so a retry replays the original result instead of applying
+  twice.
+
+### Changed
+- **Breaking:** `CloudClient.status()` now returns authenticated workspace, plan, capability, limit,
+  and usage information from `GET /api/cloud/status`. Service health moved to `CloudClient.health()`
+  and the unchanged `GET /api/cloud/health`. Repoint uptime monitors at `health()`, or an expired
+  entitlement will read as an outage.
+- `forget` requires a reason on Cloud. It is written to the audit trail, and the deleted value is
+  never returned.
+- Rollback is two-stage: a free preview mints a short-lived confirmation token, and execute requires
+  it plus an unchanged project state root.
+- Read-only calls retry a bounded number of times on transport and 5xx failures. Writes stay
+  single-shot and rely on server-side idempotency instead.
+
+### Fixed
+- Recall now accepts the documented limit of 100 end to end. The runtime capped at 50, so limits
+  between 51 and 100 became opaque `503`s.
+- Snapshot identifiers are collision resistant. They were derived from a float timestamp, so two
+  snapshots taken in the same microsecond overwrote each other. Existing timestamp-named snapshots
+  stay readable and correctly ordered.
+
 ## [2.1.5] — 2026-07-25
 
 ### Added
