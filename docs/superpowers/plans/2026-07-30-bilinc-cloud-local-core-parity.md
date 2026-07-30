@@ -1008,3 +1008,116 @@ PYTHONPATH=src python3 -m pytest -q -o 'addopts=' \
 `tests/test_cloud_lifecycle_contract.py` freezes the eight-tool MCP surface, the SDK lifecycle
 methods, route paths, destructive-tool schema requirements, and the canonical error-code table.
 It was red on 25 of 29 assertions before implementation began.
+
+## 20. Release-candidate evidence
+
+### 20.1 Final state
+
+| Repository | Branch | Head | Working tree |
+|---|---|---|---|
+| Bilinc package | `claude/bilinc-cloud-local-core-parity` | see `git log` | clean |
+| Bilinc site (worktree) | `claude/bilinc-cloud-local-core-parity` | see `git log` | clean |
+
+The original site working tree at `/Users/busecimen/Downloads/Projeler/bilinc-site 2` was never
+touched; its unrelated Cloudflare-email changes remain exactly as they were.
+
+**Every external side-effect gate is still closed.** Nothing was pushed, published, deployed, or
+migrated.
+
+### 20.2 Package proof
+
+```
+python3 -m build                                    → bilinc-2.1.5-py3-none-any.whl + .tar.gz
+PYTHONPATH=src python3 -m pytest -q -o 'addopts='   → 499 passed, 5 skipped
+python3 -m ruff check src tests scripts             → All checks passed
+```
+
+Wheel contents (complete): `bilinc/__init__.py`, `bilinc/client.py`, `bilinc/cloud_mcp.py`,
+`bilinc/cli/{__init__,__main__,main}.py`, plus `dist-info`. No `bilinc/cloud`, `bilinc/core`,
+`bilinc/storage`, `bilinc/mcp_server`, `bilinc/eval`, `bilinc/security`, `bilinc/jobs`,
+`bilinc/adaptive`, `bilinc/retrieval`, `bilinc/observability`, `bilinc/integrations`, or
+`scheduler.py`. The sdist carries the same `src/` tree plus only
+`tests/test_cloud_only_package.py`.
+
+Clean-install smoke, `PYTHONPATH` unset:
+
+- `import bilinc` → 2.1.5; `bilinc --version` → 2.1.5
+- every forbidden internal module raises `ModuleNotFoundError`
+- `bilinc.cloud_mcp.build_server()` lists exactly the eight tools with no API key present
+- `scripts/verify_cloud_lifecycle_smoke.py` drives all eight capabilities through the SDK, CLI,
+  and MCP over real HTTP against a local mock control plane: 31 checks, 10 routes, all green.
+
+### 20.3 Site proof
+
+```
+npm test                       → 118 passed, 0 failed
+npm run test:public-claims     → 12 passed; public claim boundary verified
+npm run docs:verify-code-smoke → docs_code_smoke_ok, 13 blocks
+npm run docs:verify-routes     → 30 docs routes verified
+npm run cloud:verify-phase5-limits → bilinc_phase5_runtime_limits_ok=1
+npm run cloud:verify-credits   → bilinc_cloud_credits_static_ok=1
+npx tsc --noEmit               → clean
+npm run lint                   → 0 errors (2 pre-existing unused-arg warnings)
+npm run build                  → success; all 11 public Cloud routes present
+```
+
+Running the docs smoke with `BILINC_DOCS_PACKAGE_SPEC` pointed at the built wheel executes the
+SDK, CLI, and curl examples end to end — 37 mock requests, including the destructive rollback
+path.
+
+### 20.4 Security and tenant-isolation evidence
+
+- Cross-project probes for memories, snapshots, diffs, rollbacks, and idempotency keys are
+  covered in `tests/test_cloud_lifecycle_runtime.py` and `tests/cloud/*.test.ts`. A cross-tenant
+  identifier is indistinguishable from one that never existed.
+- Snapshot identifiers arrive from public input and are validated against a strict alphabet
+  before any filesystem access; traversal attempts are covered by a parametrized test.
+- Rollback confirmations are stored as digests only and are bound to project, snapshot, reason,
+  and state root. Reuse, retargeting, cross-project replay, and expiry are each covered.
+- Public errors are an allowlisted code vocabulary; a test asserts that raw sidecar text such as
+  a database path never reaches a caller.
+- Idempotency receipts store hashes of the key and of the normalized request, never raw payloads.
+- Secret scan over both branch diffs: no credential patterns.
+  `scripts/check_secret_safety.py` passes.
+
+### 20.5 Billing and idempotency evidence
+
+- Validation runs before any credit reservation on every metered route (asserted statically by
+  `verify-cloud-credits` and behaviorally by the route tests).
+- Duplicate write with the same key and payload: one runtime call, one usage event, replayed
+  response. Same key with a different payload: `409 idempotency_conflict`, still one usage event.
+- Runtime failure releases the reservation and records no usage; the receipt is marked failed so
+  the request can be retried.
+- Free reads (status, snapshot list, diff, rollback preview) reserve nothing and record nothing.
+- Snapshot create bills once; rollback bills once and only on success.
+
+### 20.6 Database migration inventory
+
+One new migration, **not applied**: `db/migrations/0013_cloud_mutation_receipts.sql`, adding
+`cloud_mutation_receipts` and `cloud_rollback_confirmations`. Both are additive; no existing
+table, column, or index is altered.
+
+### 20.7 Drift fixed that predated this sprint
+
+Two site checks were already red on `origin/main` and are fixed here:
+
+1. `tests/public/product-truth.test.ts` pinned `version: '2.1.4'` against a module declaring
+   `2.1.5`, so `npm test` failed on main.
+2. `docs:verify-routes` expected a documentation listing in `llms.txt` and `public_routes` in
+   `ai-index.json`; neither route emitted them.
+
+### 20.8 Residual risks and required decisions
+
+1. **Release ordering is now coupled.** The site documents the eight-capability surface. Deploying
+   `bilinc.space` before the package that implements it is published to PyPI would make the docs
+   describe methods a `pip install bilinc` user does not have. Publish the package first, then
+   deploy the site.
+2. **The migration gates the mutation receipts.** Until `0013` is applied, `claimMutation` has no
+   table. Apply the migration before deploying the control plane.
+3. **`CloudClient.status()` is a breaking change** for any caller using it as an uptime probe.
+   Documented in the migration page and the changelog; worth a release note to existing users.
+4. **Concurrent duplicates return a retryable 409** rather than blocking until the in-flight
+   mutation reaches a terminal state. That is honest and safe, but a caller that does not retry
+   will see a spurious conflict. A short server-side wait is the natural follow-up.
+5. **Package version is unchanged at 2.1.5.** Per section 16, choosing the release version is a
+   separate decision.
