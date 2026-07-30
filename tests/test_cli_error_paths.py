@@ -57,6 +57,69 @@ def test_cloud_cli_requires_api_key_for_memory_operations(public_cli_env: dict[s
     assert "API key" in result.stderr
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["revise", "--key", "k1", "--value", "v1"],
+        ["forget", "--key", "k1", "--reason", "cleanup"],
+        ["snapshot", "create"],
+        ["snapshot", "list"],
+        ["diff", "--from-snapshot", "snap_a"],
+        ["rollback", "preview", "--snapshot", "snap_a", "--reason", "cleanup"],
+        ["status"],
+        ["health"],
+    ],
+)
+def test_every_lifecycle_command_fails_cleanly_without_a_key(
+    public_cli_env: dict[str, str], argv: list[str]
+):
+    result = subprocess.run(
+        [sys.executable, "-m", "bilinc.cli.main", *argv],
+        text=True,
+        capture_output=True,
+        env=public_cli_env,
+    )
+
+    assert result.returncode == 1
+    assert "API key" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_destructive_cli_commands_require_their_safety_arguments(public_cli_env: dict[str, str]):
+    """argparse must refuse the destructive calls before any network use."""
+    missing_reason = subprocess.run(
+        [sys.executable, "-m", "bilinc.cli.main", "forget", "--key", "k1"],
+        text=True,
+        capture_output=True,
+        env=public_cli_env,
+    )
+    assert missing_reason.returncode == 2
+    assert "--reason" in missing_reason.stderr
+
+    # Execute must never fall back to an interactive prompt in automation.
+    missing_token = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bilinc.cli.main",
+            "--api-key",
+            "bil_live_not_used",
+            "rollback",
+            "execute",
+            "--snapshot",
+            "snap_a",
+            "--reason",
+            "cleanup",
+        ],
+        text=True,
+        capture_output=True,
+        env=public_cli_env,
+    )
+    assert missing_token.returncode == 1
+    assert "--confirmation-token" in missing_token.stderr
+    assert "Traceback" not in missing_token.stderr
+
+
 def test_cloud_cli_signup_is_available_without_api_key(public_cli_env: dict[str, str]):
     result = subprocess.run(
         [sys.executable, "-m", "bilinc.cli.main", "signup"],
