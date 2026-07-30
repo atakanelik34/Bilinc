@@ -42,6 +42,21 @@ class RecallRequest(BaseModel):
     explain: bool = False
 
 
+class ReviseRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=512)
+    value: Any
+    importance: float = Field(default=1.0, ge=0.0, le=1.0)
+    strategy: str = "entrenchment"
+    reason: str | None = Field(default=None, max_length=512)
+    expected_version: str | None = Field(default=None, max_length=128)
+
+
+class ForgetRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=512)
+    reason: str = Field(min_length=1, max_length=512)
+    expected_version: str | None = Field(default=None, max_length=128)
+
+
 class SnapshotCreateRequest(BaseModel):
     label: str | None = Field(default=None, max_length=128)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -136,6 +151,24 @@ def create_app(
     ):
         with _runtime_errors():
             return await manager.recall(project_id, **payload.model_dump())
+
+    @app.post("/v1/projects/{project_id}/revise")
+    async def revise(
+        project_id: str,
+        payload: ReviseRequest,
+        _: None = Depends(require_sidecar_token),
+    ):
+        with _runtime_errors():
+            return await manager.revise(project_id, **payload.model_dump())
+
+    @app.post("/v1/projects/{project_id}/forget")
+    async def forget(
+        project_id: str,
+        payload: ForgetRequest,
+        _: None = Depends(require_sidecar_token),
+    ):
+        with _runtime_errors():
+            return await manager.forget(project_id, **payload.model_dump())
 
     @app.get("/v1/projects/{project_id}/snapshots")
     async def list_snapshots(
