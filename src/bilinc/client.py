@@ -502,6 +502,53 @@ class CloudClient:
 
         return self._read("/api/cloud/memory/recall", payload)
 
+    def snapshot(
+        self,
+        action: str = "create",
+        *,
+        label: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        limit: int = 20,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or list project checkpoints.
+
+        ``create`` is metered; ``list`` is free. Neither returns the snapshot's
+        contents — a checkpoint listing must not stream a project's whole
+        memory back to the caller.
+        """
+
+        if action == "list":
+            return self.list_snapshots(limit=limit)
+        if action != "create":
+            raise _invalid("action", "must be one of create, list")
+        return self.create_snapshot(label=label, metadata=metadata, idempotency_key=idempotency_key)
+
+    def create_snapshot(
+        self,
+        *,
+        label: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Create one project checkpoint."""
+
+        payload: dict[str, Any] = {"metadata": _require_object(metadata, "metadata")}
+        _put_optional(payload, "label", _optional_text(label, "label"))
+        return self._post(
+            "/api/cloud/memory/snapshots",
+            payload,
+            idempotency_key=_optional_text(idempotency_key, "idempotency_key"),
+        )
+
+    def list_snapshots(self, *, limit: int = 20) -> dict[str, Any]:
+        """List this project's checkpoints, newest first."""
+
+        return self._get(
+            "/api/cloud/memory/snapshots",
+            {"limit": _require_limit(limit, "limit", MAX_SNAPSHOT_LIST_LIMIT)},
+        )
+
     def status(self) -> dict[str, Any]:
         """Return authenticated workspace, plan, capability, and runtime status.
 
