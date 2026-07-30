@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import re
 import secrets
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -46,6 +48,21 @@ def entry_version(entry_state: dict[str, Any]) -> str:
     """
     payload = json.dumps(entry_state, sort_keys=True, default=str)
     return f"v1_{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:32]}"
+
+
+@lru_cache(maxsize=8)
+def _supported_recall_kwargs(plane_type: type) -> frozenset[str]:
+    """Return the keyword arguments this StatePlane's ``recall_profiled`` accepts.
+
+    The hosted sidecar and the core runtime are deployed independently, and the
+    core has grown optional recall arguments over time. Rather than hard-coupling
+    to one signature — which turns a version skew into an opaque 503 — ask the
+    plane what it supports and pass only that.
+    """
+    try:
+        return frozenset(inspect.signature(plane_type.recall_profiled).parameters)
+    except (AttributeError, TypeError, ValueError):  # pragma: no cover - defensive
+        return frozenset()
 
 
 def _coerce_memory_types(names: list[str] | None) -> list[MemoryType] | None:
@@ -261,14 +278,24 @@ class ProjectRuntimeManager:
         explain: bool = False,
     ) -> dict[str, Any]:
         plane = await self.get_plane(project_id)
-        payload = await plane.recall_profiled(
-            query=query,
-            profile=profile,
-            limit=limit,
-            memory_types=_coerce_memory_types(memory_types),
-            explain=explain,
-        )
+
+        # Validate before dispatching, so an unknown memory type is rejected
+        # even on a runtime that could not have filtered by it anyway.
+        coerced_types = _coerce_memory_types(memory_types)
+        supported = _supported_recall_kwargs(type(plane))
+
+        kwargs: dict[str, Any] = {"query": query, "profile": profile, "limit": limit}
+        if coerced_types is not None and "memory_types" in supported:
+            kwargs["memory_types"] = coerced_types
+        if explain and "explain" in supported:
+            kwargs["explain"] = True
+
+        payload = await plane.recall_profiled(**kwargs)
         payload["state_version"] = state_version(plane)
+
+        # Never let a caller believe it received evidence it did not get.
+        if explain and "explain" not in supported:
+            payload["explain_supported"] = False
         return payload
 
     async def revise(
