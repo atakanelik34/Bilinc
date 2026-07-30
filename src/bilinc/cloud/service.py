@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import hmac
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -14,18 +14,71 @@ from pydantic import BaseModel, Field
 from bilinc.cloud.runtime import ProjectRuntimeManager
 
 
+#: One canonical maximum shared with the public route and the SDK. The sidecar
+#: previously capped recall at 50 while the public route accepted 100, so valid
+#: requests turned into opaque 503s.
+MAX_RECALL_LIMIT = 100
+
+
 class CommitRequest(BaseModel):
     key: str = Field(min_length=1, max_length=512)
     value: Any
     memory_type: str = "semantic"
     importance: float = Field(default=1.0, ge=0.0, le=1.0)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    source: str | None = Field(default=None, max_length=256)
+    session_id: str | None = Field(default=None, max_length=256)
+    canonical: bool | None = None
+    priority: float | None = Field(default=None, ge=0.0, le=1.0)
+    ttl: float | None = Field(default=None, gt=0.0)
 
 
 class RecallRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4096)
     profile: str = "balanced"
-    limit: int = Field(default=10, ge=1, le=50)
+    limit: int = Field(default=10, ge=1, le=MAX_RECALL_LIMIT)
+    memory_types: list[str] | None = None
+    explain: bool = False
+
+
+#: Runtime failures the control plane is allowed to see verbatim. Anything else
+#: is reported as a generic runtime error so filesystem paths, SQL, and stack
+#: text can never reach a public caller through the sidecar.
+_PUBLIC_RUNTIME_ERRORS = frozenset(
+    {
+        "invalid_project_id",
+        "invalid_memory_type",
+        "invalid_request",
+        "memory_not_found",
+        "snapshot_not_found",
+        "snapshot_unreadable",
+        "version_conflict",
+        "state_changed_since_preview",
+        "response_too_large",
+    }
+)
+
+_ERROR_STATUS = {
+    "memory_not_found": 404,
+    "snapshot_not_found": 404,
+    "snapshot_unreadable": 404,
+    "version_conflict": 409,
+    "state_changed_since_preview": 409,
+}
+
+
+@contextmanager
+def _runtime_errors():
+    """Translate runtime ``ValueError`` codes into stable sidecar responses."""
+    try:
+        yield
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        code = str(exc)
+        if code not in _PUBLIC_RUNTIME_ERRORS:
+            code = "invalid_request"
+        raise HTTPException(status_code=_ERROR_STATUS.get(code, 400), detail=code) from exc
 
 
 def create_app(
@@ -63,10 +116,8 @@ def create_app(
         payload: CommitRequest,
         _: None = Depends(require_sidecar_token),
     ):
-        try:
+        with _runtime_errors():
             result = await manager.commit(project_id, **payload.model_dump())
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not result["success"]:
             raise HTTPException(status_code=409, detail="commit_rejected")
         return result
@@ -77,10 +128,8 @@ def create_app(
         payload: RecallRequest,
         _: None = Depends(require_sidecar_token),
     ):
-        try:
+        with _runtime_errors():
             return await manager.recall(project_id, **payload.model_dump())
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/v1/projects/{project_id}/snapshots")
     async def list_snapshots(project_id: str, _: None = Depends(require_sidecar_token)):

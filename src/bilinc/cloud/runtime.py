@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,52 @@ from uuid import UUID
 from bilinc.core.models import MemoryType
 from bilinc.core.stateplane import StatePlane
 from bilinc.storage.sqlite import SQLiteBackend
+
+#: Hermes-contract fields that ride along in entry metadata rather than as
+#: first-class MemoryEntry columns. Mirrors the local MCP server's behavior so
+#: hosted and local entries stay shape-compatible.
+_METADATA_PASSTHROUGH = ("source", "session_id", "canonical", "priority", "ttl")
+
+
+def build_entry_metadata(
+    metadata: dict[str, Any] | None,
+    **passthrough: Any,
+) -> dict[str, Any]:
+    """Merge caller metadata with the Hermes provenance fields that are set."""
+    merged = dict(metadata) if isinstance(metadata, dict) else {}
+    for name in _METADATA_PASSTHROUGH:
+        value = passthrough.get(name)
+        if value is not None:
+            merged[name] = value
+    return merged
+
+
+def entry_version(entry_state: dict[str, Any]) -> str:
+    """Return an opaque, content-derived version for one memory entry.
+
+    Callers pass this back as ``expected_version`` to get optimistic
+    concurrency. It is deliberately not a timestamp or a counter: it must not
+    let a client infer write volume or ordering across a shared project.
+    """
+    payload = json.dumps(entry_state, sort_keys=True, default=str)
+    return f"v1_{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _coerce_memory_types(names: list[str] | None) -> list[MemoryType] | None:
+    """Map public memory-type names onto the enum, rejecting unknown names."""
+    if not names:
+        return None
+    try:
+        return [MemoryType(str(name)) for name in names]
+    except ValueError as exc:
+        raise ValueError("invalid_memory_type") from exc
+
+
+def state_version(plane: StatePlane) -> str | None:
+    """Return the audit-trail root hash identifying the project's whole state."""
+    if not plane.enable_audit or not plane.audit:
+        return None
+    return plane.audit.get_root_hash()
 
 
 @dataclass(frozen=True)
@@ -98,6 +145,11 @@ class ProjectRuntimeManager:
         memory_type: str = MemoryType.SEMANTIC.value,
         importance: float = 1.0,
         metadata: dict[str, Any] | None = None,
+        source: str | None = None,
+        session_id: str | None = None,
+        canonical: bool | None = None,
+        priority: float | None = None,
+        ttl: float | None = None,
     ) -> dict[str, Any]:
         plane = await self.get_plane(project_id)
         result = await plane.commit_with_agm_async(
@@ -105,15 +157,35 @@ class ProjectRuntimeManager:
             value=value,
             memory_type=memory_type,
             importance=importance,
-            metadata=metadata or {},
-            source="bilinc_cloud",
+            metadata=build_entry_metadata(
+                metadata,
+                source=source,
+                session_id=session_id,
+                canonical=canonical,
+                priority=priority,
+                ttl=ttl,
+            ),
+            source=source or "bilinc_cloud",
+            session_id=session_id or "",
+            ttl=ttl,
         )
+        success = bool(getattr(result, "success", False))
         return {
-            "success": bool(getattr(result, "success", False)),
+            "success": success,
             "operation": getattr(getattr(result, "operation", None), "value", None),
             "affected_keys": list(getattr(result, "affected_keys", []) or []),
             "removed_keys": list(getattr(result, "removed_keys", []) or []),
+            "entry_version": await self._entry_version(plane, key) if success else None,
+            "state_version": state_version(plane),
         }
+
+    @staticmethod
+    async def _entry_version(plane: StatePlane, key: str) -> str | None:
+        """Return the opaque version of the entry currently stored under ``key``."""
+        if not plane.backend:
+            return None
+        entry = await plane.backend.load(key)
+        return entry_version(entry.to_dict()) if entry else None
 
     async def recall(
         self,
@@ -122,9 +194,19 @@ class ProjectRuntimeManager:
         query: str,
         profile: str,
         limit: int = 10,
+        memory_types: list[str] | None = None,
+        explain: bool = False,
     ) -> dict[str, Any]:
         plane = await self.get_plane(project_id)
-        return await plane.recall_profiled(query=query, profile=profile, limit=limit)
+        payload = await plane.recall_profiled(
+            query=query,
+            profile=profile,
+            limit=limit,
+            memory_types=_coerce_memory_types(memory_types),
+            explain=explain,
+        )
+        payload["state_version"] = state_version(plane)
+        return payload
 
     async def create_snapshot(self, project_id: str) -> ProjectSnapshot:
         normalized = self.normalize_project_id(project_id)

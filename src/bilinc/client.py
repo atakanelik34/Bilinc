@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -169,6 +170,129 @@ def error_for_response(status: int, payload: Any) -> BilincCloudError:
 
 Transport = Callable[..., dict[str, Any]]
 
+RECALL_PROFILES = ("fast", "balanced", "verified", "deep")
+MEMORY_TYPES = ("episodic", "procedural", "semantic", "working", "spatial")
+REVISION_STRATEGIES = ("entrenchment", "recency", "verification", "importance")
+
+MAX_KEY_LENGTH = 512
+MAX_QUERY_LENGTH = 4096
+MAX_REASON_LENGTH = 512
+MAX_RECALL_LIMIT = 100
+MAX_SNAPSHOT_LIST_LIMIT = 100
+MAX_DIFF_LIMIT = 500
+
+#: Bounded retries for read-only calls. Mutations are never retried
+#: automatically: billing idempotency alone does not prove that a retried write
+#: mutates state only once.
+READ_RETRY_ATTEMPTS = 3
+READ_RETRY_BASE_DELAY = 0.25
+
+
+def _invalid(field: str, message: str) -> BilincValidationError:
+    return BilincValidationError(
+        f"Bilinc Cloud request failed: {field} {message}",
+        code="invalid_request",
+        status=400,
+        details={"field": field},
+    )
+
+
+def _require_key(key: Any) -> str:
+    if not isinstance(key, str) or not key.strip():
+        raise _invalid("key", "is required")
+    if len(key) > MAX_KEY_LENGTH:
+        raise _invalid("key", f"must be at most {MAX_KEY_LENGTH} characters")
+    return key.strip()
+
+
+def _require_query(query: Any) -> str:
+    if not isinstance(query, str) or not query.strip():
+        raise _invalid("query", "is required")
+    if len(query) > MAX_QUERY_LENGTH:
+        raise _invalid("query", f"must be at most {MAX_QUERY_LENGTH} characters")
+    return query.strip()
+
+
+def _require_reason(reason: Any) -> str:
+    if not isinstance(reason, str) or not reason.strip():
+        raise _invalid("reason", "is required for destructive operations")
+    if len(reason) > MAX_REASON_LENGTH:
+        raise _invalid("reason", f"must be at most {MAX_REASON_LENGTH} characters")
+    return reason.strip()
+
+
+def _require_choice(value: Any, field: str, allowed: tuple[str, ...]) -> str:
+    if value not in allowed:
+        raise _invalid(field, f"must be one of {', '.join(allowed)}")
+    return str(value)
+
+
+def _require_memory_type(value: Any) -> str:
+    return _require_choice(value, "memory_type", MEMORY_TYPES)
+
+
+def _require_profile(value: Any) -> str:
+    return _require_choice(value, "profile", RECALL_PROFILES)
+
+
+def _require_limit(value: Any, field: str, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
+        raise _invalid(field, f"must be an integer between 1 and {maximum}")
+    return value
+
+
+def _require_unit_interval(value: Any, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.0 <= value <= 1.0:
+        raise _invalid(field, "must be a number between 0.0 and 1.0")
+    return float(value)
+
+
+def _require_object(value: Any, field: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise _invalid(field, "must be a JSON object")
+    return value
+
+
+def _require_snapshot_id(value: Any, field: str = "snapshot_id") -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise _invalid(field, "is required")
+    return value.strip()
+
+
+def _optional_text(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise _invalid(field, "must be a non-empty string when provided")
+    return value.strip()
+
+
+def _optional_bool(value: Any, field: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise _invalid(field, "must be a boolean when provided")
+    return value
+
+
+def _optional_unit_interval(value: Any, field: str) -> float | None:
+    return None if value is None else _require_unit_interval(value, field)
+
+
+def _optional_positive(value: Any, field: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise _invalid(field, "must be a positive number when provided")
+    return float(value)
+
+
+def _put_optional(payload: dict[str, Any], name: str, value: Any) -> None:
+    if value is not None:
+        payload[name] = value
+
 
 def _default_ssl_context() -> ssl.SSLContext:
     """Return a CA-backed TLS context for Bilinc Cloud requests.
@@ -317,18 +441,37 @@ class CloudClient:
         memory_type: str = "semantic",
         importance: float = 1.0,
         metadata: dict[str, Any] | None = None,
+        source: str | None = None,
+        session_id: str | None = None,
+        canonical: bool | None = None,
+        priority: float | None = None,
+        ttl: float | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Commit a memory entry to Bilinc Cloud."""
+        """Commit a memory entry to Bilinc Cloud.
+
+        The simple two-argument call is unchanged. The optional provenance
+        fields map onto the same Hermes metadata contract the local runtime
+        uses, so hosted and local entries stay shape-compatible.
+        """
+
+        payload: dict[str, Any] = {
+            "key": _require_key(key),
+            "value": value,
+            "memoryType": _require_memory_type(memory_type),
+            "importance": _require_unit_interval(importance, "importance"),
+            "metadata": _require_object(metadata, "metadata"),
+        }
+        _put_optional(payload, "source", _optional_text(source, "source"))
+        _put_optional(payload, "sessionId", _optional_text(session_id, "session_id"))
+        _put_optional(payload, "canonical", _optional_bool(canonical, "canonical"))
+        _put_optional(payload, "priority", _optional_unit_interval(priority, "priority"))
+        _put_optional(payload, "ttl", _optional_positive(ttl, "ttl"))
 
         return self._post(
             "/api/cloud/memory/commit",
-            {
-                "key": key,
-                "value": value,
-                "memoryType": memory_type,
-                "importance": importance,
-                "metadata": metadata or {},
-            },
+            payload,
+            idempotency_key=_optional_text(idempotency_key, "idempotency_key"),
         )
 
     def recall(
@@ -337,13 +480,27 @@ class CloudClient:
         *,
         profile: str = "balanced",
         limit: int = 10,
+        memory_types: list[str] | None = None,
+        explain: bool = False,
     ) -> dict[str, Any]:
-        """Recall memories from Bilinc Cloud."""
+        """Recall memories from Bilinc Cloud.
 
-        return self._post(
-            "/api/cloud/memory/recall",
-            {"query": query, "profile": profile, "limit": limit},
-        )
+        ``profile`` selects the retrieval strategy — smart retrieval is a
+        profile here, not a separate tool. Higher profiles are entitlement
+        gated and return more provenance.
+        """
+
+        payload: dict[str, Any] = {
+            "query": _require_query(query),
+            "profile": _require_profile(profile),
+            "limit": _require_limit(limit, "limit", MAX_RECALL_LIMIT),
+        }
+        if memory_types is not None:
+            payload["memoryTypes"] = [_require_memory_type(name) for name in memory_types]
+        if explain:
+            payload["explain"] = True
+
+        return self._read("/api/cloud/memory/recall", payload)
 
     def status(self) -> dict[str, Any]:
         """Return authenticated workspace, plan, capability, and runtime status.
@@ -391,18 +548,43 @@ class CloudClient:
             timeout=float(self.timeout),
         )
 
+    def _read(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST a read-only operation, retrying only transport/5xx failures."""
+
+        return self._with_read_retries(lambda: self._post(path, payload))
+
     def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         query = urllib.parse.urlencode(
             {name: value for name, value in (params or {}).items() if value is not None}
         )
         url = f"{self.base_url}{path}?{query}" if query else f"{self.base_url}{path}"
-        return self.transport(
-            "GET",
-            url,
-            headers=self._headers(),
-            body=None,
-            timeout=float(self.timeout),
+        return self._with_read_retries(
+            lambda: self.transport(
+                "GET",
+                url,
+                headers=self._headers(),
+                body=None,
+                timeout=float(self.timeout),
+            )
         )
+
+    @staticmethod
+    def _with_read_retries(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        """Retry a read a bounded number of times on retryable failures.
+
+        Only reads get this. A retried mutation could apply twice, so writes
+        stay single-shot and rely on server-side idempotency instead.
+        """
+
+        for attempt in range(READ_RETRY_ATTEMPTS):
+            try:
+                return call()
+            except BilincCloudError as exc:
+                last_attempt = attempt == READ_RETRY_ATTEMPTS - 1
+                if not exc.retryable or last_attempt:
+                    raise
+                time.sleep(READ_RETRY_BASE_DELAY * (2**attempt))
+        raise AssertionError("unreachable")  # pragma: no cover
 
 
 Bilinc = CloudClient
@@ -432,7 +614,13 @@ __all__ = [
     "config_path",
     "INSTALL_URL",
     "load_config_api_key",
+    "MAX_DIFF_LIMIT",
+    "MAX_RECALL_LIMIT",
+    "MAX_SNAPSHOT_LIST_LIMIT",
+    "MEMORY_TYPES",
+    "RECALL_PROFILES",
     "RETRYABLE_ERROR_CODES",
+    "REVISION_STRATEGIES",
     "save_config_api_key",
     "SIGNUP_URL",
 ]
