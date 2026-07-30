@@ -281,3 +281,138 @@ async def test_diff_cannot_read_another_projects_snapshot(manager):
 async def test_diff_reports_a_missing_snapshot_as_not_found(manager, project_id):
     with pytest.raises(ValueError, match="snapshot_not_found"):
         await manager.diff(project_id, from_snapshot_id="snap_0000000000000_deadbeefdeadbeef")
+
+
+# ---------------------------------------------------------------------------
+# rollback
+# ---------------------------------------------------------------------------
+
+
+async def _seed_for_rollback(manager, project_id):
+    """Snapshot a known-good state, then damage it in all three ways."""
+    await manager.commit(project_id, key="keep", value={"n": 1})
+    await manager.commit(project_id, key="drop", value={"n": 2})
+    snapshot = await manager.create_snapshot(project_id, label="known-good")
+
+    await manager.revise(project_id, key="keep", value={"n": 999})
+    await manager.forget(project_id, key="drop", reason="agent error")
+    await manager.commit(project_id, key="junk", value={"n": 3})
+    return snapshot
+
+
+@pytest.mark.asyncio
+async def test_rollback_preview_describes_the_change_without_applying_it(manager, project_id):
+    snapshot = await _seed_for_rollback(manager, project_id)
+
+    preview = await manager.rollback_preview(project_id, snapshot_id=snapshot.id)
+
+    assert preview["counts"] == {"create": 1, "update": 1, "remove": 1}
+    assert preview["destructive"] is True
+    assert preview["target_root_hash"] == snapshot.root_hash
+
+    # Nothing changed: the damaged state is still in place.
+    still_damaged = await manager.recall(project_id, query="junk", profile="fast")
+    assert still_damaged["results"]
+
+
+@pytest.mark.asyncio
+async def test_rollback_preview_returns_keys_but_not_values(manager, project_id):
+    await manager.commit(project_id, key="secretish", value={"token": "abc123"})
+    snapshot = await manager.create_snapshot(project_id)
+    await manager.revise(project_id, key="secretish", value={"token": "def456"})
+
+    preview = await manager.rollback_preview(project_id, snapshot_id=snapshot.id)
+
+    assert preview["update_keys"] == ["secretish"]
+    assert "abc123" not in str(preview)
+    assert "def456" not in str(preview)
+
+
+@pytest.mark.asyncio
+async def test_rollback_execute_restores_the_exact_snapshot_state(manager, project_id):
+    snapshot = await _seed_for_rollback(manager, project_id)
+    preview = await manager.rollback_preview(project_id, snapshot_id=snapshot.id)
+
+    result = await manager.rollback_execute(
+        project_id,
+        snapshot_id=snapshot.id,
+        reason="undo bad agent run",
+        expected_current_root=preview["current_root_hash"],
+    )
+
+    restored = {
+        item["key"]: item["value"]
+        for item in (await manager.recall(project_id, query="n", profile="fast", limit=50))["results"]
+    }
+    assert result["counts"] == {"created": 1, "updated": 1, "deleted": 1}
+    assert restored == {"keep": {"n": 1}, "drop": {"n": 2}}
+    assert "junk" not in restored
+
+
+@pytest.mark.asyncio
+async def test_rollback_execute_refuses_when_state_changed_after_preview(manager, project_id):
+    snapshot = await _seed_for_rollback(manager, project_id)
+    preview = await manager.rollback_preview(project_id, snapshot_id=snapshot.id)
+
+    # A commit lands between preview and execute.
+    await manager.commit(project_id, key="late.write", value={"n": 4})
+
+    with pytest.raises(ValueError, match="state_changed_since_preview"):
+        await manager.rollback_execute(
+            project_id,
+            snapshot_id=snapshot.id,
+            reason="undo bad agent run",
+            expected_current_root=preview["current_root_hash"],
+        )
+
+    survivor = await manager.recall(project_id, query="late", profile="fast")
+    assert survivor["results"], "the newer write must survive a refused rollback"
+
+
+@pytest.mark.asyncio
+async def test_rollback_records_an_audit_receipt_with_the_reason(manager, project_id):
+    snapshot = await _seed_for_rollback(manager, project_id)
+    preview = await manager.rollback_preview(project_id, snapshot_id=snapshot.id)
+    await manager.rollback_execute(
+        project_id,
+        snapshot_id=snapshot.id,
+        reason="undo bad agent run",
+        expected_current_root=preview["current_root_hash"],
+    )
+
+    assert "undo bad agent run" in await audit_reasons(manager, project_id, "__system")
+
+
+@pytest.mark.asyncio
+async def test_rollback_execute_never_returns_restored_or_deleted_values(manager, project_id):
+    await manager.commit(project_id, key="secretish", value={"token": "abc123"})
+    snapshot = await manager.create_snapshot(project_id)
+    await manager.revise(project_id, key="secretish", value={"token": "def456"})
+    preview = await manager.rollback_preview(project_id, snapshot_id=snapshot.id)
+
+    result = await manager.rollback_execute(
+        project_id,
+        snapshot_id=snapshot.id,
+        reason="cleanup",
+        expected_current_root=preview["current_root_hash"],
+    )
+
+    assert "abc123" not in str(result)
+    assert "def456" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_rollback_cannot_target_another_projects_snapshot(manager):
+    project_a = str(uuid4())
+    project_b = str(uuid4())
+    await manager.commit(project_a, key="k", value={"tenant": "a"})
+    snapshot = await manager.create_snapshot(project_a)
+    await manager.commit(project_b, key="k", value={"tenant": "b"})
+
+    with pytest.raises(ValueError, match="snapshot_not_found"):
+        await manager.rollback_execute(
+            project_b, snapshot_id=snapshot.id, reason="probe", expected_current_root=None
+        )
+
+    intact = await manager.recall(project_b, query="tenant", profile="fast")
+    assert [item["value"] for item in intact["results"]] == [{"tenant": "b"}]

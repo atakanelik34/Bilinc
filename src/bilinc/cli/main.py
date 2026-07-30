@@ -138,6 +138,18 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("--include-values", action="store_true", help="Include values (redacted by default)")
     diff.add_argument("--limit", type=int, default=100)
 
+    rollback = sub.add_parser(
+        "rollback",
+        help="Preview or execute a snapshot restore (execute is destructive)",
+    )
+    rollback.add_argument("mode", choices=["preview", "execute"], nargs="?", default="preview")
+    rollback.add_argument("--snapshot", required=True, help="Snapshot id to restore")
+    rollback.add_argument("--reason", required=True, help="Required audit reason")
+    rollback.add_argument(
+        "--confirmation-token",
+        help="Token from a preview. Required for execute; there is no interactive prompt.",
+    )
+
     sub.add_parser("status", help="Show the authenticated Cloud workspace, plan, and capabilities")
     sub.add_parser("health", help="Show public Bilinc Cloud service health")
     sub.add_parser("doctor", help="Check local CLI configuration, service health, and account status")
@@ -265,6 +277,21 @@ def main(argv: list[str] | None = None) -> int:
                     limit=args.limit,
                 )
             )
+        elif args.command == "rollback":
+            if args.mode == "execute":
+                if not args.confirmation_token:
+                    raise ValueError(
+                        "rollback execute requires --confirmation-token from a preview"
+                    )
+                _print(
+                    client.rollback(
+                        args.snapshot,
+                        confirmation_token=args.confirmation_token,
+                        reason=args.reason,
+                    )
+                )
+            else:
+                _print(client.rollback_preview(args.snapshot, reason=args.reason))
         elif args.command == "status":
             _print(client.status())
         elif args.command == "health":
