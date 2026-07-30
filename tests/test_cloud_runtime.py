@@ -1,9 +1,30 @@
+import asyncio
 import json
 from uuid import uuid4
 
 import pytest
 
 from bilinc.cloud.runtime import ProjectRuntimeManager
+
+
+@pytest.mark.asyncio
+async def test_durable_mutations_are_serialized_per_project_without_blocking_other_tenants(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project_a = str(uuid4())
+    project_b = str(uuid4())
+    project_a_lock = await manager._project_mutation_lock(project_a)
+
+    await project_a_lock.acquire()
+    blocked = asyncio.create_task(manager.commit(project_a, key="a", value=1))
+    try:
+        other = await asyncio.wait_for(manager.commit(project_b, key="b", value=1), timeout=2)
+        assert other["success"] is True
+        assert blocked.done() is False
+    finally:
+        project_a_lock.release()
+
+    assert (await blocked)["success"] is True
+    await manager.close()
 
 
 @pytest.mark.asyncio
