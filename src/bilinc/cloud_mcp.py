@@ -57,7 +57,12 @@ def build_server():
 
     @mcp.tool()
     def status() -> dict[str, Any]:
-        """Return Bilinc Cloud account/runtime status."""
+        """Report the authenticated Bilinc Cloud workspace, plan, limits, and capabilities.
+
+        Read-only and never billed. Use this to discover which lifecycle
+        operations and recall profiles the current API key may use before
+        attempting them. Secrets are never returned.
+        """
 
         return create_client().status()
 
