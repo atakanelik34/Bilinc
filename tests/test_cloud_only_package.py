@@ -12,8 +12,8 @@ import pytest
 def test_public_api_is_cloud_only():
     import bilinc
 
-    assert bilinc.__version__ == "2.1.5"
-    assert bilinc.version == "2.1.5"
+    assert bilinc.__version__ == "2.1.6"
+    assert bilinc.version == "2.1.6"
     assert "utm_campaign=activation_2_1_3" in bilinc.ACTIVATION_SIGNUP_URL
     assert hasattr(bilinc, "Bilinc")
     assert hasattr(bilinc, "CloudClient")
@@ -110,7 +110,7 @@ def test_cloud_client_commit_posts_to_hosted_api():
             "headers": {
                 "Authorization": "Bearer bil_live_test",
                 "Content-Type": "application/json",
-                "User-Agent": "bilinc-python/2.1.5",
+                "User-Agent": "bilinc-python/2.1.6",
             },
             "body": json.dumps(
                 {
@@ -157,7 +157,7 @@ def test_cloud_client_status_reads_the_authenticated_status_endpoint():
             "url": "https://bilinc.space/api/cloud/status",
             "headers": {
                 "Authorization": "Bearer bil_live_test",
-                "User-Agent": "bilinc-python/2.1.5",
+                "User-Agent": "bilinc-python/2.1.6",
             },
             "body": None,
             "timeout": 30.0,

@@ -1,4 +1,4 @@
-"""Bilinc 2.1.5: cloud-only SDK for agent memory."""
+"""Bilinc 2.1.6: cloud-only SDK for agent memory."""
 
 from bilinc.client import (
     ACTIVATION_SIGNUP_URL,
@@ -25,7 +25,7 @@ from bilinc.client import (
     CloudClient,
 )
 
-__version__ = "2.1.5"
+__version__ = "2.1.6"
 version = __version__
 
 __all__ = [
