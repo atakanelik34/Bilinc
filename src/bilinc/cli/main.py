@@ -132,6 +132,12 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot.add_argument("--metadata", default="{}", help="JSON object metadata for a new checkpoint")
     snapshot.add_argument("--limit", type=int, default=20, help="How many checkpoints to list")
 
+    diff = sub.add_parser("diff", help="Compare a snapshot with another snapshot or current state")
+    diff.add_argument("--from-snapshot", required=True, help="Baseline snapshot id")
+    diff.add_argument("--to-snapshot", help="Target snapshot id. Omit to compare against current state.")
+    diff.add_argument("--include-values", action="store_true", help="Include values (redacted by default)")
+    diff.add_argument("--limit", type=int, default=100)
+
     sub.add_parser("status", help="Show the authenticated Cloud workspace, plan, and capabilities")
     sub.add_parser("health", help="Show public Bilinc Cloud service health")
     sub.add_parser("doctor", help="Check local CLI configuration, service health, and account status")
@@ -250,6 +256,15 @@ def main(argv: list[str] | None = None) -> int:
                 if not isinstance(metadata, dict):
                     raise ValueError("--metadata must be a JSON object")
                 _print(client.create_snapshot(label=args.label, metadata=metadata))
+        elif args.command == "diff":
+            _print(
+                client.diff(
+                    args.from_snapshot,
+                    to_snapshot_id=args.to_snapshot,
+                    include_values=args.include_values,
+                    limit=args.limit,
+                )
+            )
         elif args.command == "status":
             _print(client.status())
         elif args.command == "health":

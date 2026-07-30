@@ -19,6 +19,7 @@ from bilinc.cloud.runtime import ProjectRuntimeManager
 #: requests turned into opaque 503s.
 MAX_RECALL_LIMIT = 100
 MAX_SNAPSHOT_LIST_LIMIT = 100
+MAX_DIFF_LIMIT = 500
 
 
 class CommitRequest(BaseModel):
@@ -60,6 +61,13 @@ class ForgetRequest(BaseModel):
 class SnapshotCreateRequest(BaseModel):
     label: str | None = Field(default=None, max_length=128)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DiffRequest(BaseModel):
+    from_snapshot_id: str = Field(min_length=1, max_length=128)
+    to_snapshot_id: str | None = Field(default=None, max_length=128)
+    include_values: bool = False
+    limit: int = Field(default=100, ge=1, le=MAX_DIFF_LIMIT)
 
 
 #: Runtime failures the control plane is allowed to see verbatim. Anything else
@@ -169,6 +177,15 @@ def create_app(
     ):
         with _runtime_errors():
             return await manager.forget(project_id, **payload.model_dump())
+
+    @app.post("/v1/projects/{project_id}/diff")
+    async def diff(
+        project_id: str,
+        payload: DiffRequest,
+        _: None = Depends(require_sidecar_token),
+    ):
+        with _runtime_errors():
+            return await manager.diff(project_id, **payload.model_dump())
 
     @app.get("/v1/projects/{project_id}/snapshots")
     async def list_snapshots(
