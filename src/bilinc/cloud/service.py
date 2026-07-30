@@ -63,6 +63,18 @@ class SnapshotCreateRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class RollbackPreviewRequest(BaseModel):
+    snapshot_id: str = Field(min_length=1, max_length=128)
+    limit: int = Field(default=100, ge=1, le=MAX_DIFF_LIMIT)
+
+
+class RollbackExecuteRequest(BaseModel):
+    snapshot_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=512)
+    #: The state root the control plane bound its confirmation token to.
+    expected_current_root: str | None = Field(default=None, max_length=128)
+
+
 class DiffRequest(BaseModel):
     from_snapshot_id: str = Field(min_length=1, max_length=128)
     to_snapshot_id: str | None = Field(default=None, max_length=128)
@@ -186,6 +198,24 @@ def create_app(
     ):
         with _runtime_errors():
             return await manager.diff(project_id, **payload.model_dump())
+
+    @app.post("/v1/projects/{project_id}/rollback/preview")
+    async def rollback_preview(
+        project_id: str,
+        payload: RollbackPreviewRequest,
+        _: None = Depends(require_sidecar_token),
+    ):
+        with _runtime_errors():
+            return await manager.rollback_preview(project_id, **payload.model_dump())
+
+    @app.post("/v1/projects/{project_id}/rollback")
+    async def rollback_execute(
+        project_id: str,
+        payload: RollbackExecuteRequest,
+        _: None = Depends(require_sidecar_token),
+    ):
+        with _runtime_errors():
+            return await manager.rollback_execute(project_id, **payload.model_dump())
 
     @app.get("/v1/projects/{project_id}/snapshots")
     async def list_snapshots(

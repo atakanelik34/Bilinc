@@ -261,6 +261,15 @@ def _require_snapshot_id(value: Any, field: str = "snapshot_id") -> str:
     return value.strip()
 
 
+def _require_confirmation_token(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise _invalid(
+            "confirmation_token",
+            "is required. Call rollback_preview() first and pass its token.",
+        )
+    return value.strip()
+
+
 def _optional_text(value: Any, field: str) -> str | None:
     if value is None:
         return None
@@ -634,6 +643,50 @@ class CloudClient:
             payload["toSnapshotId"] = _require_snapshot_id(to_snapshot_id, "to_snapshot_id")
 
         return self._read("/api/cloud/memory/diff", payload)
+
+    def rollback_preview(self, snapshot_id: str, *, reason: str, limit: int = 100) -> dict[str, Any]:
+        """Preview restoring a snapshot, and mint a one-time confirmation token.
+
+        Free and non-destructive. The returned token is bound to this project,
+        this snapshot, the project's current state root, and this reason, and
+        it expires shortly. Pass it to :meth:`rollback` to execute.
+        """
+
+        return self._read(
+            "/api/cloud/memory/rollback/preview",
+            {
+                "snapshotId": _require_snapshot_id(snapshot_id),
+                "reason": _require_reason(reason),
+                "limit": _require_limit(limit, "limit", MAX_DIFF_LIMIT),
+            },
+        )
+
+    def rollback(
+        self,
+        snapshot_id: str,
+        *,
+        confirmation_token: str,
+        reason: str,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Restore the project to a snapshot. Destructive and irreversible.
+
+        Requires a live confirmation token from :meth:`rollback_preview`. If
+        the project changed after that preview the call fails with
+        ``state_changed_since_preview`` rather than discarding newer state.
+        Restored and deleted values are never returned.
+        """
+
+        payload = {
+            "snapshotId": _require_snapshot_id(snapshot_id),
+            "reason": _require_reason(reason),
+            "confirmationToken": _require_confirmation_token(confirmation_token),
+        }
+        return self._post(
+            "/api/cloud/memory/rollback",
+            payload,
+            idempotency_key=_optional_text(idempotency_key, "idempotency_key"),
+        )
 
     def status(self) -> dict[str, Any]:
         """Return authenticated workspace, plan, capability, and runtime status.
