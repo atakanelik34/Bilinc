@@ -20,6 +20,21 @@ def test_public_api_is_cloud_only():
     assert not hasattr(bilinc, "StatePlane")
 
 
+def test_declared_wheel_packages_stay_cloud_only():
+    """The wheel's package list is the boundary; keep it explicit and small."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - Python 3.10
+        import tomli as tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    with (root / "pyproject.toml").open("rb") as handle:
+        pyproject = tomllib.load(handle)
+
+    assert pyproject["tool"]["setuptools"]["packages"] == ["bilinc", "bilinc.cli"]
+    assert set(pyproject["project"]["dependencies"]) == {"certifi>=2024.2.2", "mcp>=1.0.0,<2.0"}
+
+
 class RecordingTransport:
     def __init__(self, response):
         self.response = response
@@ -285,6 +300,7 @@ def _forbidden_package_prefixes(root: str = "") -> tuple[str, ...]:
     return tuple(
         f"{root}{prefix}"
         for prefix in (
+            "bilinc/cloud/",
             "bilinc/core/",
             "bilinc/storage/",
             "bilinc/eval/",

@@ -6,13 +6,13 @@
 - License: `BUSL-1.1`
 - Install: `pip install bilinc`
 - Canonical repository: https://github.com/atakanelik34/Bilinc
-- Verified: `2026-07-12`
+- Verified: `2026-07-30`
 
 ## Public surface
 
-- SDK exports: `Bilinc`, `BilincApiKeyRequired`, `BilincCloudError`, `BilincError`, `CloudClient`
+- SDK exports: `Bilinc`, `BilincApiKeyRequired`, `BilincAuthError`, `BilincCloudError`, `BilincConfirmationExpiredError`, `BilincConflictError`, `BilincConnectionError`, `BilincEntitlementError`, `BilincError`, `BilincNotFoundError`, `BilincPaymentRequiredError`, `BilincRateLimitError`, `BilincRuntimeUnavailableError`, `BilincValidationError`, `API_VERSION`, `CANONICAL_ERROR_CODES`, `CloudClient`, `RETRYABLE_ERROR_CODES`
 - Cloud MCP transport: `stdio`
-- Cloud MCP tools: `commit_mem`, `recall`, `status`
+- Cloud MCP tools: `commit_mem`, `recall`, `revise`, `forget`, `status`, `snapshot`, `diff`, `rollback`
 - Documentation: https://bilinc.space/docs
 - Signup: https://bilinc.space/signup
 
