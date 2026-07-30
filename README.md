@@ -12,7 +12,7 @@
 
 Retrieval answers *"what is similar to this?"*. Long-running agents also need to answer *"who wrote this state, was it verified, did it contradict what we already knew, and can we undo it?"* — that is the layer Bilinc provides.
 
-Bilinc 2.1.5 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
+Bilinc 2.1.6 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
 
 > **Archived research receipt** — LongMemEval-s cleaned retrieval fixture, 500 questions: **R@5 98.0%**, **NDCG@5 0.933**, no LLM reranker, no paid API. This is a retrieval-component result, not a current hosted SLA, end-to-end agent score, or competitor ranking — see [Benchmark receipt](#benchmark-receipt) for the full scope and qualification.
 
@@ -71,19 +71,26 @@ opencode, and others.
 }
 ```
 
-Three tools, deliberately:
+Eight tools — the core memory lifecycle, and nothing else:
 
 | Tool | What it does |
 | --- | --- |
-| `commit_mem` | Write durable agent state. Each write carries provenance — which run, tool, or operator produced it. |
-| `recall` | Retrieve prior context and decisions before acting. |
-| `status` | Check hosted Cloud health and account state. |
+| `commit_mem` | Write durable agent state. Each write carries provenance — which run, tool, or operator produced it — and returns a version for optimistic concurrency. |
+| `recall` | Retrieve prior context and decisions before acting. `profile` selects retrieval quality; smart retrieval is that argument, not a separate tool. |
+| `revise` | Deliberately correct something already known. It never creates, so a correction stays distinguishable from an accidental overwrite. |
+| `forget` | **Destructive.** Remove obsolete state from active recall. A reason is required and is audited; the deleted value is never returned. |
+| `status` | Report the authenticated workspace, plan, capabilities, recall profiles, limits, and usage. Never billed. |
+| `snapshot` | Checkpoint a project before risky work, or list existing checkpoints. |
+| `diff` | Compare a checkpoint against another checkpoint or current state. Values are redacted by default. |
+| `rollback` | **Destructive in execute mode.** Restore a checkpoint through a free preview plus an explicitly confirmed execute. |
+
+Operator and debug tooling — health probes, benchmarks, export/import, workspace replay — stays
+local-only, as do the epistemic read tools for claims, contradictions, and graph queries. The hosted
+adapter does not bundle local runtime internals.
 
 Documented client setups: [Claude Code](https://bilinc.space/docs/claude-code) ·
 [Codex](https://bilinc.space/docs/codex) · [Cursor](https://bilinc.space/docs/cursor) ·
 [any MCP client](https://bilinc.space/for/mcp)
-
-The adapter exposes hosted commit, recall, and status operations. It does not bundle local runtime internals.
 
 ## Python SDK
 
@@ -91,9 +98,29 @@ The adapter exposes hosted commit, recall, and status operations. It does not bu
 from bilinc import CloudClient
 
 client = CloudClient()  # reads BILINC_API_KEY or a key saved by `bilinc login`
-client.commit("agent.goal", {"ship": "reliable memory"}, memory_type="semantic")
+
+# Write, and keep the version for optimistic concurrency.
+written = client.commit("agent.goal", {"ship": "reliable memory"}, memory_type="semantic")
 results = client.recall("agent goal", limit=5)
-status = client.status()
+
+# Correct something you already know. Fails if it does not exist.
+client.revise("agent.goal", {"ship": "verifiable memory"},
+              reason="scope corrected", expected_version=written["entryVersion"])
+
+# Checkpoint before risky work, then see what changed.
+snapshot = client.create_snapshot(label="before-autonomous-run")["snapshot"]
+client.diff(snapshot["id"])
+
+# Drop obsolete state. A reason is required and is audited.
+client.forget("agent.goal", reason="superseded by the planner service")
+
+# Recover. Preview is free; execute is destructive and needs the token.
+preview = client.rollback_preview(snapshot["id"], reason="undo bad agent run")
+client.rollback(snapshot["id"], confirmation_token=preview["confirmationToken"],
+                reason="undo bad agent run")
+
+client.status()   # what can this key do?
+client.health()   # is the service reachable?
 ```
 
 For server, CI, and hosted agent runtimes, store the key as `BILINC_API_KEY`.
@@ -101,10 +128,25 @@ For server, CI, and hosted agent runtimes, store the key as `BILINC_API_KEY`.
 ## CLI
 
 ```bash
-bilinc status
+bilinc status                 # authenticated plan, capabilities, limits, usage
+bilinc health                 # public service health
 bilinc commit --key agent.goal --value '{"ship":"reliable memory"}'
 bilinc recall --query "agent goal"
+bilinc revise --key agent.goal --value '{"ship":"verifiable memory"}' --reason "scope corrected"
+bilinc snapshot create --label before-autonomous-run
+bilinc snapshot list
+bilinc diff --from-snapshot snap_...
+bilinc forget --key agent.goal --reason "superseded by the planner service"
 bilinc doctor
+```
+
+Rollback is two stages. Execute takes the token from the preview and never prompts interactively,
+so it stays safe inside automation:
+
+```bash
+bilinc rollback preview --snapshot snap_... --reason "undo bad agent run"
+bilinc rollback execute --snapshot snap_... --reason "undo bad agent run" \
+  --confirmation-token <token-from-preview>
 ```
 
 Useful first-run commands:
@@ -118,11 +160,26 @@ bilinc mcp install
 
 ## Hosted Endpoints
 
-- Health: `GET https://bilinc.space/api/cloud/health`
-- Commit: `POST https://bilinc.space/api/cloud/memory/commit`
-- Recall: `POST https://bilinc.space/api/cloud/memory/recall`
+| Endpoint | Notes |
+| --- | --- |
+| `GET /api/cloud/health` | Public service health. No key, no billing. |
+| `GET /api/cloud/status` | Authenticated capabilities for one key. Never billed. |
+| `POST /api/cloud/memory/commit` | Write. |
+| `POST /api/cloud/memory/recall` | Read. |
+| `POST /api/cloud/memory/revise` | Replace an existing memory. |
+| `POST /api/cloud/memory/forget` | Destructive. Reason required. |
+| `GET /api/cloud/memory/snapshots` | List checkpoints. Free. |
+| `POST /api/cloud/memory/snapshots` | Create a checkpoint. |
+| `POST /api/cloud/memory/diff` | Compare checkpoints. Free. |
+| `POST /api/cloud/memory/rollback/preview` | Free. Mints a confirmation token. |
+| `POST /api/cloud/memory/rollback` | Destructive. Requires that token. |
 
-Authenticated memory operations require an active Bilinc Cloud entitlement.
+All hosted endpoints share `https://bilinc.space`. Authenticated memory operations require an
+active Bilinc Cloud entitlement.
+
+Send an `Idempotency-Key` header on any write you might retry: the same key with the same payload
+replays the original result and is billed once, and the same key with a different payload is
+refused with `409 idempotency_conflict`.
 
 ## Benchmark receipt
 

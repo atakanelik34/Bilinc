@@ -3,7 +3,7 @@
   "name": "io.github.atakanelik34/bilinc",
   "title": "Bilinc",
   "description": "Hosted agent memory with provenance, contradiction surfacing, and snapshot rollback.",
-  "version": "2.1.5",
+  "version": "2.1.6",
   "websiteUrl": "https://bilinc.space",
   "repository": {
     "source": "github",
@@ -14,7 +14,7 @@
     {
       "registryType": "pypi",
       "identifier": "bilinc",
-      "version": "2.1.5",
+      "version": "2.1.6",
       "transport": {
         "type": "stdio"
       },
