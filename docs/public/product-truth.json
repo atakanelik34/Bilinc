@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "canonical_repository": "https://github.com/atakanelik34/Bilinc",
-  "source_commit": "3fc0f62bdb454850662d4913211d1e7134a78f42",
-  "verified_at": "2026-07-12",
+  "source_commit": "6c486661c4b2ce258694ccb37ec62d4b8b9d481f",
+  "verified_at": "2026-07-30",
   "package": {
     "name": "bilinc",
     "version": "2.1.5",
@@ -12,19 +12,42 @@
     "exports": [
       "Bilinc",
       "BilincApiKeyRequired",
+      "BilincAuthError",
       "BilincCloudError",
+      "BilincConfirmationExpiredError",
+      "BilincConflictError",
+      "BilincConnectionError",
+      "BilincEntitlementError",
       "BilincError",
-      "CloudClient"
+      "BilincNotFoundError",
+      "BilincPaymentRequiredError",
+      "BilincRateLimitError",
+      "BilincRuntimeUnavailableError",
+      "BilincValidationError",
+      "API_VERSION",
+      "CANONICAL_ERROR_CODES",
+      "CloudClient",
+      "RETRYABLE_ERROR_CODES"
     ]
   },
   "cloud_mcp": {
     "transport": "stdio",
-    "tools": ["commit_mem", "recall", "status"]
+    "tools": [
+      "commit_mem",
+      "recall",
+      "revise",
+      "forget",
+      "status",
+      "snapshot",
+      "diff",
+      "rollback"
+    ]
   },
   "public_urls": {
     "documentation": "https://bilinc.space/docs",
     "signup": "https://bilinc.space/signup",
-    "cloud_health": "https://bilinc.space/api/cloud/health"
+    "cloud_health": "https://bilinc.space/api/cloud/health",
+    "cloud_status": "https://bilinc.space/api/cloud/status"
   },
   "benchmark_claims": {
     "state": "historical_scoped",
