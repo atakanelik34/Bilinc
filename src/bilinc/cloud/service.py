@@ -18,6 +18,7 @@ from bilinc.cloud.runtime import ProjectRuntimeManager
 #: previously capped recall at 50 while the public route accepted 100, so valid
 #: requests turned into opaque 503s.
 MAX_RECALL_LIMIT = 100
+MAX_SNAPSHOT_LIST_LIMIT = 100
 
 
 class CommitRequest(BaseModel):
@@ -39,6 +40,11 @@ class RecallRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=MAX_RECALL_LIMIT)
     memory_types: list[str] | None = None
     explain: bool = False
+
+
+class SnapshotCreateRequest(BaseModel):
+    label: str | None = Field(default=None, max_length=128)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 #: Runtime failures the control plane is allowed to see verbatim. Anything else
@@ -132,19 +138,28 @@ def create_app(
             return await manager.recall(project_id, **payload.model_dump())
 
     @app.get("/v1/projects/{project_id}/snapshots")
-    async def list_snapshots(project_id: str, _: None = Depends(require_sidecar_token)):
-        try:
-            snapshots = await manager.list_snapshots(project_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async def list_snapshots(
+        project_id: str,
+        limit: int = MAX_SNAPSHOT_LIST_LIMIT,
+        _: None = Depends(require_sidecar_token),
+    ):
+        with _runtime_errors():
+            snapshots = await manager.list_snapshots(project_id, limit=limit)
         return {"snapshots": [snapshot.__dict__ for snapshot in snapshots]}
 
     @app.post("/v1/projects/{project_id}/snapshots")
-    async def create_snapshot(project_id: str, _: None = Depends(require_sidecar_token)):
-        try:
-            snapshot = await manager.create_snapshot(project_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async def create_snapshot(
+        project_id: str,
+        payload: SnapshotCreateRequest | None = None,
+        _: None = Depends(require_sidecar_token),
+    ):
+        request = payload or SnapshotCreateRequest()
+        with _runtime_errors():
+            snapshot = await manager.create_snapshot(
+                project_id,
+                label=request.label,
+                metadata=request.metadata,
+            )
         return {"snapshot": snapshot.__dict__}
 
     return app

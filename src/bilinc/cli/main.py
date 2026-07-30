@@ -109,6 +109,12 @@ def build_parser() -> argparse.ArgumentParser:
     recall.add_argument("--profile", choices=["fast", "balanced", "verified", "deep"], default="balanced")
     recall.add_argument("--limit", type=int, default=10)
 
+    snapshot = sub.add_parser("snapshot", help="Create or list project checkpoints")
+    snapshot.add_argument("action", choices=["create", "list"], nargs="?", default="create")
+    snapshot.add_argument("--label", help="Human-readable label for a new checkpoint")
+    snapshot.add_argument("--metadata", default="{}", help="JSON object metadata for a new checkpoint")
+    snapshot.add_argument("--limit", type=int, default=20, help="How many checkpoints to list")
+
     sub.add_parser("status", help="Show the authenticated Cloud workspace, plan, and capabilities")
     sub.add_parser("health", help="Show public Bilinc Cloud service health")
     sub.add_parser("doctor", help="Check local CLI configuration, service health, and account status")
@@ -200,6 +206,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "recall":
             _print(client.recall(args.query, profile=args.profile, limit=args.limit))
+        elif args.command == "snapshot":
+            if args.action == "list":
+                _print(client.list_snapshots(limit=args.limit))
+            else:
+                metadata = _parse_value(args.metadata)
+                if not isinstance(metadata, dict):
+                    raise ValueError("--metadata must be a JSON object")
+                _print(client.create_snapshot(label=args.label, metadata=metadata))
         elif args.command == "status":
             _print(client.status())
         elif args.command == "health":
