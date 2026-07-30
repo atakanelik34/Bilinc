@@ -91,6 +91,33 @@ def normalize_snapshot_id(snapshot_id: Any) -> str:
     return value
 
 
+#: Hard ceiling on a value-bearing diff. Past this the caller is asking for a
+#: bulk export, which is a different product with different retention rules.
+MAX_DIFF_RESPONSE_BYTES = 1_000_000
+
+
+def _snapshot_entries(payload: dict[str, Any]) -> dict[str, Any]:
+    entries = payload.get("snapshot", {}).get("entries")
+    return dict(entries) if isinstance(entries, dict) else {}
+
+
+def _diff_record(
+    key: str,
+    before: Any,
+    after: Any,
+    include_values: bool,
+) -> dict[str, Any]:
+    """Describe one changed key, carrying values only when asked."""
+    record: dict[str, Any] = {"key": key}
+    if not include_values:
+        return record
+    if before is not None:
+        record["before"] = before.get("value") if isinstance(before, dict) else before
+    if after is not None:
+        record["after"] = after.get("value") if isinstance(after, dict) else after
+    return record
+
+
 @dataclass(frozen=True)
 class ProjectSnapshot:
     """Persisted project snapshot metadata.
@@ -465,6 +492,72 @@ class ProjectRuntimeManager:
         if not isinstance(payload, dict) or "snapshot" not in payload:
             raise ValueError("snapshot_unreadable")
         return payload
+
+    async def diff(
+        self,
+        project_id: str,
+        *,
+        from_snapshot_id: str,
+        to_snapshot_id: str | None = None,
+        include_values: bool = False,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Compare a snapshot against another snapshot or against current state.
+
+        Read-only, and values are redacted unless explicitly requested, so an
+        operator can decide whether to restore a checkpoint without the diff
+        itself becoming a bulk export of the project's memory.
+        """
+        normalized = self.normalize_project_id(project_id)
+        source = await self.load_snapshot(normalized, from_snapshot_id)
+        from_entries = _snapshot_entries(source)
+
+        if to_snapshot_id is None:
+            plane = await self.get_plane(normalized)
+            to_entries = await plane._persistent_state()
+            to_root = state_version(plane)
+            target_label = "current"
+        else:
+            target = await self.load_snapshot(normalized, to_snapshot_id)
+            to_entries = _snapshot_entries(target)
+            to_root = target.get("root_hash")
+            target_label = "snapshot"
+
+        from_keys = set(from_entries)
+        to_keys = set(to_entries)
+        added = sorted(to_keys - from_keys)
+        removed = sorted(from_keys - to_keys)
+        modified = sorted(
+            key for key in from_keys & to_keys if from_entries[key] != to_entries[key]
+        )
+
+        bound = max(1, int(limit))
+        truncated = any(len(group) > bound for group in (added, removed, modified))
+
+        result = {
+            "from_snapshot_id": normalize_snapshot_id(from_snapshot_id),
+            "to_snapshot_id": normalize_snapshot_id(to_snapshot_id) if to_snapshot_id else None,
+            "target": target_label,
+            "from_root_hash": source.get("root_hash"),
+            "to_root_hash": to_root,
+            "counts": {"added": len(added), "modified": len(modified), "removed": len(removed)},
+            "added": [
+                _diff_record(key, None, to_entries[key], include_values) for key in added[:bound]
+            ],
+            "modified": [
+                _diff_record(key, from_entries[key], to_entries[key], include_values)
+                for key in modified[:bound]
+            ],
+            "removed": [
+                _diff_record(key, from_entries[key], None, include_values) for key in removed[:bound]
+            ],
+            "values_included": bool(include_values),
+            "truncated": truncated,
+        }
+
+        if include_values and len(json.dumps(result, default=str)) > MAX_DIFF_RESPONSE_BYTES:
+            raise ValueError("response_too_large")
+        return result
 
     async def close(self) -> None:
         for plane in self._planes.values():

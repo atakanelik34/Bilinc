@@ -610,6 +610,31 @@ class CloudClient:
             {"limit": _require_limit(limit, "limit", MAX_SNAPSHOT_LIST_LIMIT)},
         )
 
+    def diff(
+        self,
+        from_snapshot_id: str,
+        *,
+        to_snapshot_id: str | None = None,
+        include_values: bool = False,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Compare a snapshot against another snapshot, or against current state.
+
+        Read-only and not billed. Values are redacted unless
+        ``include_values`` is set, so inspecting a checkpoint does not turn
+        into a bulk export of the project's memory.
+        """
+
+        payload: dict[str, Any] = {
+            "fromSnapshotId": _require_snapshot_id(from_snapshot_id, "from_snapshot_id"),
+            "includeValues": bool(include_values),
+            "limit": _require_limit(limit, "limit", MAX_DIFF_LIMIT),
+        }
+        if to_snapshot_id is not None:
+            payload["toSnapshotId"] = _require_snapshot_id(to_snapshot_id, "to_snapshot_id")
+
+        return self._read("/api/cloud/memory/diff", payload)
+
     def status(self) -> dict[str, Any]:
         """Return authenticated workspace, plan, capability, and runtime status.
 
