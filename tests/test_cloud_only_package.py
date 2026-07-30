@@ -64,7 +64,7 @@ def test_cloud_client_normalizes_base_url():
 
     client.status()
 
-    assert transport.calls[0]["url"] == "https://bilinc.space/api/cloud/health"
+    assert transport.calls[0]["url"] == "https://bilinc.space/api/cloud/status"
 
 
 def test_cloud_client_base_url_can_come_from_env(monkeypatch):
@@ -76,7 +76,7 @@ def test_cloud_client_base_url_can_come_from_env(monkeypatch):
 
     client.status()
 
-    assert transport.calls[0]["url"] == "http://127.0.0.1:9999/api/cloud/health"
+    assert transport.calls[0]["url"] == "http://127.0.0.1:9999/api/cloud/status"
 
 
 def test_cloud_client_commit_posts_to_hosted_api():
@@ -127,19 +127,19 @@ def test_cloud_client_recall_posts_to_hosted_api():
     assert json.loads(call["body"].decode("utf-8")) == {"query": "trial status", "profile": "balanced", "limit": 5}
 
 
-def test_cloud_client_status_reads_hosted_health_endpoint():
+def test_cloud_client_status_reads_the_authenticated_status_endpoint():
     from bilinc import CloudClient
 
-    transport = RecordingTransport({"status": "ok", "mode": "live_cloud"})
+    transport = RecordingTransport({"status": "ok", "plan": {"key": "pro"}})
     client = CloudClient(api_key="bil_live_test", transport=transport)
 
     result = client.status()
 
-    assert result == {"status": "ok", "mode": "live_cloud"}
+    assert result == {"status": "ok", "plan": {"key": "pro"}}
     assert transport.calls == [
         {
             "method": "GET",
-            "url": "https://bilinc.space/api/cloud/health",
+            "url": "https://bilinc.space/api/cloud/status",
             "headers": {
                 "Authorization": "Bearer bil_live_test",
                 "User-Agent": "bilinc-python/2.1.5",
@@ -148,6 +148,18 @@ def test_cloud_client_status_reads_hosted_health_endpoint():
             "timeout": 30.0,
         }
     ]
+
+
+def test_cloud_client_health_stays_on_the_public_service_endpoint():
+    from bilinc import CloudClient
+
+    transport = RecordingTransport({"status": "ok", "mode": "live_cloud"})
+    client = CloudClient(api_key="bil_live_test", transport=transport)
+
+    result = client.health()
+
+    assert result == {"status": "ok", "mode": "live_cloud"}
+    assert transport.calls[0]["url"] == "https://bilinc.space/api/cloud/health"
 
 
 def test_default_transport_uses_explicit_ssl_context(monkeypatch):
@@ -227,6 +239,9 @@ def test_cli_start_login_doctor_quicktest_and_mcp_config(monkeypatch, capsys, tm
             self.timeout = timeout
 
         def status(self):
+            return {"status": "ok", "plan": {"key": "pro"}}
+
+        def health(self):
             return {"status": "ok", "mode": "test"}
 
         def commit(self, key, value, *, memory_type="semantic", importance=1.0, metadata=None):

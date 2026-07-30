@@ -109,8 +109,9 @@ def build_parser() -> argparse.ArgumentParser:
     recall.add_argument("--profile", choices=["fast", "balanced", "verified", "deep"], default="balanced")
     recall.add_argument("--limit", type=int, default=10)
 
-    sub.add_parser("status", help="Show Bilinc Cloud account/runtime status")
-    sub.add_parser("doctor", help="Check local CLI configuration and Cloud runtime status")
+    sub.add_parser("status", help="Show the authenticated Cloud workspace, plan, and capabilities")
+    sub.add_parser("health", help="Show public Bilinc Cloud service health")
+    sub.add_parser("doctor", help="Check local CLI configuration, service health, and account status")
     quicktest = sub.add_parser("quicktest", help="Run one hosted commit, recall, and status check")
     quicktest.add_argument("--key", default=None, help="Memory key for the test write")
     quicktest.add_argument("--value", default='{"status":"ready"}', help="JSON value or plain string")
@@ -201,12 +202,15 @@ def main(argv: list[str] | None = None) -> int:
             _print(client.recall(args.query, profile=args.profile, limit=args.limit))
         elif args.command == "status":
             _print(client.status())
+        elif args.command == "health":
+            _print(client.health())
         elif args.command == "doctor":
             _print(
                 {
                     "config": str(config_path()),
                     "api_key_configured": True,
-                    "cloud_health": client.status(),
+                    "cloud_health": client.health(),
+                    "account_status": client.status(),
                     "next": "Run bilinc quicktest",
                 }
             )
