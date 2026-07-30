@@ -559,6 +559,144 @@ class ProjectRuntimeManager:
             raise ValueError("response_too_large")
         return result
 
+    async def rollback_preview(
+        self,
+        project_id: str,
+        *,
+        snapshot_id: str,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Describe what restoring ``snapshot_id`` would do, without doing it.
+
+        The returned ``current_root_hash`` is what the control plane binds its
+        confirmation token to, so an execute issued after the project moved on
+        can be refused rather than silently destroying newer state.
+        """
+        normalized = self.normalize_project_id(project_id)
+        payload = await self.load_snapshot(normalized, snapshot_id)
+        target_state = _snapshot_entries(payload)
+
+        plane = await self.get_plane(normalized)
+        current_state = await plane._persistent_state()
+
+        create = sorted(set(target_state) - set(current_state))
+        remove = sorted(set(current_state) - set(target_state))
+        update = sorted(
+            key
+            for key in set(target_state) & set(current_state)
+            if target_state[key] != current_state[key]
+        )
+        bound = max(1, int(limit))
+
+        return {
+            "snapshot_id": normalize_snapshot_id(snapshot_id),
+            "current_root_hash": state_version(plane),
+            "target_root_hash": payload.get("root_hash"),
+            "counts": {"create": len(create), "update": len(update), "remove": len(remove)},
+            # Keys only. A preview must not stream back what is about to change.
+            "create_keys": create[:bound],
+            "update_keys": update[:bound],
+            "remove_keys": remove[:bound],
+            "truncated": any(len(group) > bound for group in (create, update, remove)),
+            "destructive": True,
+        }
+
+    async def rollback_execute(
+        self,
+        project_id: str,
+        *,
+        snapshot_id: str,
+        reason: str,
+        expected_current_root: str | None,
+    ) -> dict[str, Any]:
+        """Restore the project to a stored snapshot. Destructive.
+
+        Restores from the snapshot's own recorded entries rather than replaying
+        the audit trail to a timestamp: the stored checkpoint is the artifact
+        the operator previewed and approved.
+        """
+        normalized = self.normalize_project_id(project_id)
+        payload = await self.load_snapshot(normalized, snapshot_id)
+        target_state = _snapshot_entries(payload)
+
+        plane = await self.get_plane(normalized)
+        if not plane.backend:
+            raise ValueError("invalid_request")
+
+        current_root = state_version(plane)
+        if expected_current_root is not None and current_root != expected_current_root:
+            raise ValueError("state_changed_since_preview")
+
+        current_state = await plane._persistent_state()
+        created: list[str] = []
+        updated: list[str] = []
+        deleted: list[str] = []
+
+        for key in sorted(set(current_state) - set(target_state)):
+            existing = await plane.backend.load(key)
+            await plane.backend.delete(key)
+            plane.working_memory.remove(key)
+            if plane.enable_audit and plane.audit:
+                plane.audit.log(
+                    OpType.DELETE,
+                    key,
+                    before_value=existing.to_dict() if existing else current_state[key],
+                    metadata={"rollback": True, "snapshot_id": snapshot_id, "reason": reason},
+                )
+            deleted.append(key)
+
+        for key, target_entry_state in sorted(target_state.items()):
+            existing = await plane.backend.load(key)
+            if existing and existing.to_dict() == target_entry_state:
+                continue
+
+            restored = plane._coerce_audit_state_entry(key, target_entry_state)
+            await plane._restore_backend_entry(restored)
+            if hasattr(plane.backend, "delete_claims_for_memory_key"):
+                await plane.backend.delete_claims_for_memory_key(key)
+            if hasattr(plane.backend, "delete_entity_mentions_for_memory_key"):
+                await plane.backend.delete_entity_mentions_for_memory_key(key)
+            await plane._project_claims_for_entry(restored)
+            await plane._project_entities_for_entry(restored)
+            plane.working_memory.remove(key)
+
+            if plane.enable_audit and plane.audit:
+                plane.audit.log(
+                    OpType.UPDATE if existing else OpType.CREATE,
+                    key,
+                    before_value=existing.to_dict() if existing else None,
+                    after_value=target_entry_state,
+                    metadata={"rollback": True, "snapshot_id": snapshot_id, "reason": reason},
+                )
+            (updated if existing else created).append(key)
+
+        if plane.enable_audit and plane.audit:
+            plane.audit.log(
+                OpType.ROLLBACK,
+                "__system",
+                metadata={
+                    "snapshot_id": snapshot_id,
+                    "reason": reason,
+                    "origin": "bilinc_cloud",
+                    "counts": {
+                        "created": len(created),
+                        "updated": len(updated),
+                        "deleted": len(deleted),
+                    },
+                },
+            )
+
+        # Counts only: a rollback response must never carry restored or
+        # deleted values back to the caller.
+        return {
+            "success": True,
+            "snapshot_id": normalize_snapshot_id(snapshot_id),
+            "counts": {"created": len(created), "updated": len(updated), "deleted": len(deleted)},
+            "previous_root_hash": current_root,
+            "state_version": state_version(plane),
+            "reason_recorded": True,
+        }
+
     async def close(self) -> None:
         for plane in self._planes.values():
             backend = getattr(plane, "backend", None)
