@@ -10,9 +10,9 @@ import re
 import secrets
 import time
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 from uuid import UUID
 
 from bilinc.core.audit import OpType
@@ -24,6 +24,25 @@ from bilinc.storage.sqlite import SQLiteBackend
 #: first-class MemoryEntry columns. Mirrors the local MCP server's behavior so
 #: hosted and local entries stay shape-compatible.
 _METADATA_PASSTHROUGH = ("source", "session_id", "canonical", "priority", "ttl")
+
+
+def _serialized_project_mutation(
+    method: Callable[..., Awaitable[Any]],
+) -> Callable[..., Awaitable[Any]]:
+    """Serialize durable mutations per project without blocking other tenants."""
+
+    @wraps(method)
+    async def wrapped(
+        self: ProjectRuntimeManager,
+        project_id: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        lock = await self._project_mutation_lock(project_id)
+        async with lock:
+            return await method(self, project_id, *args, **kwargs)
+
+    return wrapped
 
 
 def build_entry_metadata(
@@ -168,6 +187,7 @@ class ProjectRuntimeManager:
     def __init__(self, base_dir: str | Path):
         self.base_dir = Path(base_dir).expanduser()
         self._planes: dict[str, StatePlane] = {}
+        self._mutation_locks: dict[str, asyncio.Lock] = {}
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -216,6 +236,12 @@ class ProjectRuntimeManager:
             self._planes[normalized] = plane
             return plane
 
+    async def _project_mutation_lock(self, project_id: str) -> asyncio.Lock:
+        normalized = self.normalize_project_id(project_id)
+        async with self._lock:
+            return self._mutation_locks.setdefault(normalized, asyncio.Lock())
+
+    @_serialized_project_mutation
     async def commit(
         self,
         project_id: str,
@@ -298,6 +324,7 @@ class ProjectRuntimeManager:
             payload["explain_supported"] = False
         return payload
 
+    @_serialized_project_mutation
     async def revise(
         self,
         project_id: str,
@@ -404,6 +431,7 @@ class ProjectRuntimeManager:
             "state_version": state_version(plane),
         }
 
+    @_serialized_project_mutation
     async def forget(
         self,
         project_id: str,
@@ -452,6 +480,7 @@ class ProjectRuntimeManager:
         if expected and entry_version(entry_state) != expected:
             raise ValueError("version_conflict")
 
+    @_serialized_project_mutation
     async def create_snapshot(
         self,
         project_id: str,
@@ -628,6 +657,7 @@ class ProjectRuntimeManager:
             "destructive": True,
         }
 
+    @_serialized_project_mutation
     async def rollback_execute(
         self,
         project_id: str,
@@ -730,6 +760,7 @@ class ProjectRuntimeManager:
             if backend and hasattr(backend, "close"):
                 await backend.close()
         self._planes.clear()
+        self._mutation_locks.clear()
 
     @staticmethod
     def _snapshot_from_payload(payload: dict[str, Any]) -> ProjectSnapshot:
