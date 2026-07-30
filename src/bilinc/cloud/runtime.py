@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
+import secrets
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -61,15 +64,47 @@ def state_version(plane: StatePlane) -> str | None:
     return plane.audit.get_root_hash()
 
 
+#: Snapshot identifiers are used as filenames inside the project directory.
+#: Anything outside this alphabet — notably ``/`` and ``..`` — is rejected
+#: before touching the filesystem, so a public identifier can never escape the
+#: normalized project boundary.
+_SNAPSHOT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
+def new_snapshot_id() -> str:
+    """Return a collision-resistant, time-ordered snapshot identifier.
+
+    Snapshots used to be named by their float timestamp, so two snapshots taken
+    in the same microsecond would overwrite each other. The millisecond prefix
+    keeps filenames roughly ordered for humans; the random suffix makes
+    collisions impossible in practice.
+    """
+    return f"snap_{int(time.time() * 1000):013d}_{secrets.token_hex(8)}"
+
+
+def normalize_snapshot_id(snapshot_id: Any) -> str:
+    """Validate a caller-supplied snapshot identifier before any file access."""
+    value = str(snapshot_id or "")
+    if not _SNAPSHOT_ID_PATTERN.match(value) or value in {".", ".."}:
+        raise ValueError("snapshot_not_found")
+    return value
+
+
 @dataclass(frozen=True)
 class ProjectSnapshot:
-    """Persisted project snapshot metadata."""
+    """Persisted project snapshot metadata.
+
+    Deliberately excludes the snapshot's entries: listing checkpoints must not
+    stream a project's entire memory back to the caller.
+    """
 
     id: str
     created_at: float
     total_entries: int
     by_type: dict[str, int]
     root_hash: str | None
+    label: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class ProjectRuntimeManager:
@@ -208,41 +243,73 @@ class ProjectRuntimeManager:
         payload["state_version"] = state_version(plane)
         return payload
 
-    async def create_snapshot(self, project_id: str) -> ProjectSnapshot:
+    async def create_snapshot(
+        self,
+        project_id: str,
+        *,
+        label: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ProjectSnapshot:
         normalized = self.normalize_project_id(project_id)
         plane = await self.get_plane(normalized)
         snapshot = await plane.snapshot()
-        snapshot_id = f"{snapshot['timestamp']:.6f}"
+        snapshot_id = new_snapshot_id()
         payload = {
             "id": snapshot_id,
             "created_at": snapshot["timestamp"],
             "total_entries": snapshot["total_entries"],
             "by_type": snapshot["by_type"],
             "root_hash": snapshot["root_hash"],
+            "label": label,
+            "metadata": dict(metadata) if isinstance(metadata, dict) else {},
             "snapshot": snapshot,
         }
 
         directory = self.snapshot_dir(normalized)
         directory.mkdir(parents=True, exist_ok=True)
         (directory / f"{snapshot_id}.json").write_text(
-            json.dumps(payload, sort_keys=True),
+            json.dumps(payload, sort_keys=True, default=str),
             encoding="utf-8",
         )
         return self._snapshot_from_payload(payload)
 
-    async def list_snapshots(self, project_id: str) -> list[ProjectSnapshot]:
+    async def list_snapshots(self, project_id: str, *, limit: int = 20) -> list[ProjectSnapshot]:
         directory = self.snapshot_dir(project_id)
         if not directory.exists():
             return []
 
         snapshots: list[ProjectSnapshot] = []
-        for path in sorted(directory.glob("*.json"), reverse=True):
+        for path in directory.glob("*.json"):
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 snapshots.append(self._snapshot_from_payload(payload))
             except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+                # A corrupted or half-written checkpoint must not break listing.
                 continue
-        return snapshots
+
+        # Sort on recorded creation time, not filename: identifiers changed from
+        # timestamp-derived to random, and both forms must stay listable.
+        snapshots.sort(key=lambda snapshot: snapshot.created_at, reverse=True)
+        return snapshots[: max(1, int(limit))]
+
+    async def load_snapshot(self, project_id: str, snapshot_id: str) -> dict[str, Any]:
+        """Load a stored snapshot payload for the given project.
+
+        A snapshot identifier belonging to another project simply does not
+        exist under this project's directory, so cross-tenant probing is
+        indistinguishable from asking for something that never existed.
+        """
+        normalized = self.normalize_project_id(project_id)
+        path = self.snapshot_dir(normalized) / f"{normalize_snapshot_id(snapshot_id)}.json"
+        if not path.exists():
+            raise ValueError("snapshot_not_found")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("snapshot_unreadable") from exc
+        if not isinstance(payload, dict) or "snapshot" not in payload:
+            raise ValueError("snapshot_unreadable")
+        return payload
 
     async def close(self) -> None:
         for plane in self._planes.values():
@@ -253,10 +320,13 @@ class ProjectRuntimeManager:
 
     @staticmethod
     def _snapshot_from_payload(payload: dict[str, Any]) -> ProjectSnapshot:
+        metadata = payload.get("metadata")
         return ProjectSnapshot(
             id=str(payload["id"]),
             created_at=float(payload["created_at"]),
             total_entries=int(payload["total_entries"]),
             by_type={str(key): int(value) for key, value in dict(payload["by_type"]).items()},
             root_hash=str(payload["root_hash"]) if payload.get("root_hash") is not None else None,
+            label=str(payload["label"]) if payload.get("label") else None,
+            metadata=dict(metadata) if isinstance(metadata, dict) else {},
         )
