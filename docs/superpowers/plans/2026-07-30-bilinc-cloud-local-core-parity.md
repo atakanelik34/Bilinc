@@ -1121,3 +1121,71 @@ Two site checks were already red on `origin/main` and are fixed here:
    will see a spurious conflict. A short server-side wait is the natural follow-up.
 5. **Package version is unchanged at 2.1.5.** Per section 16, choosing the release version is a
    separate decision.
+
+## 21. Release receipt — 2.1.6 shipped
+
+Atakan approved the release as 2.1.6 and authorized every external side effect. All gates from
+section 16 are now closed out, in this order:
+
+1. Version synced to 2.1.6 across `pyproject.toml`, `src/bilinc/__init__.py`, `src/bilinc/client.py`,
+   `README.md`, `CHANGELOG.md`, `server.json`, `docs/public/product-truth.json`, the generated
+   `product-truth.md`, and the site's `lib/site/product-truth.ts`.
+2. Pushed `main` + tag `v2.1.6` to `origin` (atakanelik34/Bilinc) and `rearclabs`
+   (ReARCLabs/Bilinc); pushed the site branch to `origin/main` for bilinc-site.
+3. Published `bilinc 2.1.6` to PyPI (wheel + sdist).
+4. Applied `0013_cloud_mutation_receipts.sql` to the production control-plane database. Both tables
+   created empty with all seven expected indexes; no existing object touched.
+5. Deployed the Next.js control plane to the VM and refreshed the nginx-served
+   `/srv/agent-index/bilinc.space/` files.
+6. Deployed the updated Python sidecar and restarted `bilinc-cloud-runtime`.
+7. Published the GitHub release for `v2.1.6`.
+
+### 21.1 The bug only a real production round-trip could find
+
+Mocked route tests, the origin smoke, and the clean-install smoke were all green while
+`revise` still returned `503` in production. Two deployment facts caused it, and neither is
+visible from a mock:
+
+1. **The Python sidecar is a second deployable.** Shipping the Next.js control plane alone left the
+   old sidecar running, so the new `/v1/projects/{id}/revise|forget|diff|rollback` endpoints did not
+   exist. `commit` and `recall` kept working, which is exactly why it looked fine.
+2. **The VM's core runtime is months behind the sidecar.** Its `StatePlane.recall_profiled()`
+   predates the `explain` argument, so once the new sidecar was deployed, *every* recall raised
+   `TypeError` and surfaced as `cloud_runtime_unavailable`.
+
+Fixed in `84d14ab`: the Cloud runtime now asks the plane which keyword arguments it accepts and
+sends only those, and reports `explain_supported: false` when the core cannot produce evidence
+rather than implying it did. Version skew between the sidecar and the core is now a degraded
+feature, not an outage.
+
+**Process lesson:** for this product, "deployed" means *three* artifacts — PyPI package, Next.js
+control plane, and Python sidecar — plus the nginx static agent-index files. An authenticated
+round-trip against production is the only check that covers all of them at once.
+
+### 21.2 Live verification
+
+Authenticated round-trip using `bilinc 2.1.6` installed from PyPI, against `bilinc.space`:
+
+```
+status      plan=cloud_free runtime=ready tools=8 profiles=['fast', 'balanced']
+commit      success=True entryVersion=v1_d5fbc85f…
+idempotency replayed=True (retry did not write twice)
+revise      success=True newVersion=v1_cd26c41b…
+concurrency stale expected_version rejected -> version_conflict
+revise-404  missing key rejected -> memory_not_found
+snapshot    created; list is free
+diff        counts={'added': 0, 'modified': 0, 'removed': 0} values_included=False
+rollback    preview destructive=True, token minted (execute deliberately not run)
+forget      removed=True reasonRecorded=True value_echoed=False
+```
+
+`npm run docs:verify-code-smoke` now installs `bilinc==2.1.6` from PyPI by default and executes
+every documented SDK, CLI, and curl example — 37 mock requests, lifecycle included.
+
+### 21.3 Not touched
+
+The separate bilinc-site working clone at `/Users/busecimen/Downloads/Projeler/bilinc-site 2`
+still holds its uncommitted Cloudflare-email work and remains on `57ec208`. That work is also live
+on the VM, and the deploy was file-scoped specifically to avoid reverting it — `components/Hero.tsx`
+was excluded from the transfer and version-bumped in place so its uncommitted video cache-bust
+survived. Pull that clone forward when convenient; nothing here depends on it.
