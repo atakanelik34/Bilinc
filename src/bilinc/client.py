@@ -502,6 +502,67 @@ class CloudClient:
 
         return self._read("/api/cloud/memory/recall", payload)
 
+    def revise(
+        self,
+        key: str,
+        value: Any,
+        *,
+        importance: float = 1.0,
+        strategy: str = "entrenchment",
+        reason: str | None = None,
+        expected_version: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Deliberately replace an existing memory.
+
+        Unlike :meth:`commit`, this refuses to create the entry: revising
+        something that is not there returns ``memory_not_found``. Pass
+        ``expected_version`` (from a previous commit or revise) to get
+        optimistic concurrency; a stale version returns ``version_conflict``.
+        """
+
+        payload: dict[str, Any] = {
+            "key": _require_key(key),
+            "value": value,
+            "importance": _require_unit_interval(importance, "importance"),
+            "strategy": _require_choice(strategy, "strategy", REVISION_STRATEGIES),
+        }
+        _put_optional(payload, "reason", _optional_text(reason, "reason"))
+        _put_optional(payload, "expectedVersion", _optional_text(expected_version, "expected_version"))
+
+        return self._post(
+            "/api/cloud/memory/revise",
+            payload,
+            idempotency_key=_optional_text(idempotency_key, "idempotency_key"),
+        )
+
+    def forget(
+        self,
+        key: str,
+        *,
+        reason: str,
+        expected_version: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Remove a memory from active recall. Destructive.
+
+        A reason is required and is written to the audit trail. The deleted
+        value is never echoed back. This is not regulatory erasure: the audit
+        receipt is retained under the workspace's existing retention policy.
+        """
+
+        payload: dict[str, Any] = {
+            "key": _require_key(key),
+            "reason": _require_reason(reason),
+        }
+        _put_optional(payload, "expectedVersion", _optional_text(expected_version, "expected_version"))
+
+        return self._post(
+            "/api/cloud/memory/forget",
+            payload,
+            idempotency_key=_optional_text(idempotency_key, "idempotency_key"),
+        )
+
     def snapshot(
         self,
         action: str = "create",

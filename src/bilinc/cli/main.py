@@ -109,6 +109,23 @@ def build_parser() -> argparse.ArgumentParser:
     recall.add_argument("--profile", choices=["fast", "balanced", "verified", "deep"], default="balanced")
     recall.add_argument("--limit", type=int, default=10)
 
+    revise = sub.add_parser("revise", help="Deliberately replace an existing memory")
+    revise.add_argument("--key", required=True)
+    revise.add_argument("--value", required=True, help="JSON value or plain string")
+    revise.add_argument("--importance", type=float, default=1.0)
+    revise.add_argument(
+        "--strategy",
+        default="entrenchment",
+        choices=["entrenchment", "recency", "verification", "importance"],
+    )
+    revise.add_argument("--reason", help="Why this memory is being revised")
+    revise.add_argument("--expected-version", help="Fail if the memory changed since this version")
+
+    forget = sub.add_parser("forget", help="Remove a memory from active recall (destructive)")
+    forget.add_argument("--key", required=True)
+    forget.add_argument("--reason", required=True, help="Required audit reason for the deletion")
+    forget.add_argument("--expected-version", help="Fail if the memory changed since this version")
+
     snapshot = sub.add_parser("snapshot", help="Create or list project checkpoints")
     snapshot.add_argument("action", choices=["create", "list"], nargs="?", default="create")
     snapshot.add_argument("--label", help="Human-readable label for a new checkpoint")
@@ -206,6 +223,25 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "recall":
             _print(client.recall(args.query, profile=args.profile, limit=args.limit))
+        elif args.command == "revise":
+            _print(
+                client.revise(
+                    args.key,
+                    _parse_value(args.value),
+                    importance=args.importance,
+                    strategy=args.strategy,
+                    reason=args.reason,
+                    expected_version=args.expected_version,
+                )
+            )
+        elif args.command == "forget":
+            _print(
+                client.forget(
+                    args.key,
+                    reason=args.reason,
+                    expected_version=args.expected_version,
+                )
+            )
         elif args.command == "snapshot":
             if args.action == "list":
                 _print(client.list_snapshots(limit=args.limit))

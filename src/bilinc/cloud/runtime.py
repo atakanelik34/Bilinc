@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from bilinc.core.audit import OpType
 from bilinc.core.models import MemoryType
 from bilinc.core.stateplane import StatePlane
 from bilinc.storage.sqlite import SQLiteBackend
@@ -242,6 +243,160 @@ class ProjectRuntimeManager:
         )
         payload["state_version"] = state_version(plane)
         return payload
+
+    async def revise(
+        self,
+        project_id: str,
+        *,
+        key: str,
+        value: Any,
+        importance: float = 1.0,
+        strategy: str = "entrenchment",
+        reason: str | None = None,
+        expected_version: str | None = None,
+    ) -> dict[str, Any]:
+        """Deliberately replace a known memory, preserving AGM conflict handling.
+
+        Unlike ``commit``, this refuses to create the entry: revising something
+        that is not there is a caller mistake, not a silent insert. That is what
+        makes a revision distinguishable from an accidental overwrite.
+        """
+        from bilinc.adaptive.agm_engine import ConflictStrategy
+        from bilinc.core.models import MemoryEntry
+
+        plane = await self.get_plane(project_id)
+        if not plane.backend or not plane.agm_engine:
+            raise ValueError("invalid_request")
+
+        previous = await plane.backend.load(key)
+        if previous is None:
+            raise ValueError("memory_not_found")
+
+        previous_state = previous.to_dict()
+        self._assert_expected_version(previous_state, expected_version)
+
+        try:
+            conflict_strategy = ConflictStrategy(strategy)
+        except ValueError as exc:
+            raise ValueError("invalid_request") from exc
+
+        entry_data = dict(previous_state)
+        entry_data.update(
+            {
+                "key": key,
+                "value": value,
+                "importance": importance,
+                "updated_at": time.time(),
+            }
+        )
+        entry = MemoryEntry.from_dict(entry_data)
+        plane._apply_entry_verification(entry)
+
+        result = plane.agm_engine.revise(entry, strategy=conflict_strategy)
+        winning = plane.agm_engine.belief_state.get_belief(key)
+
+        # AGM treats an identical value as a no-op, but an explicit revision can
+        # still carry importance or metadata corrections that must persist.
+        if result.success and winning and entry.value == winning.value and entry.to_dict() != winning.to_dict():
+            plane.agm_engine.belief_state.add_belief(entry)
+            if key not in result.affected_keys:
+                result.affected_keys.append(key)
+            result.new_beliefs[key] = entry
+            winning = entry
+
+        if not result.success or winning is None:
+            return {
+                "success": False,
+                "key": key,
+                "strategy": conflict_strategy.value,
+                "conflicts_resolved": result.conflicts_resolved,
+                "affected_keys": list(result.affected_keys or []),
+                "removed_keys": list(result.removed_keys or []),
+                "entry_version": entry_version(previous_state),
+                "state_version": state_version(plane),
+            }
+
+        if plane.knowledge_graph:
+            plane.knowledge_graph.ingest_memory_entry(winning)
+
+        if not await plane.backend.save(winning):
+            raise ValueError("invalid_request")
+        await plane._project_claims_for_entry(winning)
+
+        next_state = winning.to_dict()
+        if plane.enable_audit and plane.audit and next_state != previous_state:
+            plane.audit.log(
+                OpType.UPDATE,
+                key,
+                before_value=previous_state,
+                after_value=next_state,
+                metadata={
+                    "revision_strategy": conflict_strategy.value,
+                    "conflicts_resolved": result.conflicts_resolved,
+                    # The reason is audit-visible; the value is already in the diff.
+                    "reason": reason,
+                    "origin": "bilinc_cloud",
+                },
+            )
+
+        return {
+            "success": True,
+            "key": key,
+            "strategy": conflict_strategy.value,
+            "conflicts_resolved": result.conflicts_resolved,
+            "affected_keys": list(result.affected_keys or []),
+            "removed_keys": list(result.removed_keys or []),
+            "entry_version": entry_version(next_state),
+            "state_version": state_version(plane),
+        }
+
+    async def forget(
+        self,
+        project_id: str,
+        *,
+        key: str,
+        reason: str,
+        expected_version: str | None = None,
+    ) -> dict[str, Any]:
+        """Remove a memory from active recall, keeping an audit-safe receipt.
+
+        The deleted value is never returned. The audit trail keeps the prior
+        state under the existing retention policy; this is deliberately *not*
+        regulatory erasure, which is a separate admin lifecycle.
+        """
+        plane = await self.get_plane(project_id)
+        if not plane.backend:
+            raise ValueError("invalid_request")
+
+        existing = await plane.backend.load(key)
+        if existing is None:
+            raise ValueError("memory_not_found")
+
+        previous_state = existing.to_dict()
+        self._assert_expected_version(previous_state, expected_version)
+
+        removed = await plane.forget(key)
+        if plane.enable_audit and plane.audit:
+            # A second, value-free entry so the reason is auditable without
+            # duplicating the memory payload.
+            plane.audit.log(
+                OpType.FORGET,
+                key,
+                metadata={"reason": reason, "origin": "bilinc_cloud", "deleted": bool(removed)},
+            )
+
+        return {
+            "success": bool(removed),
+            "key": key,
+            "removed": bool(removed),
+            "reason_recorded": True,
+            "state_version": state_version(plane),
+        }
+
+    @staticmethod
+    def _assert_expected_version(entry_state: dict[str, Any], expected: str | None) -> None:
+        if expected and entry_version(entry_state) != expected:
+            raise ValueError("version_conflict")
 
     async def create_snapshot(
         self,
