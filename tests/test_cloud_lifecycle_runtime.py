@@ -40,6 +40,48 @@ async def audit_reasons(manager, project_id, key):
 
 
 # ---------------------------------------------------------------------------
+# recall / core version skew
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_recall_adapts_to_a_core_runtime_without_explain(manager, project_id, monkeypatch):
+    """The sidecar and the core deploy independently.
+
+    A core that predates the `explain` argument used to turn every recall into
+    an opaque 503. Recall must still answer, and must say that evidence was not
+    available rather than implying it was returned.
+    """
+    from bilinc.cloud import runtime as runtime_module
+
+    await manager.commit(project_id, key="k", value={"n": 1})
+    plane = await manager.get_plane(project_id)
+
+    original = type(plane).recall_profiled
+
+    async def legacy_recall_profiled(self, query, profile=None, limit=10, memory_types=None):
+        return await original(self, query, profile=profile, limit=limit, memory_types=memory_types)
+
+    monkeypatch.setattr(type(plane), "recall_profiled", legacy_recall_profiled)
+    runtime_module._supported_recall_kwargs.cache_clear()
+
+    payload = await manager.recall(project_id, query="n", profile="fast", explain=True)
+
+    assert payload["results"]
+    assert payload["explain_supported"] is False
+    runtime_module._supported_recall_kwargs.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_recall_uses_explain_when_the_core_supports_it(manager, project_id):
+    await manager.commit(project_id, key="k", value={"n": 1})
+
+    payload = await manager.recall(project_id, query="n", profile="fast", explain=True)
+
+    assert "explain_supported" not in payload
+
+
+# ---------------------------------------------------------------------------
 # revise
 # ---------------------------------------------------------------------------
 
