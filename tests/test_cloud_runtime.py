@@ -42,6 +42,62 @@ async def test_project_runtime_persists_snapshots_per_project(tmp_path):
     await manager.close()
 
 
+@pytest.mark.asyncio
+async def test_commit_carries_the_hermes_provenance_contract(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project_id = str(uuid4())
+
+    result = await manager.commit(
+        project_id,
+        key="agent.memory",
+        value={"state": "ready"},
+        metadata={"team": "core"},
+        source="hermes_session",
+        session_id="sess-1",
+        canonical=True,
+        priority=0.9,
+    )
+
+    plane = await manager.get_plane(project_id)
+    stored = await plane.backend.load("agent.memory")
+
+    assert result["success"] is True
+    assert stored.source == "hermes_session"
+    assert stored.session_id == "sess-1"
+    assert stored.metadata["team"] == "core"
+    assert stored.metadata["canonical"] is True
+    assert stored.metadata["priority"] == 0.9
+
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_commit_returns_an_opaque_version_that_changes_with_the_entry(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project_id = str(uuid4())
+
+    first = await manager.commit(project_id, key="k", value={"n": 1})
+    second = await manager.commit(project_id, key="k", value={"n": 2})
+
+    assert first["entry_version"].startswith("v1_")
+    assert first["entry_version"] != second["entry_version"]
+    # The version must not leak a timestamp or a monotonic counter.
+    assert not first["entry_version"][3:].isdigit()
+
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_recall_rejects_an_unknown_memory_type(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project_id = str(uuid4())
+
+    with pytest.raises(ValueError, match="invalid_memory_type"):
+        await manager.recall(project_id, query="anything", profile="fast", memory_types=["dreams"])
+
+    await manager.close()
+
+
 def test_project_runtime_rejects_non_uuid_project_ids(tmp_path):
     manager = ProjectRuntimeManager(tmp_path)
 

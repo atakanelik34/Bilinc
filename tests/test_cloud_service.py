@@ -45,3 +45,62 @@ def test_cloud_sidecar_keeps_project_state_isolated(tmp_path):
 
     assert [item["value"] for item in recall_a["results"]] == [{"tenant": "a"}]
     assert [item["value"] for item in recall_b["results"]] == [{"tenant": "b"}]
+
+
+def test_cloud_sidecar_accepts_the_same_recall_limit_as_the_public_route(tmp_path):
+    """The route accepted 100 while the sidecar capped at 50, so 51-100 became 503s."""
+    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+    headers = {"X-Bilinc-Sidecar-Token": "secret"}
+    project_id = str(uuid4())
+
+    accepted = client.post(
+        f"/v1/projects/{project_id}/recall",
+        headers=headers,
+        json={"query": "anything", "profile": "balanced", "limit": 100},
+    )
+    rejected = client.post(
+        f"/v1/projects/{project_id}/recall",
+        headers=headers,
+        json={"query": "anything", "profile": "balanced", "limit": 101},
+    )
+
+    assert accepted.status_code == 200
+    assert rejected.status_code == 422
+
+
+def test_cloud_sidecar_commit_returns_versions_and_carries_provenance(tmp_path):
+    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+    headers = {"X-Bilinc-Sidecar-Token": "secret"}
+    project_id = str(uuid4())
+
+    result = client.post(
+        f"/v1/projects/{project_id}/commit",
+        headers=headers,
+        json={
+            "key": "agent.memory",
+            "value": {"state": "ready"},
+            "source": "hermes_session",
+            "session_id": "sess-1",
+            "canonical": True,
+            "priority": 0.9,
+        },
+    ).json()
+
+    assert result["success"] is True
+    assert result["entry_version"].startswith("v1_")
+    assert result["state_version"]
+
+
+def test_cloud_sidecar_rejects_an_unknown_memory_type_with_a_stable_code(tmp_path):
+    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+    headers = {"X-Bilinc-Sidecar-Token": "secret"}
+    project_id = str(uuid4())
+
+    response = client.post(
+        f"/v1/projects/{project_id}/recall",
+        headers=headers,
+        json={"query": "anything", "memory_types": ["dreams"]},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_memory_type"
