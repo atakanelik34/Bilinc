@@ -1,6 +1,6 @@
 """Bilinc Cloud client.
 
-Bilinc 2.1.6 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
+Bilinc 2.1.7 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
 https://bilinc.space. Local self-hosted StatePlane internals are no longer
 shipped in the public package.
 """
@@ -18,10 +18,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-__version__ = "2.1.6"
+__version__ = "2.1.7"
 DEFAULT_BASE_URL = "https://bilinc.space"
 SIGNUP_URL = "https://bilinc.space/signup"
-ACTIVATION_CAMPAIGN = "activation_2_1_3"
+ACTIVATION_CAMPAIGN = "activation_2_1_7"
 ACTIVATION_SIGNUP_URL = (
     f"{SIGNUP_URL}?utm_source=pypi&utm_medium=cli&utm_campaign={ACTIVATION_CAMPAIGN}"
 )
@@ -707,11 +707,18 @@ class CloudClient:
         *,
         content_type: bool = False,
         idempotency_key: str | None = None,
+        include_client: bool = True,
     ) -> dict[str, str]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "User-Agent": f"bilinc-python/{__version__}",
         }
+        if include_client:
+            headers["X-Bilinc-Client"] = "python-sdk"
+            headers["X-Bilinc-Client-Version"] = __version__
+            command = os.environ.get("BILINC_CLIENT_COMMAND", "").strip()
+            if command and all(character.isalnum() or character in "._-" for character in command[:48]):
+                headers["X-Bilinc-Client-Command"] = command[:48]
         if content_type:
             headers["Content-Type"] = "application/json"
         if idempotency_key:
@@ -748,7 +755,7 @@ class CloudClient:
             lambda: self.transport(
                 "GET",
                 url,
-                headers=self._headers(),
+                headers=self._headers(include_client=False),
                 body=None,
                 timeout=float(self.timeout),
             )
