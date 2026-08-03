@@ -2,6 +2,15 @@
 
 All notable changes to Bilinc.
 
+## [2.1.7] — 2026-08-03
+
+### Activation telemetry
+
+- Align the CLI activation campaign with the 2.1.7 release.
+- Identify SDK and CLI runtime calls with safe client/version headers.
+- Mark `bilinc quicktest` commit and recall calls for hosted activation reporting.
+- Clarify that email confirmation provisions the first hosted key for onboarding.
+
 ## [2.1.6] — 2026-07-30
 
 ### Added

@@ -48,10 +48,10 @@ def _print_start_guide(*, opened: bool = False) -> None:
     _print(
         {
             "next": "Run the 60-second Bilinc Cloud activation path",
-            "goal": "Create one hosted API key and finish with bilinc quicktest.",
+            "goal": "Connect one hosted API key and finish with bilinc quicktest.",
             "steps": [
                 "1. Start the 7-day Cloud trial and confirm email",
-                "2. Create one hosted API key in the dashboard",
+                "2. After confirmation, copy the first hosted API key from onboarding",
                 "3. Run: bilinc login --api-key <key>",
                 "4. Run: bilinc quicktest",
             ],
@@ -213,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
                 "signup": ACTIVATION_SIGNUP_URL,
                 "base_signup": SIGNUP_URL,
                 "trial": "7 days",
-                "next": "Confirm email, create one API key, run bilinc login, then bilinc quicktest",
+                "next": "Confirm email, copy the first API key, run bilinc login, then bilinc quicktest",
             }
         )
         return 0
@@ -309,14 +309,22 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "quicktest":
             key = args.key or f"bilinc.quicktest.{int(time.time())}"
             value = _parse_value(args.value)
-            commit_result = client.commit(
-                key,
-                value,
-                memory_type="semantic",
-                importance=0.5,
-                metadata={"source": "bilinc-cli-quicktest"},
-            )
-            recall_result = client.recall(key, profile="balanced", limit=3)
+            previous_command = os.environ.get("BILINC_CLIENT_COMMAND")
+            os.environ["BILINC_CLIENT_COMMAND"] = "quicktest"
+            try:
+                commit_result = client.commit(
+                    key,
+                    value,
+                    memory_type="semantic",
+                    importance=0.5,
+                    metadata={"source": "bilinc-cli-quicktest"},
+                )
+                recall_result = client.recall(key, profile="balanced", limit=3)
+            finally:
+                if previous_command is None:
+                    os.environ.pop("BILINC_CLIENT_COMMAND", None)
+                else:
+                    os.environ["BILINC_CLIENT_COMMAND"] = previous_command
             _print(
                 {
                     "ok": True,
