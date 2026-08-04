@@ -324,6 +324,44 @@
       "limitations": ["Historical AMB v3 binary harness; no gain in any scored category.", "Rejected candidate; not current product state."]
     },
     {
+      "benchmark_id": "amb-legacy-v3-semantic-candidate",
+      "lane": "product-core",
+      "status": "valid-candidate-no-amb-gain-retained-for-locomo",
+      "comparability_group": "amb-legacy-v3-frozen-generic-adapter",
+      "protocol_hash": "9bb7fcce094cdd2ee74790e0bfb93d4acaccb07e6a297ddc01c7bd705753ac40",
+      "dataset_hash": "frozen-upstream-v3.0.0-fixtures-per-base-protocol",
+      "source_commit": "cf7a1073790e571a7138cc354f56ce937bfe6f3b",
+      "candidate_product_files": {
+        "src/bilinc/core/stateplane.py": "e5db6c319d5c0cafdbed5c13b875ab455601b99a3e76e61f0e9bc53b5ae8b577",
+        "src/bilinc/core/vector_search.py": "79285d2e9a3d7696d25ce60c619d16b1f2cc8988dcc00da4281c9bcf833de04a",
+        "pyproject.toml": "f77afa1353acebcbab28304dfa43d5865d20a2837adf15641a8e1fe926cd76ad",
+        "tests/test_vector_search.py": "38872fb03ade38681b420e26d2de2594e95ac5d3f7c3f1f705d4dbc7aafc9b27"
+      },
+      "adapter_hash": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+      "metrics": {
+        "baseline": {"layer1_overall": 75.0, "layer2_overall": 40.0, "layer2_passed": 2, "layer2_total": 5},
+        "candidate": {"layer1_overall": 75.0, "layer2_overall": 40.0, "layer2_passed": 2, "layer2_total": 5},
+        "delta": {"layer1_overall": 0.0, "layer2_overall": 0.0},
+        "layer1_categories": {
+          "factual-recall": {"baseline": 100.0, "candidate": 100.0},
+          "semantic-search": {"baseline": 62.5, "candidate": 62.5},
+          "temporal-reasoning": {"baseline": 42.857142857142854, "candidate": 42.857142857142854},
+          "conflict-resolution": {"baseline": 85.71428571428571, "candidate": 85.71428571428571},
+          "selective-forgetting": {"baseline": 83.33333333333334, "candidate": 83.33333333333334},
+          "cross-session": {"baseline": 71.42857142857143, "candidate": 71.42857142857143},
+          "multi-agent": {"baseline": 0.0, "candidate": 0.0, "status": "adapter-skipped"},
+          "cost-efficiency": {"baseline": 100.0, "candidate": 100.0}
+        }
+      },
+      "hardware": "Modal 8 requested CPU cores, 16 GiB memory; container reported 24 CPUs",
+      "latency_seconds": {"layer1_baseline": 233.918, "layer1_candidate": 233.538, "layer2_baseline": 25.152, "layer2_candidate": 25.192},
+      "cost_usd": 0.07975089,
+      "raw_result_hashes": ["8e74741552ab78bc4dc7b27c23733f25bdb00be91fe85f744537c52727ad8239"],
+      "evidence_path": "benchmarks/evidence/2026-08-04/amb-legacy-v3-semantic-candidate/manifest.json",
+      "model": {"id": "sentence-transformers/all-MiniLM-L6-v2", "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41", "manifest_sha256": "2db4942727d159bcf555eead73a5e1384c197f72bfae286b7994267f8620b92a"},
+      "limitations": ["Historical AMB v3 binary harness; not current Vectorize AMB RAG/judge.", "No AMB gain; this matched A/B receipt confirms no regression while the generic semantic feature is retained for its independent LoCoMo component gain.", "No #1/SOTA claim and no comparison with current Vectorize AMB results."]
+    },
+    {
       "benchmark_id": "amb-current-vectorize-rag",
       "lane": "invalid",
       "status": "blocked-paid-judge",
@@ -354,10 +392,10 @@
   ],
   "modal": {
     "authorized_ceiling_usd": 30.0,
-    "cumulative_metered_usd": 0.40370022,
-    "cumulative_conservative_estimate_usd": 22.005,
-    "remaining_metered_budget_usd": 29.59629978,
-    "remaining_conservative_budget_usd": 7.995,
+    "cumulative_metered_usd": 0.56910746,
+    "cumulative_conservative_estimate_usd": 26.005,
+    "remaining_metered_budget_usd": 29.43089254,
+    "remaining_conservative_budget_usd": 3.995,
     "all_goal_apps_stopped": true,
     "persistent_resources_created": false
   },

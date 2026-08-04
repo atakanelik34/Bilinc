@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "benchmark": "amb-legacy-v3-semantic-candidate",
+  "lane": "product-core",
+  "evidence_status": "reproducible",
+  "decision": "valid-no-amb-gain-cross-benchmark-candidate-retained",
+  "git": {
+    "commit": "cf7a1073790e571a7138cc354f56ce937bfe6f3b",
+    "worktree": "codex/bilinc-benchmark-dominance-20260804",
+    "dirty_at_run": false,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "e5db6c319d5c0cafdbed5c13b875ab455601b99a3e76e61f0e9bc53b5ae8b577",
+      "src/bilinc/core/vector_search.py": "79285d2e9a3d7696d25ce60c619d16b1f2cc8988dcc00da4281c9bcf833de04a",
+      "pyproject.toml": "f77afa1353acebcbab28304dfa43d5865d20a2837adf15641a8e1fe926cd76ad",
+      "tests/test_vector_search.py": "38872fb03ade38681b420e26d2de2594e95ac5d3f7c3f1f705d4dbc7aafc9b27"
+    },
+    "adapter": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761"
+  },
+  "dataset": {
+    "source": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+    "release": "v3.0.0",
+    "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+    "license": "Apache-2.0",
+    "layer1_tests": 56,
+    "layer2_scenarios": 5,
+    "fixture_protocol": "frozen by benchmarks/protocols/2026-08-04/freeze.json"
+  },
+  "runner": {
+    "modal_runner_sha256": "974f318d6d897795894779f6cc3ddb73ac0c3323a311c9b70103408800365774",
+    "protocol_sha256": "9bb7fcce094cdd2ee74790e0bfb93d4acaccb07e6a297ddc01c7bd705753ac40",
+    "adapter_sha256": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+    "baseline_mode": "BILINC_SEMANTIC_MODEL unset",
+    "candidate_mode": "BILINC_SEMANTIC_MODEL explicitly set to the pinned local model",
+    "same_container_ab": true,
+    "store_delay_seconds": 3.0
+  },
+  "environment": {
+    "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+    "python": "3.11.5",
+    "node": "v22.23.2",
+    "modal_app_id": "ap-aHb7fa0ZGGUT3DPgSd57da",
+    "persistent_resources": false,
+    "resources_active_after_run": false,
+    "modal_billing": {
+      "run_usd": 0.07975089,
+      "goal_cumulative_usd_after_run": 0.56910746
+    },
+    "package_versions": {
+      "bilinc": "2.1.7",
+      "mcp": "1.29.0",
+      "numpy": "2.4.2",
+      "sentence-transformers": "3.4.1",
+      "torch": "2.12.1",
+      "transformers": "4.57.6",
+      "huggingface-hub": "0.36.2",
+      "safetensors": "0.8.0",
+      "tokenizers": "0.22.2"
+    }
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-04/amb-legacy-v3/candidates/semantic-modal-pair-receipt.json",
+      "sha256": "8e74741552ab78bc4dc7b27c23733f25bdb00be91fe85f744537c52727ad8239"
+    }
+  ],
+  "model": {
+    "id": "sentence-transformers/all-MiniLM-L6-v2",
+    "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "manifest_sha256": "2db4942727d159bcf555eead73a5e1384c197f72bfae286b7994267f8620b92a"
+  },
+  "metrics": {
+    "baseline": {
+      "layer1_overall": 75.0,
+      "layer2_overall": 40.0,
+      "layer2_passed": 2,
+      "layer2_total": 5
+    },
+    "candidate": {
+      "layer1_overall": 75.0,
+      "layer2_overall": 40.0,
+      "layer2_passed": 2,
+      "layer2_total": 5
+    },
+    "delta": {
+      "layer1_overall": 0.0,
+      "layer2_overall": 0.0
+    },
+    "layer1_categories": {
+      "factual-recall": {"baseline": 100.0, "candidate": 100.0},
+      "semantic-search": {"baseline": 62.5, "candidate": 62.5},
+      "temporal-reasoning": {"baseline": 42.857142857142854, "candidate": 42.857142857142854},
+      "conflict-resolution": {"baseline": 85.71428571428571, "candidate": 85.71428571428571},
+      "selective-forgetting": {"baseline": 83.33333333333334, "candidate": 83.33333333333334},
+      "cross-session": {"baseline": 71.42857142857143, "candidate": 71.42857142857143},
+      "multi-agent": {"baseline": 0.0, "candidate": 0.0, "status": "adapter-skipped"},
+      "cost-efficiency": {"baseline": 100.0, "candidate": 100.0}
+    },
+    "layer1_wall_seconds": {"baseline": 233.918, "candidate": 233.538},
+    "layer2_wall_seconds": {"baseline": 25.152, "candidate": 25.192}
+  },
+  "limitations": [
+    "Historical AMB v3 binary harness; not current Vectorize AMB RAG/judge.",
+    "The semantic candidate produced no AMB score gain in Layer 1 or Layer 2.",
+    "The candidate remains retained in product-core because the same generic semantic capability improved the frozen LoCoMo raw-turn retrieval component; this AMB receipt proves no AMB regression, not an AMB improvement.",
+    "No LongMemEval score is inferred from this lane; its frozen guard remains separate."
+  ],
+  "disallowed_claims": [
+    "Do not call this an AMB benchmark improvement.",
+    "Do not call this #1 or SOTA.",
+    "Do not compare this historical harness with current Vectorize AMB results."
+  ]
+}
