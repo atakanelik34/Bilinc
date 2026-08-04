@@ -327,7 +327,7 @@
       },
       "hardware": "Modal 8 requested CPU cores, 16 GiB memory; container reported 24 CPUs",
       "latency_seconds": {"baseline": 48.666, "candidate": 47.788},
-      "cost_usd": 0.01301394,
+      "cost_usd": 0.01385796,
       "raw_result_hashes": ["f985980a00530fcb8129574225a2456ef87189eaf27e51d64f490035092c0ea3"],
       "evidence_path": "benchmarks/evidence/2026-08-04/locomo-stateplane-component-temporal-intent/manifest.json",
       "limitations": ["Retrieval component only; not official end-to-end QA/F1.", "Candidate rejected for NDCG regression; product change removed.", "No #1/SOTA claim and no comparison across different scopes or QA protocols."]
@@ -461,9 +461,9 @@
   ],
   "modal": {
     "authorized_ceiling_usd": 30.0,
-    "cumulative_metered_usd": 0.65812383,
+    "cumulative_metered_usd": 0.65896785,
     "cumulative_conservative_estimate_usd": 28.005,
-    "remaining_metered_budget_usd": 29.34187617,
+    "remaining_metered_budget_usd": 29.34103215,
     "remaining_conservative_budget_usd": 1.995,
     "all_goal_apps_stopped": true,
     "persistent_resources_created": false
