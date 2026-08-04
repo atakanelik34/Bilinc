@@ -531,7 +531,10 @@ class StatePlane:
         limit = max(0, int(limit))
         source = "backend" if self.backend else "working_memory"
         if self.backend:
-            candidates = await self._collect_recall_candidates(memory_types=memory_types)
+            candidates = await self._collect_recall_candidates(
+                memory_types=memory_types,
+                include_stale=True,
+            )
             entries = list(candidates.values())[:limit]
         else:
             allowed_types = None
@@ -559,10 +562,15 @@ class StatePlane:
         limit: int = 10,
         memory_types: Optional[List[MemoryType]] = None,
         explain: bool = False,
+        include_stale: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Multi-path retrieval with lightweight fusion:
         lexical (FTS/token overlap) + hybrid (FTS/vector rerank) + entity overlap.
+
+        Current-state entries are the default retrieval surface. Historical or
+        expired entries can be requested explicitly for audit and timeline
+        workflows with ``include_stale=True``.
         """
         start_time = time.perf_counter()
         try:
@@ -570,13 +578,25 @@ class StatePlane:
             if not query or limit <= 0:
                 return []
 
-            candidates = await self._collect_recall_candidates(memory_types=memory_types)
+            candidates = await self._collect_recall_candidates(
+                memory_types=memory_types,
+                include_stale=include_stale,
+            )
             if not candidates:
                 return []
 
             lexical_ranked = self._rank_lexical_keys(query, candidates)
-            hybrid_ranked = self._rank_hybrid_keys(query, top_k=max(limit * 3, 10))
-            semantic_ranked = self._rank_semantic_keys(query, top_k=max(limit * 10, 50))
+            candidate_keys = set(candidates)
+            hybrid_ranked = self._rank_hybrid_keys(
+                query,
+                top_k=max(limit * 3, 10),
+                candidate_keys=candidate_keys,
+            )
+            semantic_ranked = self._rank_semantic_keys(
+                query,
+                top_k=max(limit * 10, 50),
+                candidate_keys=candidate_keys,
+            )
             entity_boosts = self._compute_entity_boosts(query, candidates)
             entity_ranked = [
                 key for key, score in sorted(entity_boosts.items(), key=lambda kv: kv[1], reverse=True) if score > 0
@@ -1227,6 +1247,7 @@ class StatePlane:
     async def _collect_recall_candidates(
         self,
         memory_types: Optional[List[MemoryType]] = None,
+        include_stale: bool = False,
     ) -> Dict[str, MemoryEntry]:
         allowed_types = None
         if memory_types:
@@ -1239,14 +1260,46 @@ class StatePlane:
         for entry in self.working_memory.get_all():
             if allowed_types and entry.memory_type.value not in allowed_types:
                 continue
+            if not include_stale and not self._is_recallable_entry(entry):
+                continue
             candidates[entry.key] = entry
 
         if self.backend:
             for entry in await self.backend.list_all():
                 if allowed_types and entry.memory_type.value not in allowed_types:
                     continue
+                if not include_stale and not self._is_recallable_entry(entry):
+                    continue
                 candidates[entry.key] = entry
         return candidates
+
+    def _is_recallable_entry(self, entry: MemoryEntry, now: Optional[float] = None) -> bool:
+        """Return whether an entry belongs in the default current-state view."""
+        now = time.time() if now is None else float(now)
+
+        if entry.superseded_by:
+            return False
+
+        def _timestamp(value: Any) -> Optional[float]:
+            try:
+                return float(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        valid_at = _timestamp(entry.valid_at)
+        if valid_at is not None and valid_at > now:
+            return False
+
+        invalid_at = _timestamp(entry.invalid_at)
+        if invalid_at is not None and invalid_at <= now:
+            return False
+
+        ttl = _timestamp(entry.ttl)
+        created_at = _timestamp(entry.created_at)
+        if ttl is not None and created_at is not None and created_at + ttl <= now:
+            return False
+
+        return True
 
     def _tokenize_query(self, query: str) -> List[str]:
         return [token for token in re.findall(r"[a-zA-Z0-9_]+", query.lower()) if token]
@@ -1316,23 +1369,41 @@ class StatePlane:
         scored.sort(key=lambda kv: kv[1], reverse=True)
         return [k for k, _ in scored]
 
-    def _rank_hybrid_keys(self, query: str, top_k: int) -> List[str]:
+    def _rank_hybrid_keys(
+        self,
+        query: str,
+        top_k: int,
+        candidate_keys: Optional[set[str]] = None,
+    ) -> List[str]:
         hybrid = self._get_hybrid_search()
         if hybrid is None:
             return []
         try:
-            results = hybrid.search_with_reranking(query, top_k=top_k)
+            results = hybrid.search_with_reranking(
+                query,
+                top_k=top_k,
+                allowed_keys=candidate_keys,
+            )
             return [meta.get("key") for _, _, meta in results if meta.get("key")]
         except Exception:
             return []
 
-    def _rank_semantic_keys(self, query: str, top_k: int) -> List[str]:
+    def _rank_semantic_keys(
+        self,
+        query: str,
+        top_k: int,
+        candidate_keys: Optional[set[str]] = None,
+    ) -> List[str]:
         hybrid = self._get_hybrid_search()
         conn = self._sqlite_connection()
         if hybrid is None or conn is None:
             return []
         try:
-            rowids = hybrid.semantic_search(query, top_k=top_k)
+            rowids = hybrid.semantic_search(
+                query,
+                top_k=top_k,
+                allowed_keys=candidate_keys,
+            )
             keys: List[str] = []
             for rowid, _score in rowids:
                 row = conn.execute("SELECT key FROM memories WHERE rowid = ?", (rowid,)).fetchone()

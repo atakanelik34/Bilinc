@@ -1,7 +1,12 @@
-"""Neutral tests for corpus-aware lexical ranking."""
+"""Neutral tests for corpus-aware lexical ranking and current-state recall."""
+
+import time
+
+import pytest
 
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.stateplane import StatePlane
+from bilinc.storage.sqlite import SQLiteBackend
 
 
 def test_lexical_specificity_breaks_common_word_ties():
@@ -90,3 +95,83 @@ def test_current_state_boost_demotes_explicitly_non_current_entries():
 
     assert scores["stale"] < scores["active"]
     assert scores["superseded"] < scores["active"]
+
+
+@pytest.mark.asyncio
+async def test_intelligent_recall_defaults_to_current_valid_entries(tmp_path):
+    backend = SQLiteBackend(str(tmp_path / "current-state.sqlite"))
+    plane = StatePlane(backend=backend, enable_verification=False, enable_audit=False)
+    await plane.init()
+    now = time.time()
+
+    await backend.restore(
+        MemoryEntry(
+            key="memory:expired",
+            value="deployment target is legacy-host",
+            memory_type=MemoryType.SEMANTIC,
+            invalid_at=now - 1,
+        )
+    )
+    await backend.restore(
+        MemoryEntry(
+            key="memory:superseded",
+            value="deployment target is old-host",
+            memory_type=MemoryType.SEMANTIC,
+            superseded_by="memory:current",
+        )
+    )
+    await backend.restore(
+        MemoryEntry(
+            key="memory:future",
+            value="deployment target is future-host",
+            memory_type=MemoryType.SEMANTIC,
+            valid_at=now + 3600,
+        )
+    )
+    await backend.restore(
+        MemoryEntry(
+            key="memory:current",
+            value="deployment target is current-host",
+            memory_type=MemoryType.SEMANTIC,
+        )
+    )
+
+    results = await plane.recall_intelligent("deployment target", limit=10)
+    assert [result["key"] for result in results] == ["memory:current"]
+
+    historical = await plane.recall_intelligent("deployment target", limit=10, include_stale=True)
+    assert {result["key"] for result in historical} == {
+        "memory:expired",
+        "memory:superseded",
+        "memory:future",
+        "memory:current",
+    }
+
+
+@pytest.mark.asyncio
+async def test_intelligent_recall_keeps_memory_type_scope_across_hybrid_paths(tmp_path):
+    backend = SQLiteBackend(str(tmp_path / "memory-type-scope.sqlite"))
+    plane = StatePlane(backend=backend, enable_verification=False, enable_audit=False)
+    await plane.init()
+    await backend.restore(
+        MemoryEntry(
+            key="memory:semantic",
+            value="database uses postgres",
+            memory_type=MemoryType.SEMANTIC,
+        )
+    )
+    await backend.restore(
+        MemoryEntry(
+            key="memory:episodic",
+            value="database uses sqlite",
+            memory_type=MemoryType.EPISODIC,
+        )
+    )
+
+    results = await plane.recall_intelligent(
+        "database uses",
+        limit=10,
+        memory_types=[MemoryType.SEMANTIC],
+    )
+    assert results
+    assert all(result["memory_type"] == MemoryType.SEMANTIC.value for result in results)

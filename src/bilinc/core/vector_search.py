@@ -95,13 +95,24 @@ class VectorStore:
         except Exception:
             return False
 
-    def search(self, query_embedding: List[float], top_k: int = 10) -> List[Tuple[int, float]]:
+    def search(
+        self,
+        query_embedding: List[float],
+        top_k: int = 10,
+        allowed_rowids: Optional[set[int]] = None,
+    ) -> List[Tuple[int, float]]:
         try:
+            fetch_limit = top_k
+            if allowed_rowids is not None:
+                if not allowed_rowids:
+                    return []
+                fetch_limit = max(top_k, len(allowed_rowids))
             results = self.conn.execute("""
                 SELECT rowid, distance FROM vec_bilinc
                 WHERE embedding MATCH ? ORDER BY distance LIMIT ?
-            """, (serialize_float32(query_embedding), top_k)).fetchall()
-            return [(r[0], r[1]) for r in results]
+            """, (serialize_float32(query_embedding), fetch_limit)).fetchall()
+            filtered = [r for r in results if allowed_rowids is None or int(r[0]) in allowed_rowids]
+            return [(r[0], r[1]) for r in filtered[:top_k]]
         except Exception:
             return []
 
@@ -179,7 +190,24 @@ class HybridSearch:
         self._semantic_config: Optional[Tuple[str, str]] = None
         self._semantic_disabled = False
 
-    def semantic_search(self, query: str, top_k: int = 10) -> List[Tuple[int, float]]:
+    def _rowids_for_allowed_keys(self, allowed_keys: Optional[set[str]]) -> Optional[set[int]]:
+        if allowed_keys is None:
+            return None
+        normalized = {str(key) for key in allowed_keys}
+        if not normalized:
+            return set()
+        try:
+            rows = self.conn.execute("SELECT rowid, key FROM memories").fetchall()
+            return {int(row[0]) for row in rows if str(row[1]) in normalized}
+        except Exception:
+            return set()
+
+    def semantic_search(
+        self,
+        query: str,
+        top_k: int = 10,
+        allowed_keys: Optional[set[str]] = None,
+    ) -> List[Tuple[int, float]]:
         """Optional local semantic retrieval for explicitly configured deployments.
 
         The base package remains dependency-free and unchanged when
@@ -210,7 +238,12 @@ class HybridSearch:
         try:
             import numpy as np
 
+            allowed_rowids = self._rowids_for_allowed_keys(allowed_keys)
+            if allowed_rowids is not None and not allowed_rowids:
+                return []
             rows = self.conn.execute("SELECT rowid, key, value FROM memories ORDER BY rowid").fetchall()
+            if allowed_rowids is not None:
+                rows = [row for row in rows if int(row[0]) in allowed_rowids]
             if not rows:
                 return []
             row_ids: List[int] = []
@@ -243,9 +276,17 @@ class HybridSearch:
             self._semantic_disabled = True
             return []
 
-    def keyword_search(self, query: str, top_k: int = 10) -> List[Tuple[int, float]]:
+    def keyword_search(
+        self,
+        query: str,
+        top_k: int = 10,
+        allowed_keys: Optional[set[str]] = None,
+    ) -> List[Tuple[int, float]]:
         """FTS5 search with query expansion and LIKE fallback."""
         expanded = expand_query(query)
+        allowed_rowids = self._rowids_for_allowed_keys(allowed_keys)
+        if allowed_rowids is not None and not allowed_rowids:
+            return []
         try:
             # FTS5 treats punctuation and words such as ``OR`` as query
             # syntax. Tokenize and quote terms so normal user questions can
@@ -254,23 +295,41 @@ class HybridSearch:
             fts_query = " OR ".join(f'"{term}"' for term in terms[:10])
             if not fts_query:
                 return []
-            results = self.conn.execute("""
-                SELECT rowid, rank FROM mem_fts WHERE mem_fts MATCH ? ORDER BY rank LIMIT ?
-            """, (fts_query, top_k)).fetchall()
+            if allowed_rowids is None:
+                results = self.conn.execute("""
+                    SELECT rowid, rank FROM mem_fts WHERE mem_fts MATCH ? ORDER BY rank LIMIT ?
+                """, (fts_query, top_k)).fetchall()
+            else:
+                results = self.conn.execute("""
+                    SELECT rowid, rank FROM mem_fts WHERE mem_fts MATCH ? ORDER BY rank
+                """, (fts_query,)).fetchall()
+                results = [row for row in results if int(row[0]) in allowed_rowids]
             if results:
                 max_rank = abs(min(r[1] for r in results)) if results else 1
-                return [(r[0], 1.0 - abs(r[1]) / max(max_rank, 1)) for r in results]
+                return [(r[0], 1.0 - abs(r[1]) / max(max_rank, 1)) for r in results[:top_k]]
         except Exception:
             pass
         try:
-            results = self.conn.execute("""
-                SELECT rowid FROM memories WHERE key LIKE ? OR value LIKE ? LIMIT ?
-            """, (f"%{query}%", f"%{query}%", top_k)).fetchall()
+            if allowed_rowids is None:
+                results = self.conn.execute("""
+                    SELECT rowid FROM memories WHERE key LIKE ? OR value LIKE ? LIMIT ?
+                """, (f"%{query}%", f"%{query}%", top_k)).fetchall()
+            else:
+                results = self.conn.execute("""
+                    SELECT rowid FROM memories WHERE key LIKE ? OR value LIKE ?
+                """, (f"%{query}%", f"%{query}%")).fetchall()
+                results = [row for row in results if int(row[0]) in allowed_rowids][:top_k]
             return [(r[0], 0.5) for r in results]
         except Exception:
             return []
 
-    def hybrid_search(self, query: str, top_k: int = 10, query_type: str = None) -> List[Tuple[int, float]]:
+    def hybrid_search(
+        self,
+        query: str,
+        top_k: int = 10,
+        query_type: str = None,
+        allowed_keys: Optional[set[str]] = None,
+    ) -> List[Tuple[int, float]]:
         """
         Hybrid search with adaptive RRF fusion.
         
@@ -284,14 +343,25 @@ class HybridSearch:
         if query_type is None:
             query_type = detect_query_type(query)
 
+        allowed_rowids = self._rowids_for_allowed_keys(allowed_keys)
+        if allowed_rowids is not None and not allowed_rowids:
+            return []
+
         # Level 1: Keyword (FTS5)
-        kw_results = self.keyword_search(query, top_k * 2)
+        kw_results = self.keyword_search(query, top_k * 2, allowed_keys=allowed_keys)
 
         # Level 2: Vector
         vec_results = []
         query_emb = get_embedding(query)
         if query_emb:
-            vec_results = self.vs.search(query_emb, top_k * 2)
+            vector_limit = top_k * 2
+            if allowed_rowids is not None:
+                vector_limit = max(vector_limit, len(allowed_rowids))
+            vec_results = self.vs.search(
+                query_emb,
+                vector_limit,
+                allowed_rowids=allowed_rowids,
+            )
 
         # Adaptive RRF weights based on query type
         kw_weight, vec_weight = {
@@ -312,7 +382,13 @@ class HybridSearch:
         sorted_results = sorted(fused.items(), key=lambda x: x[1], reverse=True)
         return sorted_results[:top_k]
 
-    def search_with_reranking(self, query: str, top_k: int = 10, now: float = None) -> List[Tuple[int, float, Dict]]:
+    def search_with_reranking(
+        self,
+        query: str,
+        top_k: int = 10,
+        now: float = None,
+        allowed_keys: Optional[set[str]] = None,
+    ) -> List[Tuple[int, float, Dict]]:
         """
         Full pipeline: hybrid search → decay-aware reranking → temporal boost.
         """
@@ -320,7 +396,12 @@ class HybridSearch:
             now = time.time()
 
         query_type = detect_query_type(query)
-        results = self.hybrid_search(query, top_k * 2, query_type)
+        results = self.hybrid_search(
+            query,
+            top_k * 2,
+            query_type,
+            allowed_keys=allowed_keys,
+        )
 
         reranked = []
         for rowid, base_score in results:
