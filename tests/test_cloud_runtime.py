@@ -1,9 +1,11 @@
 import asyncio
 import json
+import time
 from uuid import uuid4
 
 import pytest
 
+from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.cloud.runtime import ProjectRuntimeManager
 
 
@@ -45,6 +47,43 @@ async def test_project_runtime_uses_separate_physical_databases(tmp_path):
     assert manager.db_path(project_a).exists()
     assert manager.db_path(project_b).exists()
 
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_project_runtime_recall_defaults_to_current_valid_state(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project_id = str(uuid4())
+    plane = await manager.get_plane(project_id)
+    now = time.time()
+
+    await plane.backend.restore(
+        MemoryEntry(
+            key="memory:expired",
+            value="deployment target is legacy-host",
+            memory_type=MemoryType.SEMANTIC,
+            invalid_at=now - 1,
+        )
+    )
+    await plane.backend.restore(
+        MemoryEntry(
+            key="memory:superseded",
+            value="deployment target is old-host",
+            memory_type=MemoryType.SEMANTIC,
+            superseded_by="memory:current",
+        )
+    )
+    await plane.backend.restore(
+        MemoryEntry(
+            key="memory:current",
+            value="deployment target is current-host",
+            memory_type=MemoryType.SEMANTIC,
+        )
+    )
+
+    result = await manager.recall(project_id, query="deployment target", profile="balanced", limit=10)
+
+    assert [item["key"] for item in result["results"]] == ["memory:current"]
     await manager.close()
 
 
