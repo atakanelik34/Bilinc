@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "freeze_id": "bilinc-benchmark-protocols-2026-08-04",
+  "created_utc": "2026-08-03T23:54:32Z",
+  "goal_branch": "codex/bilinc-benchmark-dominance-20260804",
+  "source": {
+    "repository": "/Users/busecimen/Downloads/Projeler/Agent/Bilinc",
+    "baseline_commit": "e15502313d369664d3c5075f7c19ad9b5cf3ba21",
+    "baseline_tree": "86aedc5d8900e5fd6d9156d15a6a2fd79fb52b71",
+    "product_code_changed_before_baseline": false
+  },
+  "integrity_rules": {
+    "adapter_is_frozen_before_product_optimization": true,
+    "benchmark_files_are_read_only_after_freeze": true,
+    "official_datasets_and_expected_answers_are_immutable": true,
+    "benchmark_specific_aliases_caches_and_query_bonuses_forbidden": true,
+    "component_retrieval_and_end_to_end_qa_are_separate_lanes": true,
+    "incomparable_protocols_must_not_share_a_scoreboard_row": true
+  },
+  "longmemeval_guard": {
+    "benchmark_id": "longmemeval-s-cleaned-component",
+    "lane": "component",
+    "dataset_url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json",
+    "dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "questions": 500,
+    "runner": {
+      "path": "benchmarks/longmemeval_bench.py",
+      "sha256": "76b198059d119e5d3c35ee0bb8725230f6d1f83b59d7d98858b8d1f179617b14"
+    },
+    "metric": {
+      "path": "benchmarks/metrics.py",
+      "sha256": "b207338e307c5a8dc6b1493f31cf6d8a1e70b836c0f6574ea339502e452914ba"
+    },
+    "embedding": "all-MiniLM-L6-v2 through ChromaDB",
+    "top_k": 5,
+    "llm_reranker": false,
+    "paid_api": false,
+    "floor": {
+      "hit_at_5": 0.98,
+      "ndcg_at_5": 0.913
+    },
+    "scope": "isolated retrieval component; not end-to-end StatePlane"
+  },
+  "targets": [
+    {
+      "benchmark_id": "amb-legacy-v3-layer1-layer2",
+      "status": "protocol-frozen-baseline-pending",
+      "lane": "product-core",
+      "repository_url": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+      "release": "v3.0.0",
+      "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+      "package_version": "3.0.0",
+      "license": "Apache-2.0",
+      "runner_files": {
+        "README.md": "8a671cb9f742d7a0a5abe5c0e5a3d1baac85392833f7cfc01060cc5d62514115",
+        "package.json": "7d13ce46fe4a5ec39541ebec069ede829fba1052a7eba3df6a547eb86f261b02",
+        "package-lock.json": "e1aed2c9b0c7407016dc69dcab41043a63a041d21ea7a3601d7abbca561b754b",
+        "src/runner.ts": "a7b75e7f14eaa4549e3fdc112bf4828cd0b86f0cf2e942ec562cfc487035a378",
+        "src/scoring.ts": "7dec03d7cf86863f3207891109d6d3330e4a8dbfe36e684d81a24f7528949b53",
+        "src/integrity.ts": "4d6f6e78ec79ca8d560c443771621c9beac3d52c73ed42fdd8d63c4fdf016c5b",
+        "src/layer2/runner.ts": "9f06877212c382cd5e86590b524ba3554fe1f675edb31f5c63f6ac11560243eb",
+        "src/layer2/scorer.ts": "3e264a9815f0147960be52b88f1dc78a30536ea6f6cd0df851e94d5311da1d7d",
+        "src/adapters/mcp-adapter.ts": "b028ea4ebaadebc30060a6f3779ecc37ec84dcb7b6d635bd827f66dc0aa594bd",
+        "src/adapters/in-memory.ts": "80099f8ea9feb696ddc4702ecb28baefd952e0a30bc4116d1074653988e6c290"
+      },
+      "layer1": {
+        "tests": 56,
+        "categories": 8,
+        "scoring": "binary keyword presence with official weighted category score",
+        "delay_seconds": 3,
+        "final_command": "pinned upstream v3.0.0 runner with --provider mcp --layer 1"
+      },
+      "layer2": {
+        "scenarios": 5,
+        "fixture_sha256": {
+          "conflict-resolution-multi.json": "15ac557c12d8758f4f3b07673bb6343a2fabcb734d4c9c27aa80f9d81067a583",
+          "context-continuity.json": "29b0a22e15d782ddfa1e467db7c83c9f31897a6ab06c1622b065368c9d4a06e4",
+          "cross-agent-handoff.json": "ef518bd599ac361fde3d5650e8abe056d08187025e5d4f4ac59c546af42e702b",
+          "preference-application.json": "7d9ced648deb4a5b1782d23acdb51ca7dcb4a7402ae03512c38fc093a87521e2",
+          "redundancy-check.json": "fca35da943fa6bc5d188159c6a5e093e476a9a151e663dd9141d1db225b63548"
+        },
+        "final_command": "pinned upstream v3.0.0 runner with --provider mcp --layer 2 --fixtures-dir <frozen-fixtures>"
+      },
+      "adapter": {
+        "path": "benchmarks/adapters/amb_generic_mcp.py",
+        "sha256": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+        "contract": "remember/search/forget only; public StatePlane calls; isolated SQLite path required",
+        "forbidden_behavior_scan": "no aliases, fixture terms, answer normalization, query-specific scoring, or result cache"
+      }
+    },
+    {
+      "benchmark_id": "amb-current-vectorize-rag",
+      "status": "blocked-paid-judge",
+      "lane": "invalid",
+      "repository_url": "https://github.com/vectorize-io/agent-memory-benchmark",
+      "release": "main at freeze",
+      "release_commit": "62364d7ead2dc1a7225d6daf4ae23f303b925b40",
+      "license": "repository license to be verified before redistribution",
+      "runner_files": {
+        "README.md": "8be8b5c79339f029fdbde9997d2f67a879dae23319d445630bc33cb7cec335e3",
+        "pyproject.toml": "50da4add62e586ade35bfd9d969cdc92b0e884f00b8764ddd88b916d2f5b6783",
+        "uv.lock": "8887e0513e7a74d579cd30c495a19214668f3369fa962b69a3f6d37af89c7653",
+        "src/memory_bench/runner.py": "c38848f83bdf737cab97716c35d48276b9ef5d54d7e915d743510cd681e002c4",
+        "src/memory_bench/judge.py": "6f06681e30b11687499db49191f22b955ef5c37d228d4a1a6480d505b7639b57",
+        "src/memory_bench/cli.py": "74f5cc7ae291dfb070e894dbc9aad08bbfc3b34432f11bfe493c5e1b9b571349",
+        "src/memory_bench/dataset/locomo.py": "d23687d9a4193ead4a4c8f20913959f2c45201750c0a26f1de1b0e478fd90d73",
+        "src/memory_bench/memory/base.py": "c55a9d2adc8d9713420f18bfa31f13c18fe7f91f62cd42b3c54840e5063a8913"
+      },
+      "protocol": "ingest -> retrieve -> Gemini generation -> second Gemini judge",
+      "reason_blocked": "The official harness requires a Gemini API key and judge; no paid LLM/judge API is authorized for this goal.",
+      "disallowed_substitution": "Do not replace the official judge with keyword, local, or alternate-model scoring and label it official."
+    },
+    {
+      "benchmark_id": "locomo-official-retrieval-component",
+      "status": "protocol-frozen-baseline-existing",
+      "lane": "component",
+      "repository_url": "https://github.com/snap-research/locomo",
+      "release": "main at freeze",
+      "release_commit": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+      "license": "repository LICENSE.txt; dataset license to be checked against release",
+      "dataset_url": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
+      "dataset_sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+      "dataset_counts": {"conversations": 10, "qa_total": 1986, "non_adversarial_qa": 1842},
+      "runner_files": {
+        "task_eval/evaluate_qa.py": "dde7c1c6b5501486f96ce31398d6e49de76abbfa656e980b137e54fc69e9f6ee",
+        "task_eval/evaluation.py": "8e3be5d57ff2ff9ec5cd05939592f468c5f3f1fd95d13e431932bdf6bf0fd6fd",
+        "task_eval/rag_utils.py": "136a30a444a1b3a2533e71a5aa94f8b4f30f06f784b66528a8efcb6dbe50f6c7",
+        "scripts/evaluate_rag_gpts.sh": "7a066d13578e2793c00dc2850b2fb81caf34975763a8547bb3f09b99b6d544a2"
+      },
+      "protocol": "global retrieval and session-filtered retrieval are separate component lanes; evidence recall and NDCG are retrieval metrics, not QA accuracy",
+      "existing_baseline": {"questions": 1842, "memories": 5882, "recall_at_5": 0.5792616720955484, "ndcg_at_5": 0.4711968671251773},
+      "official_qa_lane": "separate; requires generation model and cannot be claimed from this component result"
+    },
+    {
+      "benchmark_id": "locomo-official-qa-rag",
+      "status": "blocked-paid-model",
+      "lane": "invalid",
+      "source_commit": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+      "protocol": "official task_eval QA generation plus official category-aware F1 evaluation",
+      "reason_blocked": "The released RAG evaluation scripts require an external generation/retrieval model path; no paid model or judge substitution is authorized."
+    },
+    {
+      "benchmark_id": "convomem-official-salesforce",
+      "status": "protocol-frozen-baseline-pending",
+      "lane": "component",
+      "repository_url": "https://github.com/SalesforceAIResearch/ConvoMem",
+      "release": "main at freeze",
+      "release_commit": "624f582ecf0d336ae1d4539d19186089800774b1",
+      "license": "Apache-2.0 repository; dataset CC-BY-NC-4.0",
+      "dataset_url": "https://huggingface.co/datasets/Salesforce/ConvoMem",
+      "dataset_snapshot_sha": "e3e9b39115b02346824c70d349350de738f8be41",
+      "dataset_split": "train",
+      "dataset_examples": 75336,
+      "dataset_config": "default",
+      "runner_files": {
+        "README.md": "76dd782332fb661df9ffe498c98b455a761930a1e2bac57c4a7375f84a57fe6e",
+        "build.gradle": "16f4d257bf9fb93698dfcf39cdb36558fa01aee7fa8ed87fdc190b4851fd3bb2",
+        "gradle.properties": "0c2b1c1f9f16eb6bd43b57950414105e4151c469913e50bf4a730b279d6bd0a5",
+        "StatsReporter.scala": "142811cc5b85414286ac3b48f5e5f3ebda689049bf5cdf794aaf85bf8688e658",
+        "MultithreadedEvaluator.scala": "eb98f588ddcb10766c32a015c88a460ac680372ac7b0ae968371d5e91ae21de3",
+        "MemoryAnswerer.scala": "6c6c779eb4e720a095766f64ed5f9f43d482d41b0867a41803d0c8635237c63a",
+        "LongContextMemoryAnswerer.scala": "b9e122fae56375d654689e3ded22bc14c46568a3081458840febf8950bb6fc37",
+        "Gemini.scala": "223933fc8eaf5dd20317221d255ad34a4e9747be4032fd0fb9581e81475a7142",
+        "Utils.scala": "82b308504ba639cdae3d3b8d7cdf95481c04ddf61bced7204c6d3a3e6fedb8b1"
+      },
+      "protocol": "official Gradle/Scala evaluation across six evidence categories with exact/semantic/abstention/multi-evidence metrics",
+      "reason_blocked": "The official quick start requires GOOGLE_AI_API_KEY and Gemini-backed answer evaluation; no paid LLM/judge API is authorized for this goal.",
+      "internal_suite_disallowed": "The repository-local 10-query ReARC suite is not this official dataset and cannot populate this row."
+    }
+  ],
+  "modal": {
+    "authorized_aggregate_usd": 30.0,
+    "hard_stop_usd": 30.0,
+    "ephemeral_only": true,
+    "persistent_resources_allowed": false,
+    "current_sdk": "1.4.3",
+    "spend_before_freeze": 0.0
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "benchmark": "locomo-official-retrieval-component-stateplane",
+  "lane": "component",
+  "evidence_status": "reproducible",
+  "git": {
+    "commit": "e15502313d369664d3c5075f7c19ad9b5cf3ba21",
+    "worktree": "codex/bilinc-benchmark-dominance-20260804",
+    "dirty_at_run": true,
+    "product_code_changed": false,
+    "benchmark_adapter_hash": "none; direct public StatePlane API with isolated SQLite backends"
+  },
+  "dataset": {
+    "source": "https://github.com/snap-research/locomo",
+    "release_commit": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+    "dataset_url": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
+    "dataset_sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "license": "CC BY-NC 4.0",
+    "conversations": 10,
+    "qa_total": 1986,
+    "qa_scored": 1977,
+    "memories": 5882
+  },
+  "runner": {
+    "path": "benchmarks/runners/locomo_stateplane_component.py",
+    "sha256": "c4d0966c2b57d51dd305899a31aefca14dce27612410a406bbd1f8d3ab68b879",
+    "modal_runner_path": "benchmarks/modal/locomo_runner.py",
+    "modal_runner_sha256": "c3f40d02745143294c917e29f1e0416a51b5db1ab670f8e935123305f64238eb",
+    "official_eval_runner_hashes": {
+      "task_eval/evaluate_qa.py": "dde7c1c6b5501486f96ce31398d6e49de76abbfa656e980b137e54fc69e9f6ee",
+      "task_eval/evaluation.py": "8e3be5d57ff2ff9ec5cd05939592f468c5f3f1fd95d13e431932bdf6bf0fd6fd",
+      "task_eval/rag_utils.py": "136a30a444a1b3a2533e71a5aa94f8b4f30f06f784b66528a8efcb6dbe50f6c7"
+    },
+    "protocol": {
+      "top_k": 5,
+      "scope": "one isolated SQLite-backed StatePlane per conversation",
+      "ingestion": "official raw conversation turns only",
+      "retrieval": "StatePlane.recall_intelligent public API",
+      "qa_or_observation_projection": false,
+      "benchmark_specific_query_expansion": false,
+      "metrics": "Hit@5, evidence recall@5, normalized binary NDCG@5"
+    },
+    "python": "3.11.5",
+    "node": "v22.23.2"
+  },
+  "environment": {
+    "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+    "hardware": "8 requested physical CPU cores, 16 GiB requested memory",
+    "modal_app": "bilinc-benchmark-bilinc-benchmark-dominance-20260804-locomo",
+    "storage": "ephemeral isolated SQLite database per conversation",
+    "persistent_resources": false,
+    "resources_active_after_run": false,
+    "modal_billing_usd": 0.00431130,
+    "goal_cumulative_modal_billing_usd": 0.07632522
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-04/locomo-stateplane-component/modal-result.json",
+      "sha256": "c5bcea517e526a8f5fedeec2c0674ab1f72cc8bcc6516ffbcd5f61e85466cd1c"
+    },
+    {
+      "path": "runs/2026-08-04/locomo-stateplane-component/modal-receipt.json",
+      "sha256": "64fbd9014dda935b3c52755c061d0a43d6bfb69ea77d231311f8dee5ef640a07"
+    }
+  ],
+  "metrics": {
+    "questions": 1977,
+    "hit_at_5": 0.41122913505311076,
+    "evidence_recall_at_5": 0.37613887620781933,
+    "ndcg_at_5": 0.30813386529060555,
+    "by_category": {
+      "adversarial": {"n": 446, "hit_at_5": 0.3968609865470852, "evidence_recall_at_5": 0.39125560538116594, "ndcg_at_5": 0.31760035902564254},
+      "multi-hop": {"n": 320, "hit_at_5": 0.50625, "evidence_recall_at_5": 0.4768229166666666, "ndcg_at_5": 0.3758367624652459},
+      "open-domain": {"n": 841, "hit_at_5": 0.45659928656361476, "evidence_recall_at_5": 0.4468886246531906, "ndcg_at_5": 0.3668732097166304},
+      "single-hop": {"n": 281, "hit_at_5": 0.2669039145907473, "evidence_recall_at_5": 0.11171268379078828, "ndcg_at_5": 0.10909464056395611},
+      "temporal": {"n": 89, "hit_at_5": 0.16853932584269662, "evidence_recall_at_5": 0.10470367922449879, "ndcg_at_5": 0.09064229432644944}
+    }
+  },
+  "limitations": [
+    "This is a clean retrieval component lane, not the official end-to-end LoCoMo QA score.",
+    "The official QA path uses model generation and category-specific answer evaluation; this runner does not replace that judge.",
+    "The component uses isolated conversation scope rather than global retrieval; those lanes must not be compared directly.",
+    "The runner ingests raw turns only and does not index official observation/session summaries or QA answers.",
+    "The public StatePlane hybrid path is used as configured by the baseline environment; no benchmark-specific embedding or projection is added by this runner.",
+    "Nine dataset QA rows were excluded because they had no usable source evidence after the frozen parser; the excluded count is recorded rather than silently treated as a hit."
+  ],
+  "disallowed_claims": [
+    "Do not call 0.411229 Hit@5, 0.376139 evidence recall, or 0.308134 NDCG official LoCoMo QA accuracy, SOTA, or #1.",
+    "Do not compare this StatePlane raw-turn component lane to the prior projection-enriched component lane as a like-for-like score.",
+    "Do not infer end-to-end answer quality from retrieval evidence metrics."
+  ]
+}

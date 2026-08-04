@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "benchmark": "locomo-official-retrieval-component-stateplane-fts-punctuation-candidate",
+  "lane": "component",
+  "evidence_status": "reproducible",
+  "git": {
+    "commit": "e15502313d369664d3c5075f7c19ad9b5cf3ba21",
+    "worktree": "codex/bilinc-benchmark-dominance-20260804",
+    "dirty_at_run": true,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/vector_search.py": "e853b1c194a9c06b582089b0fba1a6f4ff038990fc6e4a4b7c247326571e9222"
+    },
+    "adapter": "none; direct public StatePlane API"
+  },
+  "dataset": {
+    "source": "https://github.com/snap-research/locomo",
+    "release": "main at freeze",
+    "release_commit": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+    "url": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
+    "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "license": "CC BY-NC 4.0",
+    "conversations": 10,
+    "qa_total": 1986,
+    "qa_scored": 1977
+  },
+  "runner": {
+    "component_runner_sha256": "c4d0966c2b57d51dd305899a31aefca14dce27612410a406bbd1f8d3ab68b879",
+    "modal_runner_sha256": "c3f40d02745143294c917e29f1e0416a51b5db1ab670f8e935123305f64238eb",
+    "protocol_freeze_sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+    "python": "3.11.5",
+    "hardware_request": {
+      "cpu": 8,
+      "memory_gib": 16,
+      "single_use_container": true
+    },
+    "scope": "one isolated SQLite-backed StatePlane per conversation",
+    "ingestion": "official raw conversation turns only",
+    "retrieval": "StatePlane.recall_intelligent public API",
+    "qa_or_observation_projection": false,
+    "benchmark_specific_query_expansion": false,
+    "metrics": "Hit@5, evidence recall@5, normalized binary NDCG@5"
+  },
+  "environment": {
+    "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+    "modal_app_id": "ap-aY9XMfZEarQaE4LsOhBP8J",
+    "persistent_resources": false,
+    "resources_active_after_run": false,
+    "modal_billing": {
+      "run_usd": 0.00523833,
+      "goal_cumulative_usd_after_run": 0.14888894
+    }
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-04/locomo-stateplane-component/candidates/fts-punctuation-result.json",
+      "sha256": "06e123b73051fef623cbd50744e53d5895f0b99c9ac70fd52ef246117ee2bddb"
+    },
+    {
+      "path": "runs/2026-08-04/locomo-stateplane-component/candidates/fts-punctuation-receipt.json",
+      "sha256": "6b7af1d23bcd3a4a474847a54ee871a8060ccfe66111cfb9d86cb644e8bd822b"
+    }
+  ],
+  "metrics": {
+    "questions": 1977,
+    "memories": 5882,
+    "hit_at_5": 0.48558421851289835,
+    "evidence_recall_at_5": 0.4443182985052645,
+    "ndcg_at_5": 0.36346105510584753,
+    "comparison": {
+      "baseline_hit_at_5": 0.41122913505311076,
+      "baseline_evidence_recall_at_5": 0.37613887620781933,
+      "baseline_ndcg_at_5": 0.30813386529060555,
+      "delta_hit_at_5": 0.07435508345978759,
+      "delta_evidence_recall_at_5": 0.06817942229744517,
+      "delta_ndcg_at_5": 0.055327189815241984
+    }
+  },
+  "limitations": [
+    "Retrieval component only; not official end-to-end QA/F1.",
+    "Conversation-isolated scope; not global retrieval.",
+    "Evidence identifiers are used for retrieval scoring; this does not measure answer generation.",
+    "No claim is made that this component score is a public leaderboard position."
+  ],
+  "disallowed_claims": [
+    "Do not call this an end-to-end LoCoMo QA score.",
+    "Do not call this #1, SOTA, or directly compare it to systems using projection, global scope, different metrics, or generation.",
+    "Do not treat the result as a replacement for the official QA lane."
+  ]
+}
