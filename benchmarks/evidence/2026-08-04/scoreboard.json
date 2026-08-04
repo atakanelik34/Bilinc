@@ -5,7 +5,7 @@
     "path": "benchmarks/protocols/2026-08-04/freeze.json",
     "sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822"
   },
-  "source_commit": "e15502313d369664d3c5075f7c19ad9b5cf3ba21",
+  "source_commit": "9faa58f7de1ee60128b15c0f7ca0b33bf881b5d1",
   "rows": [
     {
       "benchmark_id": "longmemeval-s-cleaned-component",
@@ -457,6 +457,66 @@
       "metrics": null,
       "blocker": "Official Gradle/Scala evaluation requires Gemini-backed answer evaluation; no paid LLM/judge substitution is authorized.",
       "evidence_path": "benchmarks/protocols/2026-08-04/freeze.json"
+    },
+    {
+      "benchmark_id": "longmemeval-s-cleaned-component-current-source",
+      "lane": "component",
+      "status": "valid-final-regression-current-source",
+      "comparability_group": "longmemeval-s-cleaned-frozen-guard",
+      "dataset_hash": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+      "runner_hash": "76b198059d119e5d3c35ee0bb8725230f6d1f83b59d7d98858b8d1f179617b14",
+      "metric_hash": "b207338e307c5a8dc6b1493f31cf6d8a1e70b836c0f6574ea339502e452914ba",
+      "source_commit": "252fbe0",
+      "metrics": {"questions": 500, "hit_at_5": 0.98, "ndcg_at_5": 0.913, "guardrail_pass": true},
+      "protocol_hash": "c4c07e60e1e708ae0d144103e458406a83f38c24d413b66c0454b1d61fc5f43d",
+      "hardware": "macOS local isolated retrieval component",
+      "cost_usd": 0.0,
+      "final_validation": true,
+      "raw_result_hashes": ["1c2483785a8461b8ded4cc651a7e76c5de13550525e82112c11748f5d0089d95"],
+      "evidence_path": "benchmarks/evidence/2026-08-04/longmemeval-frozen-final-current/manifest.json",
+      "limitations": ["Frozen regression guardrail only; not end-to-end StatePlane.", "Changed StatePlane/vector_search import path is outside this runner's dependency boundary."]
+    },
+    {
+      "benchmark_id": "locomo-official-retrieval-component-stateplane-current-valid-filter",
+      "lane": "component",
+      "status": "valid-candidate-accepted-no-regression",
+      "comparability_group": "locomo-official-raw-turn-stateplane-component",
+      "dataset_hash": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+      "source_commit": "6202c70",
+      "adapter_hash": "none; direct public StatePlane API",
+      "metrics": {
+        "questions": 1977,
+        "memories": 5882,
+        "baseline": {"hit_at_5": 0.5164390490642388, "evidence_recall_at_5": 0.47362317422792294, "ndcg_at_5": 0.39265264312998693},
+        "candidate": {"hit_at_5": 0.5164390490642388, "evidence_recall_at_5": 0.47362317422792294, "ndcg_at_5": 0.39265264312998693},
+        "candidate_delta": {"hit_at_5": 0.0, "evidence_recall_at_5": 0.0, "ndcg_at_5": 0.0}
+      },
+      "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+      "hardware": "macOS local SQLite component A/B",
+      "cost_usd": 0.0,
+      "raw_result_hashes": ["2d2e63253a67b3dcdab92ab88a20d24f93d95195d4edaa292a80302a983a2960", "0afb82ccdf814e32227e1fb2af7ca785db91234eb444018aeb1c7b9eee6c3950"],
+      "evidence_path": "benchmarks/evidence/2026-08-04/locomo-stateplane-component-current-valid-filter/manifest.json",
+      "limitations": ["Retrieval component only; not official end-to-end LoCoMo QA/F1.", "Correctness/no-regression receipt, not a leaderboard gain."]
+    },
+    {
+      "benchmark_id": "amb-legacy-v3-current-valid-filter",
+      "lane": "product-core",
+      "status": "valid-candidate-accepted-no-regression",
+      "comparability_group": "amb-legacy-v3-frozen-generic-adapter",
+      "dataset_hash": "038345777409ff4097cceae44cc2337eed534e88ef946e5adb70da5309b082ae",
+      "source_commit": "ed287ed",
+      "adapter_hash": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+      "metrics": {
+        "layer1": {"baseline_overall": 75.0, "candidate_overall": 75.0, "delta": 0.0},
+        "layer2": {"baseline_overall": 40.0, "candidate_overall": 40.0, "baseline_passed": 2, "candidate_passed": 2, "total": 5, "delta": 0.0},
+        "category_regressions": false
+      },
+      "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+      "hardware": "macOS local Node 26 same-runner A/B",
+      "cost_usd": 0.0,
+      "raw_result_hashes": ["6c2e6201713848041a0435c339cc4f8854d8d76fca36eb3c28b38f28e1abbacf", "e559bde065303039b4ddef8392c503c6ec11d95827f1f177086b2b9f9a243850", "6d2acf72b6f568b31db4e3a5705aa4365d25e6f30400db72916c92ebe7b2d86d", "7d458720ea3825f38597fde079dcb487af0489453aecb833051ce2e017ed13a2"],
+      "evidence_path": "benchmarks/evidence/2026-08-04/amb-legacy-v3-current-valid-filter/manifest.json",
+      "limitations": ["Historical AMB v3 harness, not current Vectorize AMB RAG/judge.", "Layer 2 is intentionally invoked separately and reports process exit 1 while its 2/5 result is valid."]
     }
   ],
   "modal": {
