@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "benchmark": "amb-legacy-v3-current-valid-filter",
+  "lane": "product-core",
+  "evidence_status": "reproducible",
+  "decision": "accepted-product-core-correctness-no-regression",
+  "git": {
+    "baseline_commit": "31d27fe",
+    "candidate_commit": "ed287ed",
+    "worktree": "codex/bilinc-benchmark-dominance-20260804",
+    "dirty_at_candidate_run": false,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "96b790e7ec30f05ccc4800f65ec52212fb9c07913ba3c867a90c4ae101f262c7",
+      "src/bilinc/core/vector_search.py": "9dcd461dc94aa3a9b730d7df92803358fa8e2014dfc4951dc50cd99ea6b4d39f"
+    },
+    "adapter_sha256": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761"
+  },
+  "dataset": {
+    "source": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+    "release": "v3.0.0",
+    "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+    "package_tarball_sha256": "038345777409ff4097cceae44cc2337eed534e88ef946e5adb70da5309b082ae",
+    "license": "Apache-2.0",
+    "layer1_tests": 56,
+    "layer2_scenarios": 5,
+    "layer2_fixture_sha256": {
+      "conflict-resolution-multi.json": "15ac557c12d8758f4f3b07673bb6343a2fabcb734d4c9c27aa80f9d81067a583",
+      "context-continuity.json": "29b0a22e15d782ddfa1e467db7c83c9f31897a6ab06c1622b065368c9d4a06e4",
+      "cross-agent-handoff.json": "ef518bd599ac361fde3d5650e8abe056d08187025e5d4f4ac59c546af42e702b",
+      "preference-application.json": "7d9ced648deb4a5b1782d23acdb51ca7dcb4a7402ae03512c38fc093a87521e2",
+      "redundancy-check.json": "fca35da943fa6bc5d188159c6a5e093e476a9a151e663dd9141d1db225b63548"
+    }
+  },
+  "runner": {
+    "package": "agent-memory-benchmark@3.0.0",
+    "cli_reported_version": "2.0.0",
+    "package_json_sha256": "7d13ce46fe4a5ec39541ebec069ede829fba1052a7eba3df6a547eb86f261b02",
+    "cli_sha256": "96e6c4dc843620800455a53e62bc14852b6cf77208bc93941d936a4c3a50cf3c",
+    "modal_runner_sha256": "f2c7fc53e7f0b599565a6c46ad1cdc527333fccc23377fde5b17d421a1970781",
+    "adapter_command": "python3 benchmarks/adapters/amb_generic_mcp.py --db-path <isolated-run-db>",
+    "store_delay_seconds": 3.0,
+    "same_local_runner_ab": true,
+    "scope": "historical AMB v3 generic MCP provider"
+  },
+  "environment": {
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.11.7",
+    "node": "v26.5.0",
+    "storage": "ephemeral isolated SQLite database per run",
+    "modal_app_id": null,
+    "persistent_resources": false,
+    "resources_active_after_run": false,
+    "modal_billing": {"run_usd": 0.0}
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-04/amb-legacy-v3/current-valid/baseline-l1-results.json",
+      "sha256": "6c2e6201713848041a0435c339cc4f8854d8d76fca36eb3c28b38f28e1abbacf"
+    },
+    {
+      "path": "runs/2026-08-04/amb-legacy-v3/current-valid/candidate-l1-results.json",
+      "sha256": "e559bde065303039b4ddef8392c503c6ec11d95827f1f177086b2b9f9a243850"
+    },
+    {
+      "path": "runs/2026-08-04/amb-legacy-v3/current-valid/baseline-l2-results.json",
+      "sha256": "6d2acf72b6f568b31db4e3a5705aa4365d25e6f30400db72916c92ebe7b2d86d"
+    },
+    {
+      "path": "runs/2026-08-04/amb-legacy-v3/current-valid/candidate-l2-results.json",
+      "sha256": "7d458720ea3825f38597fde079dcb487af0489453aecb833051ce2e017ed13a2"
+    }
+  ],
+  "metrics": {
+    "layer1": {
+      "baseline_overall": 75.0,
+      "candidate_overall": 75.0,
+      "delta": 0.0
+    },
+    "layer2": {
+      "baseline_overall": 40.0,
+      "candidate_overall": 40.0,
+      "baseline_passed": 2,
+      "candidate_passed": 2,
+      "total": 5,
+      "delta": 0.0
+    },
+    "category_regressions": false
+  },
+  "limitations": [
+    "This is the historical AlekseiMarchenko v3 harness, not the current Vectorize AMB RAG/judge harness.",
+    "Local Node 26 execution is a same-runner A/B correctness check, not a Modal hardware-matched leaderboard result.",
+    "The published package CLI version string reports 2.0.0 while the package release is 3.0.0.",
+    "Layer 2 invocation exits 1 because Layer 1 is intentionally skipped; layer2.total=5 and layer2.score=40 are valid."
+  ],
+  "disallowed_claims": [
+    "Do not call these scores #1, SOTA or an official current leaderboard result.",
+    "Do not compare this result to historical calibrated AMB artifacts as if protocols matched.",
+    "Do not attribute any gain to benchmark-specific adapter behavior."
+  ]
+}
