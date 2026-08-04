@@ -50,6 +50,39 @@ def test_hybrid_search_handles_natural_question_punctuation(tmp_path):
     asyncio.run(scenario())
 
 
+def test_hybrid_search_can_restrict_the_candidate_union(tmp_path):
+    async def scenario():
+        backend = SQLiteBackend(str(tmp_path / "vector-scope.sqlite"))
+        await backend.init()
+        await backend.restore(
+            MemoryEntry(
+                key="memory:allowed",
+                value="database uses postgres",
+                memory_type=MemoryType.SEMANTIC,
+            )
+        )
+        await backend.restore(
+            MemoryEntry(
+                key="memory:excluded",
+                value="database uses sqlite",
+                memory_type=MemoryType.EPISODIC,
+            )
+        )
+
+        search = HybridSearch(backend._get_conn(), VectorStore(backend._get_conn()))
+        results = search.search_with_reranking(
+            "database uses",
+            top_k=10,
+            allowed_keys={"memory:allowed"},
+        )
+
+        assert results
+        assert {metadata["key"] for _, _, metadata in results} == {"memory:allowed"}
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
 def test_semantic_search_is_explicitly_opt_in(monkeypatch, tmp_path):
     async def scenario():
         monkeypatch.delenv("BILINC_SEMANTIC_MODEL", raising=False)
