@@ -11,6 +11,7 @@ ORIGINAL implementation.
 """
 from __future__ import annotations
 import json
+import re
 import struct
 import time
 from typing import Dict, List, Optional, Tuple
@@ -95,19 +96,30 @@ QUERY_SYNONYMS = {
     "reputation": ["reputation", "trust", "agent", "on-chain"],
     "document": ["document", "pdf", "ocr", "tool", "saas"],
     "cfo": ["cfo", "finance", "accounting", "erp", "fintarx"],
-    "benchmark": ["benchmark", "score", "evaluation", "longmemeval", "recall"],
+    "benchmark": ["benchmark", "score", "evaluation", "recall"],
 }
 
 
 def expand_query(query: str) -> str:
     """Expand query with synonyms for better recall."""
-    words = query.lower().split()
-    expanded = set(words)
+    words = re.findall(r"[\w]+", str(query or "").lower(), flags=re.UNICODE)
+    expanded: list[str] = []
+    seen: set[str] = set()
+
+    def add(term: str) -> None:
+        normalized = str(term or "").strip().lower()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            expanded.append(normalized)
+
+    for word in words:
+        add(word)
     for word in words:
         for key, syns in QUERY_SYNONYMS.items():
             if word in syns or word == key:
-                expanded.update(syns)
-                expanded.add(key)
+                add(key)
+                for synonym in syns:
+                    add(synonym)
     return " ".join(expanded)
 
 
@@ -138,7 +150,13 @@ class HybridSearch:
         """FTS5 search with query expansion and LIKE fallback."""
         expanded = expand_query(query)
         try:
-            fts_query = " OR ".join(expanded.split()[:10])
+            # FTS5 treats punctuation and words such as ``OR`` as query
+            # syntax. Tokenize and quote terms so normal user questions can
+            # never turn a valid retrieval request into a parser error.
+            terms = re.findall(r"[\w]+", expanded, flags=re.UNICODE)
+            fts_query = " OR ".join(f'"{term}"' for term in terms[:10])
+            if not fts_query:
+                return []
             results = self.conn.execute("""
                 SELECT rowid, rank FROM mem_fts WHERE mem_fts MATCH ? ORDER BY rank LIMIT ?
             """, (fts_query, top_k)).fetchall()

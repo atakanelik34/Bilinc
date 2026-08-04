@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "benchmark": "amb-legacy-v3-layer1-fts-punctuation-candidate",
+  "lane": "product-core",
+  "evidence_status": "reproducible",
+  "git": {
+    "commit": "e15502313d369664d3c5075f7c19ad9b5cf3ba21",
+    "worktree": "codex/bilinc-benchmark-dominance-20260804",
+    "dirty_at_run": true,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/vector_search.py": "e853b1c194a9c06b582089b0fba1a6f4ff038990fc6e4a4b7c247326571e9222"
+    },
+    "benchmark_adapter_hash": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761"
+  },
+  "dataset": {
+    "source": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+    "release": "v3.0.0",
+    "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+    "package_tarball_sha256": "038345777409ff4097cceae44cc2337eed534e88ef946e5adb70da5309b082ae",
+    "license": "Apache-2.0",
+    "layer2_fixture_sha256": {
+      "conflict-resolution-multi.json": "15ac557c12d8758f4f3b07673bb6343a2fabcb734d4c9c27aa80f9d81067a583",
+      "context-continuity.json": "29b0a22e15d782ddfa1e467db7c83c9f31897a6ab06c1622b065368c9d4a06e4",
+      "cross-agent-handoff.json": "ef518bd599ac361fde3d5650e8abe056d08187025e5d4f4ac59c546af42e702b",
+      "preference-application.json": "7d9ced648deb4a5b1782d23acdb51ca7dcb4a7402ae03512c38fc093a87521e2",
+      "redundancy-check.json": "fca35da943fa6bc5d188159c6a5e093e476a9a151e663dd9141d1db225b63548"
+    }
+  },
+  "runner": {
+    "package": "agent-memory-benchmark@3.0.0",
+    "package_json_sha256": "7d13ce46fe4a5ec39541ebc069ede829fba1052a7eba3df6a547eb86f261b02",
+    "package_lock_sha256": "e1aed2c9b0c7407016dc69dcab41043a63a041d21ea7a3601d7abbca561b754b",
+    "cli_reported_version": "2.0.0",
+    "modal_runner_sha256": "f2c7fc53e7f0b599565a6c46ad1cdc527333fccc23377fde5b17d421a1970781",
+    "adapter_sha256": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+    "node": "v22.23.2",
+    "python": "3.11.5",
+    "mcp_sdk": "1.0.4",
+    "hardware_request": {
+      "cpu": 8,
+      "memory_gib": 16,
+      "single_use_container": true
+    },
+    "fixture_directory": "/opt/amb/node_modules/agent-memory-benchmark/fixtures",
+    "tool_mapping": {
+      "store": "remember",
+      "search": "search",
+      "delete": "forget"
+    }
+  },
+  "environment": {
+    "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+    "storage": "ephemeral isolated SQLite database per run",
+    "modal_app_id": "ap-O12EcjgIq4DFGYU4vXmmy8",
+    "persistent_resources": false,
+    "resources_active_after_run": false,
+    "modal_billing": {
+      "run_usd": 0.03358104,
+      "goal_cumulative_usd_after_run": 0.14365061
+    }
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-04/amb-legacy-v3/candidates/l1-fts-punctuation-result.json",
+      "sha256": "cc37523d5e541e6adb75f2be1b4c41d228712a5aab7c2b722c337ede95780fdf"
+    },
+    {
+      "path": "runs/2026-08-04/amb-legacy-v3/candidates/l1-fts-punctuation-receipt.json",
+      "sha256": "5792d58c13a6291b6166cac1c2137ac999d76d2bcc98c51969b7ef200c1215a3"
+    }
+  ],
+  "metrics": {
+    "layer1_overall": 75.0,
+    "layer1_categories": {
+      "factual-recall": 100.0,
+      "semantic-search": 62.5,
+      "temporal-reasoning": 42.857142857142854,
+      "conflict-resolution": 85.71428571428571,
+      "selective-forgetting": 83.33333333333334,
+      "cross-session": 71.42857142857143,
+      "multi-agent": null,
+      "cost-efficiency": 100.0
+    },
+    "comparison": {
+      "baseline_layer1_overall": 75.0,
+      "delta_layer1_overall": 0.0,
+      "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822"
+    }
+  },
+  "limitations": [
+    "This is the historical AlekseiMarchenko v3 harness, not the current Vectorize AMB RAG/judge harness.",
+    "The upstream runner performs binary keyword scoring and is not an LLM QA benchmark.",
+    "The published package CLI version string disagrees with its package version.",
+    "The multi-agent category is skipped because the generic adapter advertises no multi-agent capability.",
+    "The result is a matched protocol A/B acceptance, not a leaderboard or SOTA claim."
+  ],
+  "disallowed_claims": [
+    "Do not call 75/100 #1, SOTA, or an official current leaderboard result.",
+    "Do not compare this clean generic adapter result with calibrated historical AMB scores.",
+    "Do not attribute the gain to the adapter or to benchmark-specific behavior."
+  ]
+}

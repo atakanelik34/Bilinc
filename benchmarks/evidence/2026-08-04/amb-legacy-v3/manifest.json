@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "benchmark": "amb-legacy-v3-layer1-layer2",
+  "lane": "product-core",
+  "evidence_status": "reproducible",
+  "git": {
+    "commit": "e15502313d369664d3c5075f7c19ad9b5cf3ba21",
+    "worktree": "codex/bilinc-benchmark-dominance-20260804",
+    "dirty_at_run": true,
+    "product_code_changed": false,
+    "benchmark_adapter_hash": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761"
+  },
+  "dataset": {
+    "source": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+    "release": "v3.0.0",
+    "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+    "package_tarball_sha256": "038345777409ff4097cceae44cc2337eed534e88ef946e5adb70da5309b082ae",
+    "license": "Apache-2.0",
+    "layer1_tests": 56,
+    "layer2_fixtures": 5,
+    "fixture_integrity": "matches upstream v3.0.0 package fixture hashes"
+  },
+  "runner": {
+    "package": "agent-memory-benchmark@3.0.0",
+    "package_json_sha256": "7d13ce46fe4a5ec39541ebec069ede829fba1052a7eba3df6a547eb86f261b02",
+    "package_lock_sha256": "e1aed2c9b0c7407016dc69dcab41043a63a041d21ea7a3601d7abbca561b754b",
+    "cli_reported_version": "2.0.0",
+    "version_mismatch_note": "Published package is 3.0.0 while dist CLI reports 2.0.0; kept as an explicit protocol caveat.",
+    "node": "v26.5.0",
+    "mcp_sdk": "1.0.4",
+    "adapter_command": "python3 /private/tmp/bilinc-goal-20260804/benchmarks/adapters/amb_generic_mcp.py --db-path <isolated-run-db>",
+    "tool_mapping": {"store": "remember", "search": "search", "delete": "forget"}
+  },
+  "environment": {
+    "python": "3.11.7",
+    "bilinc_dependency_source": "goal worktree src/ at baseline commit plus frozen generic adapter",
+    "storage": "isolated SQLite database per run",
+    "hardware": "local macOS; no Modal compute"
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-04/amb-legacy-v3/baseline-l1/results.json",
+      "sha256": "ffa5b0af8118c99bf24f103219378ed2bde2b06f28560fc980f632fbcc7d26da"
+    },
+    {
+      "path": "runs/2026-08-04/amb-legacy-v3/baseline-l2/results.json",
+      "sha256": "1cb9b80c30b0aea37b416d07354efb39b19ca02749a04e9846ea656660affcae"
+    }
+  ],
+  "metrics": {
+    "layer1_overall": 75.0,
+    "layer1_categories": {
+      "factual-recall": 100.0,
+      "semantic-search": 62.5,
+      "temporal-reasoning": 42.857142857142854,
+      "conflict-resolution": 85.71428571428571,
+      "selective-forgetting": 83.33333333333334,
+      "cross-session": 71.42857142857143,
+      "multi-agent": null,
+      "cost-efficiency": 100.0
+    },
+    "multi_agent_status": "skipped because the generic adapter advertises no multi-agent capability",
+    "layer2_overall": 40.0,
+    "layer2_passed": 2,
+    "layer2_total": 5,
+    "layer2_failed": ["context-continuity", "cross-agent-handoff", "preference-application"]
+  },
+  "limitations": [
+    "This is the historical AlekseiMarchenko v3 harness, not the current Vectorize AMB RAG/judge harness.",
+    "The upstream runner performs binary keyword scoring and is not an LLM QA benchmark.",
+    "The published package's CLI version string disagrees with its package version.",
+    "The multi-agent category is skipped, so the 75/100 score is not a full eight-category execution.",
+    "This baseline used the local product-core StatePlane through a frozen generic adapter; it is not a leaderboard claim."
+  ],
+  "disallowed_claims": [
+    "Do not call 75/100 or 40/100 #1, SOTA, or an official current leaderboard result.",
+    "Do not compare this score to the historical calibrated 94/100 or 100/100 artifacts as if the protocols matched.",
+    "Do not attribute any future improvement to the adapter or to benchmark-specific keyword behavior."
+  ]
+}

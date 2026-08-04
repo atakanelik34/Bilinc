@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 import json
 import time
@@ -51,8 +52,8 @@ class StatePlane:
     SESSION_SUMMARY_MIN_TOKENS = 120
     SESSION_SUMMARY_MAX_HIGHLIGHTS = 5
     INTELLIGENT_RECALL_RRF_K = 60
-    INTELLIGENT_RECALL_LEXICAL_WEIGHT = 0.4
-    INTELLIGENT_RECALL_HYBRID_WEIGHT = 0.4
+    INTELLIGENT_RECALL_LEXICAL_WEIGHT = 0.25
+    INTELLIGENT_RECALL_HYBRID_WEIGHT = 0.55
     INTELLIGENT_RECALL_ENTITY_WEIGHT = 0.2
     REFLECTION_DEFAULT_THRESHOLD = 0.55
     REFLECTION_MAX_PASSES = 3
@@ -609,6 +610,7 @@ class StatePlane:
                 bucket = signals.setdefault(key, {"lexical": 0.0, "hybrid": 0.0, "entity": 0.0, "entity_rrf": 0.0})
                 bucket["entity"] = boost
 
+            self._apply_current_state_boost(query, fused_scores, candidates)
             ranked_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]]
             claims_by_key = await self._active_claims_by_memory_key(ranked_keys) if explain else {}
             results = []
@@ -1267,13 +1269,29 @@ class StatePlane:
         tokens = set(self._tokenize_query(query))
         if not tokens:
             return []
+        # Use corpus specificity as a bounded tie-breaker. Coverage remains
+        # primary, while ubiquitous conversational words no longer decide the
+        # order when several memories match the same number of query terms.
+        document_frequency = {
+            token: sum(
+                1
+                for entry in candidates.values()
+                if token in f"{entry.key} {entry.value}".lower()
+            )
+            for token in tokens
+        }
+        corpus_size = len(candidates)
         scored: List[tuple[str, float]] = []
         for key, entry in candidates.items():
             text = f"{entry.key} {entry.value}".lower()
-            overlap = sum(1 for token in tokens if token in text)
-            if overlap <= 0:
+            matching_tokens = [token for token in tokens if token in text]
+            if not matching_tokens:
                 continue
-            score = overlap + (entry.importance * 0.1)
+            specificity = sum(
+                math.log((corpus_size + 1) / (document_frequency[token] + 1))
+                for token in matching_tokens
+            )
+            score = len(matching_tokens) + (specificity * 0.1) + (entry.importance * 0.1)
             scored.append((key, score))
         scored.sort(key=lambda kv: kv[1], reverse=True)
         return [k for k, _ in scored]
@@ -1287,6 +1305,33 @@ class StatePlane:
             return [meta.get("key") for _, _, meta in results if meta.get("key")]
         except Exception:
             return []
+
+    def _apply_current_state_boost(
+        self,
+        query: str,
+        fused_scores: Dict[str, float],
+        candidates: Dict[str, MemoryEntry],
+    ) -> None:
+        """Prefer newer evidence when the query explicitly asks for current state."""
+        query_tokens = set(self._tokenize_query(query))
+        if "current" not in query_tokens:
+            return
+
+        timestamps = {
+            key: max(float(entry.updated_at or 0.0), float(entry.created_at or 0.0))
+            for key, entry in candidates.items()
+            if key in fused_scores
+        }
+        if len(timestamps) < 2:
+            return
+        oldest = min(timestamps.values())
+        newest = max(timestamps.values())
+        span = newest - oldest
+        if span <= 0:
+            return
+        for key, timestamp in timestamps.items():
+            normalized_recency = (timestamp - oldest) / span
+            fused_scores[key] += 0.02 * normalized_recency
 
     def _compute_entity_boosts(self, query: str, candidates: Dict[str, MemoryEntry]) -> Dict[str, float]:
         boosts: Dict[str, float] = {key: 0.0 for key in candidates}

@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "benchmark": "amb-legacy-v3-layer1-layer2-current-only-idf-candidate",
+  "lane": "product-core",
+  "evidence_status": "reproducible",
+  "git": {
+    "commit": "e15502313d369664d3c5075f7c19ad9b5cf3ba21",
+    "worktree": "codex/bilinc-benchmark-dominance-20260804",
+    "dirty_at_run": true,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "6a8e0c893abce5933bffa1a8226aa5f08f0c23ae35b079c1d943de103bc9b91d",
+      "src/bilinc/core/vector_search.py": "e853b1c194a9c06b582089b0fba1a6f4ff038990fc6e4a4b7c247326571e9222"
+    },
+    "benchmark_adapter_hash": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761"
+  },
+  "dataset": {
+    "source": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+    "release": "v3.0.0",
+    "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+    "package_tarball_sha256": "038345777409ff4097cceae44cc2337eed534e88ef946e5adb70da5309b082ae",
+    "license": "Apache-2.0"
+  },
+  "runner": {
+    "package": "agent-memory-benchmark@3.0.0",
+    "package_json_sha256": "7d13ce46fe4a5ec39541ebc069ede829fba1052a7eba3df6a547eb86f261b02",
+    "package_lock_sha256": "e1aed2c9b0c7407016dc69dcab41043a63a041d21ea7a3601d7abbca561b754b",
+    "cli_reported_version": "2.0.0",
+    "modal_runner_sha256": "f2c7fc53e7f0b599565a6c46ad1cdc527333fccc23377fde5b17d421a1970781",
+    "adapter_sha256": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+    "node": "v22.23.2",
+    "python": "3.11.5",
+    "mcp_sdk": "1.0.4",
+    "hardware_request": {"cpu": 8, "memory_gib": 16, "single_use_container": true},
+    "fixture_directory": "/opt/amb/node_modules/agent-memory-benchmark/fixtures"
+  },
+  "environment": {
+    "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+    "storage": "ephemeral isolated SQLite database per run",
+    "modal_app_ids": ["ap-EMnvZJTVrsFfivKF2G5DwO", "ap-wizvXLiMoX6DburByKQ4uc"],
+    "persistent_resources": false,
+    "resources_active_after_run": false,
+    "modal_billing": {
+      "runs_usd": 0.03799873,
+      "goal_cumulative_usd_after_run": 0.28272044
+    }
+  },
+  "raw_results": [
+    {"path": "runs/2026-08-04/amb-legacy-v3/candidates/l2-current-only-idf-result.json", "sha256": "56db4011083da06b30675a67de80146d7f1bd54451740e66940fbba986de18ac"},
+    {"path": "runs/2026-08-04/amb-legacy-v3/candidates/l2-current-only-idf-receipt.json", "sha256": "81ef46504182a06baec494e5c94996a99b0d82e00177f5927ede04ebf574acb3"},
+    {"path": "runs/2026-08-04/amb-legacy-v3/candidates/l1-current-only-idf-result.json", "sha256": "46559a1003bc19cc3f0a9843f29d9ce7b374a5c9bb1596fb03fbf89f9230d193"},
+    {"path": "runs/2026-08-04/amb-legacy-v3/candidates/l1-current-only-idf-receipt.json", "sha256": "4d94166d2c6750bfa11a287321e617c42c2b8f4c6c5e40d1e1ea0de9b0d6f7f1"}
+  ],
+  "metrics": {
+    "layer1_overall": 75.0,
+    "layer1_categories": {
+      "factual-recall": 100.0,
+      "semantic-search": 62.5,
+      "temporal-reasoning": 42.857142857142854,
+      "conflict-resolution": 85.71428571428571,
+      "selective-forgetting": 83.33333333333334,
+      "cross-session": 71.42857142857143,
+      "multi-agent": null,
+      "cost-efficiency": 100.0
+    },
+    "layer2_overall": 40.0,
+    "layer2_passed": 2,
+    "layer2_total": 5,
+    "baseline_delta_layer1_overall": 0.0,
+    "baseline_delta_layer2_overall": 0.0,
+    "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822"
+  },
+  "limitations": [
+    "Historical v3 binary keyword harness; not current Vectorize AMB RAG/judge.",
+    "Multi-agent category is skipped by the generic adapter.",
+    "Matched product-core A/B result, not a leaderboard or SOTA claim."
+  ],
+  "disallowed_claims": [
+    "Do not call 75/100 Layer 1 or 40/100 Layer 2 #1, SOTA, or an official current leaderboard result.",
+    "Do not compare this clean generic adapter result with calibrated historical AMB scores.",
+    "Do not attribute the result to the adapter or benchmark-specific behavior."
+  ]
+}
