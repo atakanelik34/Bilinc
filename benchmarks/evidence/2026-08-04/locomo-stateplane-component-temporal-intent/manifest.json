@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "benchmark": "locomo-official-retrieval-component-stateplane-temporal-intent-v1",
+  "lane": "component",
+  "evidence_status": "reproducible",
+  "decision": "rejected-ndcg-regression",
+  "git": {
+    "commit": "ca846e4e4575bfdc3ed98140f8631ab040136917",
+    "worktree": "codex/bilinc-benchmark-dominance-20260804",
+    "dirty_at_run": false,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "911f18ef0f750bd8064480b64b359419114c6fa1b73d61540be94160b7393fe4",
+      "tests/test_recall_lexical.py": "e1620e0dba09055702902d2f1b0f2d6f9c745e9d4c15ce66e869ee0311120095"
+    },
+    "adapter": "none; direct public StatePlane API"
+  },
+  "dataset": {
+    "source": "https://github.com/snap-research/locomo",
+    "release": "main at freeze",
+    "release_commit": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+    "url": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
+    "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "license": "CC BY-NC 4.0",
+    "conversations": 10,
+    "qa_total": 1986,
+    "qa_scored": 1977,
+    "memories": 5882
+  },
+  "runner": {
+    "modal_runner_sha256": "eb584bf4fad0971ceedb3332ffcb3d1905242c690046d6bf18c781b643f1a5ad",
+    "component_runner_sha256": "c4d0966c2b57d51dd305899a31aefca14dce27612410a406bbd1f8d3ab68b879",
+    "protocol_sha256": "2079673158e09814d978fe33da2638097df321ba1f88d35b5cf0f439c89d42a2",
+    "baseline_mode": "BILINC_CURRENT_STATE_INTENTS=legacy",
+    "candidate_mode": "BILINC_CURRENT_STATE_INTENTS=enabled",
+    "same_container_ab": true,
+    "top_k": 5,
+    "scope": "one isolated SQLite-backed StatePlane per conversation",
+    "ingestion": "official raw conversation turns only",
+    "retrieval": "StatePlane.recall_intelligent public API",
+    "qa_or_observation_projection": false,
+    "benchmark_specific_query_expansion": false,
+    "metrics": "Hit@5, evidence recall@5, normalized binary NDCG@5"
+  },
+  "environment": {
+    "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.41",
+    "python": "3.11.15",
+    "modal_app_id": "ap-NhSWHN8OR5nTgQAAJrW5C3",
+    "persistent_resources": false,
+    "resources_active_after_run": false,
+    "modal_billing": {"run_usd": 0.01301394, "goal_cumulative_usd_after_run": 0.65812383},
+    "package_versions": {"bilinc": "2.1.7", "certifi": "2026.7.22"}
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-04/locomo-stateplane-component/candidates/temporal-intent-modal-pair-receipt.json",
+      "sha256": "f985980a00530fcb8129574225a2456ef87189eaf27e51d64f490035092c0ea3"
+    }
+  ],
+  "metrics": {
+    "questions": 1977,
+    "memories": 5882,
+    "baseline": {
+      "hit_at_5": 0.5164390490642388,
+      "evidence_recall_at_5": 0.47362317422792294,
+      "ndcg_at_5": 0.39265264312998693
+    },
+    "candidate": {
+      "hit_at_5": 0.5164390490642388,
+      "evidence_recall_at_5": 0.47362317422792294,
+      "ndcg_at_5": 0.391766556090726
+    },
+    "candidate_delta": {
+      "hit_at_5": 0.0,
+      "evidence_recall_at_5": 0.0,
+      "ndcg_at_5": -0.0008860870392609077
+    },
+    "category_metrics": {
+      "adversarial": {
+        "n": 446,
+        "baseline": {"hit_at_5": 0.5134529147982063, "evidence_recall_at_5": 0.5089686098654709, "ndcg_at_5": 0.4092371019267983},
+        "candidate": {"hit_at_5": 0.5134529147982063, "evidence_recall_at_5": 0.5089686098654709, "ndcg_at_5": 0.4085344104732926}
+      },
+      "multi-hop": {
+        "n": 320,
+        "baseline": {"hit_at_5": 0.61875, "evidence_recall_at_5": 0.5940104166666667, "ndcg_at_5": 0.5043195498170614},
+        "candidate": {"hit_at_5": 0.61875, "evidence_recall_at_5": 0.5940104166666667, "ndcg_at_5": 0.5043195498170614}
+      },
+      "open-domain": {
+        "n": 841,
+        "baseline": {"hit_at_5": 0.5505350772889417, "evidence_recall_at_5": 0.536662703131193, "ndcg_at_5": 0.44262215319782333},
+        "candidate": {"hit_at_5": 0.5505350772889417, "evidence_recall_at_5": 0.536662703131193, "ndcg_at_5": 0.44091181587516554}
+      },
+      "single-hop": {
+        "n": 281,
+        "baseline": {"hit_at_5": 0.3807829181494662, "evidence_recall_at_5": 0.18550720730436038, "ndcg_at_5": 0.17084724685426012},
+        "candidate": {"hit_at_5": 0.3807829181494662, "evidence_recall_at_5": 0.18550720730436038, "ndcg_at_5": 0.17084724685426012}
+      },
+      "temporal": {
+        "n": 89,
+        "baseline": {"hit_at_5": 0.2696629213483146, "evidence_recall_at_5": 0.1776272306675479, "ndcg_at_5": 0.1361681445141189},
+        "candidate": {"hit_at_5": 0.2696629213483146, "evidence_recall_at_5": 0.1776272306675479, "ndcg_at_5": 0.1361681445141189}
+      }
+    },
+    "wall_seconds": {"baseline": 48.666, "candidate": 47.788}
+  },
+  "limitations": [
+    "Retrieval component only; not official end-to-end QA/F1.",
+    "Conversation-isolated scope; not global retrieval.",
+    "Candidate was rejected because normalized NDCG regressed despite flat Hit@5 and evidence recall.",
+    "No LongMemEval score is inferred from this lane; its frozen guard remains separate."
+  ],
+  "disallowed_claims": [
+    "Do not call this an improvement.",
+    "Do not call this #1 or SOTA or compare across different scopes, metrics, or generation protocols.",
+    "Do not treat this as the official QA lane."
+  ]
+}

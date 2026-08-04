@@ -40,7 +40,7 @@
     "modal_app_id": "ap-LIO8owoxgOSCE3U72VkAw4",
     "persistent_resources": false,
     "resources_active_after_run": false,
-    "modal_billing": {"run_usd": 0.07065721, "goal_cumulative_usd_after_run": 0.64201524},
+    "modal_billing": {"run_usd": 0.07375186, "goal_cumulative_usd_after_run": 0.65812383},
     "package_versions": {"bilinc": "2.1.7", "mcp": "1.29.0"}
   },
   "raw_results": [
