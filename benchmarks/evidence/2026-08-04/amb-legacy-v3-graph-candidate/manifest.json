@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "benchmark": "amb-legacy-v3-graph-candidate",
+  "lane": "product-core",
+  "evidence_status": "reproducible",
+  "decision": "rejected-no-target-gain",
+  "git": {
+    "commit": "e5efa69d7e6d8f404e7a904f22e9f295f515e3ce",
+    "worktree": "codex/bilinc-benchmark-dominance-20260804",
+    "dirty_at_run": false,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "596b1e307a65d7a4b79dc5a0e51299ee63d1b269c68a5c8694a2937e18701e15",
+      "src/bilinc/core/knowledge_graph.py": "da3090a3873ccfb8f2c8d4d17db534970e1bea520ed042706ae6b8a31e7293af"
+    },
+    "adapter": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761"
+  },
+  "dataset": {
+    "source": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+    "release": "v3.0.0",
+    "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+    "license": "Apache-2.0",
+    "layer1_tests": 56,
+    "layer2_scenarios": 5,
+    "fixture_protocol": "frozen by benchmarks/protocols/2026-08-04/freeze.json"
+  },
+  "runner": {
+    "modal_runner_sha256": "3dab1c8c16b1dd0395cc640f86e78d068941d91dbd85ddae0292fe0720d9099b",
+    "protocol_sha256": "63a07fd34f9bc49ef3c75181f2c1ed9a448e31877dc48113146e6c4b994c0020",
+    "adapter_sha256": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+    "baseline_mode": "BILINC_GRAPH_RECALL unset",
+    "candidate_mode": "BILINC_GRAPH_RECALL=1",
+    "same_container_ab": true,
+    "store_delay_seconds": 3.0
+  },
+  "environment": {
+    "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+    "python": "3.11.5",
+    "node": "v22.23.2",
+    "modal_app_id": "ap-ycblhRQUU6O3HVAYCHvGLM",
+    "persistent_resources": false,
+    "resources_active_after_run": false,
+    "modal_billing": {"run_usd": 0.07019728, "goal_cumulative_usd_after_run": 0.40370022}
+  },
+  "raw_results": [
+    {"path": "runs/2026-08-04/amb-legacy-v3/candidates/graph-pair-receipt.json", "sha256": "dd827a5def677ff103a35a28465e17f911ef9b80a944f706c2d35a1a631e890b"}
+  ],
+  "metrics": {
+    "baseline": {"layer1_overall": 75.0, "layer2_overall": 40.0, "layer2_passed": 2, "layer2_total": 5},
+    "candidate": {"layer1_overall": 75.0, "layer2_overall": 40.0, "layer2_passed": 2, "layer2_total": 5},
+    "delta": {"layer1_overall": 0.0, "layer2_overall": 0.0},
+    "layer1_categories": {
+      "factual-recall": {"baseline": 100.0, "candidate": 100.0},
+      "semantic-search": {"baseline": 62.5, "candidate": 62.5},
+      "temporal-reasoning": {"baseline": 42.857142857142854, "candidate": 42.857142857142854},
+      "conflict-resolution": {"baseline": 85.71428571428571, "candidate": 85.71428571428571},
+      "selective-forgetting": {"baseline": 83.33333333333334, "candidate": 83.33333333333334},
+      "cross-session": {"baseline": 71.42857142857143, "candidate": 71.42857142857143},
+      "cost-efficiency": {"baseline": 100.0, "candidate": 100.0}
+    },
+    "layer1_wall_seconds": {"baseline": 233.817, "candidate": 233.406},
+    "layer2_wall_seconds": {"baseline": 25.081, "candidate": 24.94}
+  },
+  "limitations": [
+    "Historical AMB v3 binary harness; not current Vectorize AMB RAG/judge.",
+    "Graph ranking changed some returned orderings but did not improve any official category score.",
+    "Candidate is rejected and must not be treated as the current Bilinc product state."
+  ],
+  "disallowed_claims": [
+    "Do not call this a benchmark improvement.",
+    "Do not call this #1 or SOTA.",
+    "Do not compare this historical harness with current Vectorize AMB results."
+  ]
+}
