@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time
 import re
-from collections import defaultdict
+from collections import defaultdict, deque
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -225,6 +225,57 @@ class KnowledgeGraph:
             return []
         keys = sorted(self._entity_to_memories.get(entity, set()))
         return keys[: max(limit, 0)]
+
+    def related_memory_keys(
+        self,
+        memory_key: str,
+        max_depth: int = 2,
+        limit: int = 20,
+    ) -> List[Tuple[str, int, float]]:
+        """Return bounded bidirectional memory links with depth and path weight.
+
+        Only fact nodes that have been indexed as memory/entity projections are
+        returned. Entity nodes and unbounded graph walks never become recall
+        candidates. This keeps graph-assisted retrieval deterministic and
+        prevents a highly connected entity from broadening every query.
+        """
+        if not memory_key or max_depth <= 0 or limit <= 0 or memory_key not in self.graph:
+            return []
+
+        memory_nodes = set(self._memory_to_entities)
+        queue = deque([(memory_key, 0, 1.0)])
+        visited = {memory_key}
+        results: List[Tuple[str, int, float]] = []
+
+        while queue and len(results) < limit:
+            node, depth, path_weight = queue.popleft()
+            if depth >= max_depth:
+                continue
+            neighbors = set(self.graph.successors(node)) | set(self.graph.predecessors(node))
+            for neighbor in sorted(neighbors):
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                if neighbor not in memory_nodes:
+                    continue
+
+                edge_weights: List[float] = []
+                for source, target in ((node, neighbor), (neighbor, node)):
+                    edge_data = self.graph.get_edge_data(source, target, default={})
+                    edge_weights.extend(
+                        float(attrs.get("weight", 1.0))
+                        for attrs in edge_data.values()
+                        if isinstance(attrs, dict)
+                    )
+                edge_weight = max(edge_weights, default=1.0)
+                next_depth = depth + 1
+                next_path_weight = path_weight * edge_weight
+                results.append((neighbor, next_depth, next_path_weight))
+                queue.append((neighbor, next_depth, next_path_weight))
+                if len(results) >= limit:
+                    break
+
+        return results
 
     def memory_entities(self, memory_key: str) -> List[str]:
         """Return entities linked to a memory key."""

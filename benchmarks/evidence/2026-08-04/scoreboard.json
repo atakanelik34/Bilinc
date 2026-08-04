@@ -262,6 +262,43 @@
       "limitations": ["Retrieval component only; not official end-to-end QA/F1.", "Conversation-isolated scope; not global retrieval.", "No public leaderboard position is claimed."]
     },
     {
+      "benchmark_id": "locomo-official-retrieval-component-stateplane-semantic-candidate",
+      "lane": "component",
+      "status": "valid-candidate-accepted",
+      "comparability_group": "locomo-official-raw-turn-stateplane-semantic-v1",
+      "protocol_hash": "5affd6e5b0ed7b0a8a426fda8026dc5f11b170ecc88b82a5695cd5563a0239b2",
+      "dataset_hash": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+      "source_commit": "8f3c5c54e7acb936967659a1dd0dcc749cb6c827",
+      "candidate_product_files": {
+        "src/bilinc/core/stateplane.py": "e5db6c319d5c0cafdbed5c13b875ab455601b99a3e76e61f0e9bc53b5ae8b577",
+        "src/bilinc/core/vector_search.py": "79285d2e9a3d7696d25ce60c619d16b1f2cc8988dcc00da4281c9bcf833de04a",
+        "pyproject.toml": "f77afa1353acebcbab28304dfa43d5865d20a2837adf15641a8e1fe926cd76ad",
+        "tests/test_vector_search.py": "38872fb03ade38681b420e26d2de2594e95ac5d3f7c3f1f705d4dbc7aafc9b27"
+      },
+      "adapter_hash": "none; direct public StatePlane API",
+      "metrics": {
+        "questions": 1977,
+        "memories": 5882,
+        "baseline": {"hit_at_5": 0.5164390490642388, "evidence_recall_at_5": 0.47362317422792294, "ndcg_at_5": 0.39265264312998693},
+        "candidate": {"hit_at_5": 0.5427415275670208, "evidence_recall_at_5": 0.497768905695354, "ndcg_at_5": 0.4128465117610378},
+        "candidate_delta": {"hit_at_5": 0.026302478502782, "evidence_recall_at_5": 0.02414573146743106, "ndcg_at_5": 0.02019386863105085}
+      },
+      "category_metrics": {
+        "adversarial": {"n": 446, "hit_at_5": 0.5381165919282511, "evidence_recall_at_5": 0.5336322869955157, "ndcg_at_5": 0.41441297944734135},
+        "multi-hop": {"n": 320, "hit_at_5": 0.634375, "evidence_recall_at_5": 0.6096354166666667, "ndcg_at_5": 0.5307680177500234},
+        "open-domain": {"n": 841, "hit_at_5": 0.5766944114149821, "evidence_recall_at_5": 0.5616329766151408, "ndcg_at_5": 0.4652215105035705},
+        "single-hop": {"n": 281, "hit_at_5": 0.4199288256227758, "evidence_recall_at_5": 0.21481721125849246, "ndcg_at_5": 0.1987367926229455},
+        "temporal": {"n": 89, "hit_at_5": 0.30337078651685395, "evidence_recall_at_5": 0.20571711830799733, "ndcg_at_5": 0.1621041592977632}
+      },
+      "hardware": "Modal 8 requested CPU cores, 16 GiB memory; container reported 24 CPUs",
+      "latency_seconds": {"baseline": 39.472, "candidate": 103.877},
+      "cost_usd": 0.02497179,
+      "raw_result_hashes": ["3e356fda656f29ee33860a1ef56b96146fefcb71c0ee31901c24c2e545cbb489"],
+      "evidence_path": "benchmarks/evidence/2026-08-04/locomo-stateplane-component-semantic/manifest.json",
+      "model": {"id": "sentence-transformers/all-MiniLM-L6-v2", "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41", "manifest_sha256": "2db4942727d159bcf555eead73a5e1384c197f72bfae286b7994267f8620b92a"},
+      "limitations": ["Retrieval component only; not official end-to-end QA/F1.", "Conversation-isolated scope; not global retrieval.", "Opt-in local semantic model; no public leaderboard position is claimed."]
+    },
+    {
       "benchmark_id": "amb-current-vectorize-rag",
       "lane": "invalid",
       "status": "blocked-paid-judge",
