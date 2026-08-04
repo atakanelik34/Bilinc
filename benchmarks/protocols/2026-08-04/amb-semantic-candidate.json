@@ -24,7 +24,7 @@
   },
   "runner": {
     "path": "benchmarks/modal/amb_semantic_candidate_runner.py",
-    "sha256": "e09c90b8ba96f4b0319f7b59971509860ab6911aea993f3cb9028525116fb7e4",
+    "sha256": "974f318d6d897795894779f6cc3ddb73ac0c3323a311c9b70103408800365774",
     "baseline_mode": "BILINC_SEMANTIC_MODEL unset",
     "candidate_mode": "BILINC_SEMANTIC_MODEL explicitly set to the pinned local model",
     "same_container_ab": true,

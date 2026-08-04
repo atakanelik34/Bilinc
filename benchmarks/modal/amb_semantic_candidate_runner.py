@@ -98,7 +98,7 @@ def _sha256(path: Path) -> str:
 
 
 def _model_manifest() -> dict[str, Any]:
-    snapshot = Path.home() / ".cache" / "huggingface" / (
+    snapshot = Path.home() / ".cache" / "huggingface" / "hub" / (
         "models--sentence-transformers--all-MiniLM-L6-v2"
     ) / "snapshots" / MODEL_REVISION
     files: dict[str, str] = {}
@@ -117,6 +117,16 @@ def _model_manifest() -> dict[str, Any]:
     if manifest_sha256 != MODEL_MANIFEST_SHA256:
         raise RuntimeError(f"model manifest mismatch: {manifest_sha256}")
     return {"model_id": MODEL_ID, "revision": MODEL_REVISION, "manifest_sha256": manifest_sha256, "files": files}
+
+
+def _ensure_model_ready() -> dict[str, Any]:
+    """Materialize and validate the pinned model before any benchmark scoring."""
+    _set_semantic(True)
+    from sentence_transformers import SentenceTransformer
+
+    model = SentenceTransformer(MODEL_ID, device="cpu", revision=MODEL_REVISION)
+    del model
+    return _model_manifest()
 
 
 def _package_versions() -> dict[str, str]:
@@ -211,6 +221,7 @@ def _run_layer(layer: int, semantic_enabled: bool, store_delay_seconds: float) -
 )
 def run_amb_pair(store_delay_seconds: float = 3.0) -> dict[str, Any]:
     """Run both AMB layers with semantic baseline and candidate in one container."""
+    model_manifest = _ensure_model_ready()
     results: dict[str, dict[str, Any]] = {}
     for layer in (1, 2):
         for label, enabled in (("baseline_disabled", False), ("candidate_semantic", True)):
@@ -221,7 +232,7 @@ def run_amb_pair(store_delay_seconds: float = 3.0) -> dict[str, Any]:
         "goal_id": GOAL_ID,
         "benchmark": BENCHMARK_ID,
         "store_delay_seconds": store_delay_seconds,
-        "model": _model_manifest(),
+        "model": model_manifest,
         "product_files": {
             "src/bilinc/core/stateplane.py": _sha256(REMOTE_REPO / "src/bilinc/core/stateplane.py"),
             "src/bilinc/core/vector_search.py": _sha256(REMOTE_REPO / "src/bilinc/core/vector_search.py"),
