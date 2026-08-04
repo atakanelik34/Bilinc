@@ -16,7 +16,7 @@ def test_public_product_truth_matches_the_shipped_cloud_surface() -> None:
 
     payload = json.loads(manifest.read_text())
     assert payload["package"]["name"] == "bilinc"
-    assert payload["package"]["version"] == "2.1.7"
+    assert payload["package"]["version"] == "2.1.8"
     assert payload["cloud_mcp"]["tools"] == [
         "commit_mem",
         "recall",
@@ -30,9 +30,9 @@ def test_public_product_truth_matches_the_shipped_cloud_surface() -> None:
     benchmark = payload["benchmark_claims"]
     assert benchmark["state"] == "historical_scoped"
     assert benchmark["public_approved"] is True
-    assert benchmark["label"] == "Archived research receipt"
+    assert benchmark["label"] == "Frozen regression receipt"
     assert benchmark["scope"] == "LongMemEval-s cleaned retrieval fixture, 500 questions"
-    assert benchmark["metrics"] == {"legacy_r_at_5": "98.0%", "legacy_ndcg_at_5": "0.933"}
+    assert benchmark["metrics"] == {"hit_at_5": "98.0%", "ndcg_at_5": "0.913"}
     assert "not a current hosted SLA" in benchmark["qualification"]
 
 

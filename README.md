@@ -12,9 +12,9 @@
 
 Retrieval answers *"what is similar to this?"*. Long-running agents also need to answer *"who wrote this state, was it verified, did it contradict what we already knew, and can we undo it?"* — that is the layer Bilinc provides.
 
-Bilinc 2.1.7 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
+Bilinc 2.1.8 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
 
-> **Archived research receipt** — LongMemEval-s cleaned retrieval fixture, 500 questions: **R@5 98.0%**, **NDCG@5 0.933**, no LLM reranker, no paid API. This is a retrieval-component result, not a current hosted SLA, end-to-end agent score, or competitor ranking — see [Benchmark receipt](#benchmark-receipt) for the full scope and qualification.
+> **Frozen regression receipt** — LongMemEval-s cleaned retrieval fixture, 500 questions: **Hit@5 98.0%**, **NDCG@5 0.913**, no LLM reranker, no paid API. This is an isolated retrieval guardrail, not a current hosted SLA, end-to-end agent score, or competitor ranking — see [Benchmark receipt](#benchmark-receipt) for the full scope and qualification.
 
 ## Use Bilinc when
 
@@ -183,13 +183,13 @@ refused with `409 idempotency_conflict`.
 
 ## Benchmark receipt
 
-Archived research receipt, LongMemEval-s cleaned retrieval fixture, 500 questions:
-**R@5 98.0%**, **NDCG@5 0.933**, with no LLM reranker and no paid API.
+Frozen regression receipt, LongMemEval-s cleaned retrieval fixture, 500 questions:
+**Hit@5 98.0%**, **NDCG@5 0.913**, with no LLM reranker and no paid API.
 
-This is an archived retrieval-component result — not a current hosted SLA, not an
+This is a frozen isolated retrieval guardrail — not a current hosted SLA, not an
 end-to-end agent score, and not a competitor ranking. Published memory-system
 scores use different metrics, datasets, and levels of LLM assistance, so they are
-not directly comparable. Present this receipt only with this scope attached.
+not directly comparable. Present this receipt only with this isolated scope attached.
 
 ## Compare
 
