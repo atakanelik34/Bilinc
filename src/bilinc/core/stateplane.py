@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-import os
 import re
 import json
 import time
@@ -59,9 +58,6 @@ class StatePlane:
     # Explicitly enabled local semantic retrieval is a small additive signal;
     # the default path remains unchanged when no semantic model is configured.
     INTELLIGENT_RECALL_SEMANTIC_WEIGHT = 0.05
-    CURRENT_STATE_QUERY_TOKENS = frozenset(
-        {"current", "currently", "now", "latest", "newest", "present"}
-    )
     REFLECTION_DEFAULT_THRESHOLD = 0.55
     REFLECTION_MAX_PASSES = 3
     RECALL_EXPLAIN_SENSITIVE_KEYS = {
@@ -1354,7 +1350,7 @@ class StatePlane:
     ) -> None:
         """Prefer newer evidence when the query explicitly asks for current state."""
         query_tokens = set(self._tokenize_query(query))
-        if not query_tokens.intersection(self._current_state_query_tokens()):
+        if "current" not in query_tokens:
             return
 
         timestamps = {
@@ -1372,13 +1368,6 @@ class StatePlane:
         for key, timestamp in timestamps.items():
             normalized_recency = (timestamp - oldest) / span
             fused_scores[key] += 0.02 * normalized_recency
-
-    def _current_state_query_tokens(self) -> frozenset[str]:
-        """Return current-state intent terms, with a legacy mode for matched A/B tests."""
-        mode = os.environ.get("BILINC_CURRENT_STATE_INTENTS", "enabled").strip().lower()
-        if mode in {"legacy", "disabled", "off", "0", "false"}:
-            return frozenset({"current"})
-        return self.CURRENT_STATE_QUERY_TOKENS
 
     def _compute_entity_boosts(self, query: str, candidates: Dict[str, MemoryEntry]) -> Dict[str, float]:
         boosts: Dict[str, float] = {key: 0.0 for key in candidates}
