@@ -299,6 +299,40 @@
       "limitations": ["Retrieval component only; not official end-to-end QA/F1.", "Conversation-isolated scope; not global retrieval.", "Opt-in local semantic model; no public leaderboard position is claimed."]
     },
     {
+      "benchmark_id": "locomo-official-retrieval-component-stateplane-temporal-intent-v1",
+      "lane": "component",
+      "status": "valid-candidate-rejected-ndcg-regression",
+      "comparability_group": "locomo-official-raw-turn-stateplane-component",
+      "protocol_hash": "2079673158e09814d978fe33da2638097df321ba1f88d35b5cf0f439c89d42a2",
+      "dataset_hash": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+      "source_commit": "ca846e4e4575bfdc3ed98140f8631ab040136917",
+      "candidate_product_files": {
+        "src/bilinc/core/stateplane.py": "911f18ef0f750bd8064480b64b359419114c6fa1b73d61540be94160b7393fe4",
+        "tests/test_recall_lexical.py": "e1620e0dba09055702902d2f1b0f2d6f9c745e9d4c15ce66e869ee0311120095"
+      },
+      "adapter_hash": "none; direct public StatePlane API",
+      "metrics": {
+        "questions": 1977,
+        "memories": 5882,
+        "baseline": {"hit_at_5": 0.5164390490642388, "evidence_recall_at_5": 0.47362317422792294, "ndcg_at_5": 0.39265264312998693},
+        "candidate": {"hit_at_5": 0.5164390490642388, "evidence_recall_at_5": 0.47362317422792294, "ndcg_at_5": 0.391766556090726},
+        "candidate_delta": {"hit_at_5": 0.0, "evidence_recall_at_5": 0.0, "ndcg_at_5": -0.0008860870392609077}
+      },
+      "category_metrics": {
+        "adversarial": {"n": 446, "baseline_ndcg_at_5": 0.4092371019267983, "candidate_ndcg_at_5": 0.4085344104732926, "delta_ndcg_at_5": -0.0007026914535057105},
+        "multi-hop": {"n": 320, "baseline_ndcg_at_5": 0.5043195498170614, "candidate_ndcg_at_5": 0.5043195498170614, "delta_ndcg_at_5": 0.0},
+        "open-domain": {"n": 841, "baseline_ndcg_at_5": 0.44262215319782333, "candidate_ndcg_at_5": 0.44091181587516554, "delta_ndcg_at_5": -0.0017103373226577956},
+        "single-hop": {"n": 281, "baseline_ndcg_at_5": 0.17084724685426012, "candidate_ndcg_at_5": 0.17084724685426012, "delta_ndcg_at_5": 0.0},
+        "temporal": {"n": 89, "baseline_ndcg_at_5": 0.1361681445141189, "candidate_ndcg_at_5": 0.1361681445141189, "delta_ndcg_at_5": 0.0}
+      },
+      "hardware": "Modal 8 requested CPU cores, 16 GiB memory; container reported 24 CPUs",
+      "latency_seconds": {"baseline": 48.666, "candidate": 47.788},
+      "cost_usd": 0.01301394,
+      "raw_result_hashes": ["f985980a00530fcb8129574225a2456ef87189eaf27e51d64f490035092c0ea3"],
+      "evidence_path": "benchmarks/evidence/2026-08-04/locomo-stateplane-component-temporal-intent/manifest.json",
+      "limitations": ["Retrieval component only; not official end-to-end QA/F1.", "Candidate rejected for NDCG regression; product change removed.", "No #1/SOTA claim and no comparison across different scopes or QA protocols."]
+    },
+    {
       "benchmark_id": "amb-legacy-v3-graph-candidate",
       "lane": "product-core",
       "status": "valid-candidate-rejected-no-gain",
@@ -391,7 +425,7 @@
       },
       "hardware": "Modal 8 requested CPU cores, 16 GiB memory; container reported 24 CPUs",
       "latency_seconds": {"layer1_baseline": 234.937, "layer1_candidate": 234.375, "layer2_baseline": 25.368, "layer2_candidate": 25.356},
-      "cost_usd": 0.07065721,
+      "cost_usd": 0.07375186,
       "raw_result_hashes": ["1591cfe1a900119a9f1ddcd4adfc300084e2de61586ed3168cbfec2fe554d2c6"],
       "evidence_path": "benchmarks/evidence/2026-08-04/amb-legacy-v3-temporal-intent-candidate/manifest.json",
       "limitations": ["Historical AMB v3 binary harness; not current Vectorize AMB RAG/judge.", "No AMB aggregate/category gain; retained as a general product correctness improvement with no measured regression.", "No #1/SOTA claim and no comparison with current Vectorize AMB results."]
@@ -427,9 +461,9 @@
   ],
   "modal": {
     "authorized_ceiling_usd": 30.0,
-    "cumulative_metered_usd": 0.64201524,
+    "cumulative_metered_usd": 0.65812383,
     "cumulative_conservative_estimate_usd": 26.005,
-    "remaining_metered_budget_usd": 29.35798476,
+    "remaining_metered_budget_usd": 29.34187617,
     "remaining_conservative_budget_usd": 3.995,
     "all_goal_apps_stopped": true,
     "persistent_resources_created": false
