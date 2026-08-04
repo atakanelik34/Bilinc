@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "canonical_repository": "https://github.com/atakanelik34/Bilinc",
-  "source_commit": "228d2741616b99f217855540ae474bac5d208f7c",
-  "verified_at": "2026-07-30",
+  "source_commit": "9faa58f7de1ee60128b15c0f7ca0b33bf881b5d1",
+  "verified_at": "2026-08-04",
   "package": {
     "name": "bilinc",
-    "version": "2.1.7",
+    "version": "2.1.8",
     "requires_python": ">=3.10",
     "license": "BUSL-1.1",
     "install": "pip install bilinc",
@@ -50,16 +50,16 @@
     "cloud_status": "https://bilinc.space/api/cloud/status"
   },
   "benchmark_claims": {
-    "state": "historical_scoped",
+  "state": "historical_scoped",
     "public_approved": true,
-    "label": "Archived research receipt",
+    "label": "Frozen regression receipt",
     "scope": "LongMemEval-s cleaned retrieval fixture, 500 questions",
     "metrics": {
-      "legacy_r_at_5": "98.0%",
-      "legacy_ndcg_at_5": "0.933"
+      "hit_at_5": "98.0%",
+      "ndcg_at_5": "0.913"
     },
-    "qualification": "This is an archived retrieval-component result, not a current hosted SLA, end-to-end agent score, or competitor ranking.",
-    "rule": "The archived receipt may be presented only with its retrieval-only scope and qualification; do not extend it into a current product-performance or competitor claim."
+    "qualification": "This is a frozen isolated retrieval guardrail, not a current hosted SLA, end-to-end agent score, or competitor ranking.",
+    "rule": "The receipt may be presented only with its isolated retrieval scope and qualification; do not extend it into a current product-performance or competitor claim."
   },
   "boundary": {
     "public_package": "Cloud-only SDK, CLI, and Cloud MCP adapter for hosted Bilinc Cloud.",

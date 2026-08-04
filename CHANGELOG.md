@@ -2,6 +2,15 @@
 
 All notable changes to Bilinc.
 
+## [2.1.8] — 2026-08-04
+
+### Changed
+
+- Hosted recall now defaults to the current valid state: expired, future-dated, and superseded entries are excluded from normal recall while audit callers can explicitly request stale history.
+- Preserved memory-type scope across lexical, hybrid, and optional semantic candidate paths.
+- Added neutral Cloud-runtime and retrieval regression coverage for the current-state contract.
+- Corrected the public LongMemEval receipt to the frozen verified values: Hit@5 98.0% and NDCG@5 0.913.
+
 ## [2.1.7] — 2026-08-03
 
 ### Activation telemetry

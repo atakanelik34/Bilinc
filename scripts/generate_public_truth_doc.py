@@ -57,8 +57,8 @@ Current state: `{benchmark['state']}`. Numeric benchmark claims are public-appro
 ### {benchmark['label']}
 
 - Scope: {benchmark['scope']}
-- Legacy R@5: {benchmark['metrics']['legacy_r_at_5']}
-- Legacy NDCG@5: {benchmark['metrics']['legacy_ndcg_at_5']}
+- Hit@5: {benchmark['metrics']['hit_at_5']}
+- NDCG@5: {benchmark['metrics']['ndcg_at_5']}
 
 {benchmark['qualification']}
 

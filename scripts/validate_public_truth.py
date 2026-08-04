@@ -110,12 +110,12 @@ def validate_product_truth(path: Path = MANIFEST) -> list[str]:
         errors.append("benchmark state must remain historical and scoped")
     if benchmark.get("public_approved") is not True:
         errors.append("archived benchmark receipt must be explicitly public-approved")
-    if benchmark.get("label") != "Archived research receipt":
-        errors.append("benchmark label must identify the result as archived research")
+    if benchmark.get("label") != "Frozen regression receipt":
+        errors.append("benchmark label must identify the result as a frozen regression receipt")
     if benchmark.get("scope") != "LongMemEval-s cleaned retrieval fixture, 500 questions":
         errors.append("benchmark scope must preserve the fixture boundary")
-    if benchmark.get("metrics") != {"legacy_r_at_5": "98.0%", "legacy_ndcg_at_5": "0.933"}:
-        errors.append("benchmark metrics must match the scoped archived receipt")
+    if benchmark.get("metrics") != {"hit_at_5": "98.0%", "ndcg_at_5": "0.913"}:
+        errors.append("benchmark metrics must match the scoped frozen receipt")
     qualification = benchmark.get("qualification", "")
     if not isinstance(qualification, str) or "not a current hosted SLA" not in qualification:
         errors.append("benchmark qualification must rule out current hosted SLA claims")
