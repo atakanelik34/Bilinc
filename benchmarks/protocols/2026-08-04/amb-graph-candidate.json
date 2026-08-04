@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "protocol_id": "amb-legacy-v3-graph-candidate-v1",
+  "frozen_utc": "2026-08-04T06:30:00Z",
+  "base_protocol": {
+    "path": "benchmarks/protocols/2026-08-04/freeze.json",
+    "sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+    "benchmark_id": "amb-legacy-v3-layer1-layer2",
+    "lane": "product-core"
+  },
+  "benchmark": {
+    "id": "amb-legacy-v3-graph-candidate",
+    "source_repository": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+    "release": "v3.0.0",
+    "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+    "package_version": "3.0.0",
+    "license": "Apache-2.0",
+    "layers": [1, 2],
+    "layer1_tests": 56,
+    "layer2_scenarios": 5,
+    "store_delay_seconds": 3.0,
+    "adapter": "generic MCP remember/search/forget bridge",
+    "adapter_sha256": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+    "fixtures_immutable": true,
+    "scoring_immutable": true
+  },
+  "runner": {
+    "path": "benchmarks/modal/amb_graph_candidate_runner.py",
+    "sha256": "3dab1c8c16b1dd0395cc640f86e78d068941d91dbd85ddae0292fe0720d9099b",
+    "baseline_mode": "BILINC_GRAPH_RECALL unset",
+    "candidate_mode": "BILINC_GRAPH_RECALL=1",
+    "same_container_ab": true,
+    "same_hardware_class": true
+  },
+  "source_files": {
+    "src/bilinc/core/stateplane.py": "596b1e307a65d7a4b79dc5a0e51299ee63d1b269c68a5c8694a2937e18701e15",
+    "src/bilinc/core/knowledge_graph.py": "da3090a3873ccfb8f2c8d4d17db534970e1bea520ed042706ae6b8a31e7293af",
+    "benchmarks/adapters/amb_generic_mcp.py": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761"
+  },
+  "product_configuration": {
+    "graph_weight": 0.05,
+    "max_depth": 2,
+    "seed_limit": 8,
+    "node_limit_per_seed": 20,
+    "edge_direction": "bidirectional",
+    "path_weight": "multiplicative edge weights divided by depth",
+    "semantic_model": "disabled",
+    "benchmark_specific_query_expansion": false
+  },
+  "integrity": {
+    "official_fixtures_immutable": true,
+    "official_runner_immutable": true,
+    "product_only_change": true,
+    "benchmark_specific_aliases_forbidden": true,
+    "benchmark_specific_cache_forbidden": true,
+    "answer_leakage_forbidden": true,
+    "longmemeval_runner_unchanged": true,
+    "longmemeval_dataset_unchanged": true
+  },
+  "hardware": {
+    "class": "Modal 8 requested physical CPU cores, 16 GiB requested memory",
+    "persistent_resources": false
+  }
+}
