@@ -29,7 +29,7 @@
     "component_path": "benchmarks/runners/locomo_stateplane_component.py",
     "component_sha256": "c4d0966c2b57d51dd305899a31aefca14dce27612410a406bbd1f8d3ab68b879",
     "modal_path": "benchmarks/modal/locomo_semantic_candidate_runner.py",
-    "modal_sha256": "677f88983dd1ac02c972838a9e8f42e88939d976b9cd07fb24832e914b6bbf42",
+    "modal_sha256": "ede3fc8031811527be8683411fbaac9a44c9eaa906d26d4e9c13637dd55be51a",
     "adapter": "none; direct public StatePlane API",
     "baseline_mode": "BILINC_SEMANTIC_MODEL unset",
     "candidate_mode": "BILINC_SEMANTIC_MODEL explicitly set"
