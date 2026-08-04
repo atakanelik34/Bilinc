@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "benchmark": "locomo-official-retrieval-component-stateplane-semantic-candidate",
+  "lane": "component",
+  "evidence_status": "reproducible",
+  "git": {
+    "commit": "8f3c5c54e7acb936967659a1dd0dcc749cb6c827",
+    "worktree": "codex/bilinc-benchmark-dominance-20260804",
+    "dirty_at_run": false,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "e5db6c319d5c0cafdbed5c13b875ab455601b99a3e76e61f0e9bc53b5ae8b577",
+      "src/bilinc/core/vector_search.py": "79285d2e9a3d7696d25ce60c619d16b1f2cc8988dcc00da4281c9bcf833de04a",
+      "pyproject.toml": "f77afa1353acebcbab28304dfa43d5865d20a2837adf15641a8e1fe926cd76ad",
+      "tests/test_vector_search.py": "38872fb03ade38681b420e26d2de2594e95ac5d3f7c3f1f705d4dbc7aafc9b27"
+    },
+    "adapter": "none; direct public StatePlane API"
+  },
+  "dataset": {
+    "source": "https://github.com/snap-research/locomo",
+    "release": "main at freeze",
+    "release_commit": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+    "url": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
+    "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "license": "CC BY-NC 4.0",
+    "conversations": 10,
+    "qa_total": 1986,
+    "qa_scored": 1977,
+    "memories": 5882
+  },
+  "runner": {
+    "component_runner_sha256": "c4d0966c2b57d51dd305899a31aefca14dce27612410a406bbd1f8d3ab68b879",
+    "modal_runner_sha256": "ede3fc8031811527be8683411fbaac9a44c9eaa906d26d4e9c13637dd55be51a",
+    "protocol_sha256": "5affd6e5b0ed7b0a8a426fda8026dc5f11b170ecc88b82a5695cd5563a0239b2",
+    "base_protocol_sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+    "python": "3.11.5",
+    "hardware_request": {"cpu": 8, "memory_gib": 16, "single_use_container": true},
+    "scope": "one isolated SQLite-backed StatePlane per conversation",
+    "ingestion": "official raw conversation turns only",
+    "retrieval": "StatePlane.recall_intelligent public API",
+    "qa_or_observation_projection": false,
+    "benchmark_specific_query_expansion": false,
+    "metrics": "Hit@5, evidence recall@5, normalized binary NDCG@5",
+    "ab": "baseline with BILINC_SEMANTIC_MODEL unset; candidate with explicitly configured local semantic model"
+  },
+  "environment": {
+    "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+    "python": "3.11.5",
+    "node": "v22.23.2",
+    "modal_app_id": "ap-2bCIPC3HD6s0jd0KiPLSxG",
+    "persistent_resources": false,
+    "resources_active_after_run": false,
+    "modal_billing": {"run_usd": 0.02497179, "goal_cumulative_usd_after_run": 0.33350294},
+    "package_versions": {
+      "bilinc": "2.1.7",
+      "numpy": "2.4.2",
+      "sentence-transformers": "3.4.1",
+      "torch": "2.12.1",
+      "transformers": "4.57.6",
+      "huggingface-hub": "0.36.2",
+      "safetensors": "0.8.0",
+      "tokenizers": "0.22.2"
+    }
+  },
+  "raw_results": [
+    {"path": "runs/2026-08-04/locomo-stateplane-component/candidates/semantic-modal-pair-receipt.json", "sha256": "3e356fda656f29ee33860a1ef56b96146fefcb71c0ee31901c24c2e545cbb489"}
+  ],
+  "model": {
+    "id": "sentence-transformers/all-MiniLM-L6-v2",
+    "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "manifest_sha256": "2db4942727d159bcf555eead73a5e1384c197f72bfae286b7994267f8620b92a"
+  },
+  "metrics": {
+    "questions": 1977,
+    "baseline": {"hit_at_5": 0.5164390490642388, "evidence_recall_at_5": 0.47362317422792294, "ndcg_at_5": 0.39265264312998693},
+    "candidate": {"hit_at_5": 0.5427415275670208, "evidence_recall_at_5": 0.497768905695354, "ndcg_at_5": 0.4128465117610378},
+    "candidate_delta": {"hit_at_5": 0.026302478502782, "evidence_recall_at_5": 0.02414573146743106, "ndcg_at_5": 0.02019386863105085},
+    "category_metrics": {
+      "adversarial": {"n": 446, "hit_at_5": 0.5381165919282511, "evidence_recall_at_5": 0.5336322869955157, "ndcg_at_5": 0.41441297944734135},
+      "multi-hop": {"n": 320, "hit_at_5": 0.634375, "evidence_recall_at_5": 0.6096354166666667, "ndcg_at_5": 0.5307680177500234},
+      "open-domain": {"n": 841, "hit_at_5": 0.5766944114149821, "evidence_recall_at_5": 0.5616329766151408, "ndcg_at_5": 0.4652215105035705},
+      "single-hop": {"n": 281, "hit_at_5": 0.4199288256227758, "evidence_recall_at_5": 0.21481721125849246, "ndcg_at_5": 0.1987367926229455},
+      "temporal": {"n": 89, "hit_at_5": 0.30337078651685395, "evidence_recall_at_5": 0.20571711830799733, "ndcg_at_5": 0.1621041592977632}
+    },
+    "latency_seconds": {"baseline": 39.472, "candidate": 103.877}
+  },
+  "limitations": [
+    "Retrieval component only; not official end-to-end QA/F1.",
+    "Conversation-isolated scope; not global retrieval.",
+    "The semantic model is an opt-in dependency and the run does not establish a public leaderboard position.",
+    "No LongMemEval score is inferred from this lane; its frozen guard remains separate."
+  ],
+  "disallowed_claims": [
+    "Do not call this an end-to-end LoCoMo QA score.",
+    "Do not call this #1 or SOTA or compare across different scopes, metrics, or generation protocols.",
+    "Do not treat this as the official QA lane."
+  ]
+}

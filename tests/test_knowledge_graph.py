@@ -263,6 +263,25 @@ class TestKGSemanticIntegration:
         ]
         assert len(cross_refs) >= 1
 
+    def test_kg_related_memory_keys_is_bidirectional_and_bounded(self, kg: KnowledgeGraph):
+        """Related-memory expansion follows both directions within a hard cap."""
+        first = MemoryEntry(
+            key="mem_a",
+            value="ReARC owns Atlas.",
+            memory_type=MemoryType.SEMANTIC,
+        )
+        second = MemoryEntry(
+            key="mem_b",
+            value="Atlas hosts Bilinc.",
+            memory_type=MemoryType.SEMANTIC,
+        )
+        kg.ingest_memory_entry(first)
+        kg.ingest_memory_entry(second)
+
+        related = kg.related_memory_keys("mem_a", max_depth=1, limit=1)
+
+        assert related == [("mem_b", 1, 0.6)]
+
     def test_kg_entity_overlap_boost_is_capped(self, kg: KnowledgeGraph):
         """Entity overlap boost should be additive but capped."""
         entry = MemoryEntry(
