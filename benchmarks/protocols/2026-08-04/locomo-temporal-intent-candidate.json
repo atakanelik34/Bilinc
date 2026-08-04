@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "protocol_id": "locomo-official-retrieval-component-stateplane-temporal-intent-v1",
+  "frozen_utc": "2026-08-04T08:45:00Z",
+  "base_protocol": {
+    "path": "benchmarks/protocols/2026-08-04/freeze.json",
+    "sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+    "benchmark_id": "locomo-official-retrieval-component",
+    "lane": "component"
+  },
+  "benchmark": {
+    "id": "locomo-official-retrieval-component-stateplane-temporal-intent-v1",
+    "source_repository": "https://github.com/snap-research/locomo",
+    "release": "main at freeze",
+    "release_commit": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+    "dataset_url": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
+    "dataset_sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "top_k": 5,
+    "conversations": 10,
+    "qa_total": 1986,
+    "scope": "one isolated SQLite-backed StatePlane per conversation",
+    "ingestion": "official raw conversation turns only",
+    "retrieval": "StatePlane.recall_intelligent public API",
+    "qa_or_observation_projection": false,
+    "metrics": "Hit@5, evidence recall@5, normalized binary NDCG@5"
+  },
+  "runner": {
+    "path": "benchmarks/modal/locomo_temporal_intent_candidate_runner.py",
+    "sha256": "aa6314ffe64ee3c10b0f94ceae44014279e067fce5b12c156d798cf6f642f2c8",
+    "component_runner_sha256": "c4d0966c2b57d51dd305899a31aefca14dce27612410a406bbd1f8d3ab68b879",
+    "baseline_mode": "BILINC_CURRENT_STATE_INTENTS=legacy",
+    "candidate_mode": "BILINC_CURRENT_STATE_INTENTS=enabled",
+    "same_container_ab": true,
+    "same_hardware_class": true,
+    "benchmark_specific_query_expansion": false
+  },
+  "source_files": {
+    "src/bilinc/core/stateplane.py": "911f18ef0f750bd8064480b64b359419114c6fa1b73d61540be94160b7393fe4",
+    "benchmarks/runners/locomo_stateplane_component.py": "c4d0966c2b57d51dd305899a31aefca14dce27612410a406bbd1f8d3ab68b879"
+  },
+  "integrity": {
+    "official_dataset_immutable": true,
+    "official_runner_immutable": true,
+    "product_only_change": true,
+    "benchmark_specific_aliases_forbidden": true,
+    "answer_leakage_forbidden": true,
+    "longmemeval_runner_unchanged": true,
+    "longmemeval_dataset_unchanged": true
+  },
+  "hardware": {
+    "class": "Modal 8 requested physical CPU cores, 16 GiB memory",
+    "persistent_resources": false
+  }
+}
