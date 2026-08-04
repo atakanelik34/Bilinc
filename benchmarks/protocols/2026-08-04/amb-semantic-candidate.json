@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "protocol_id": "amb-legacy-v3-semantic-candidate-v1",
+  "frozen_utc": "2026-08-04T07:05:00Z",
+  "base_protocol": {
+    "path": "benchmarks/protocols/2026-08-04/freeze.json",
+    "sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+    "benchmark_id": "amb-legacy-v3-layer1-layer2",
+    "lane": "product-core"
+  },
+  "benchmark": {
+    "id": "amb-legacy-v3-semantic-candidate",
+    "source_repository": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+    "release": "v3.0.0",
+    "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+    "package_version": "3.0.0",
+    "license": "Apache-2.0",
+    "layers": [1, 2],
+    "layer1_tests": 56,
+    "layer2_scenarios": 5,
+    "store_delay_seconds": 3.0,
+    "adapter": "generic MCP remember/search/forget bridge",
+    "adapter_sha256": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761"
+  },
+  "runner": {
+    "path": "benchmarks/modal/amb_semantic_candidate_runner.py",
+    "sha256": "e09c90b8ba96f4b0319f7b59971509860ab6911aea993f3cb9028525116fb7e4",
+    "baseline_mode": "BILINC_SEMANTIC_MODEL unset",
+    "candidate_mode": "BILINC_SEMANTIC_MODEL explicitly set to the pinned local model",
+    "same_container_ab": true,
+    "same_hardware_class": true
+  },
+  "source_files": {
+    "src/bilinc/core/stateplane.py": "e5db6c319d5c0cafdbed5c13b875ab455601b99a3e76e61f0e9bc53b5ae8b577",
+    "src/bilinc/core/vector_search.py": "79285d2e9a3d7696d25ce60c619d16b1f2cc8988dcc00da4281c9bcf833de04a",
+    "benchmarks/adapters/amb_generic_mcp.py": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761"
+  },
+  "model": {
+    "id": "sentence-transformers/all-MiniLM-L6-v2",
+    "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "manifest_sha256": "2db4942727d159bcf555eead73a5e1384c197f72bfae286b7994267f8620b92a",
+    "device": "cpu",
+    "hf_xet_disabled": true
+  },
+  "product_configuration": {
+    "semantic_weight": 0.05,
+    "semantic_model_is_opt_in": true,
+    "benchmark_specific_query_expansion": false
+  },
+  "integrity": {
+    "official_fixtures_immutable": true,
+    "official_runner_immutable": true,
+    "product_only_change": true,
+    "benchmark_specific_aliases_forbidden": true,
+    "benchmark_specific_cache_forbidden": true,
+    "answer_leakage_forbidden": true,
+    "longmemeval_runner_unchanged": true,
+    "longmemeval_dataset_unchanged": true
+  },
+  "hardware": {
+    "class": "Modal 8 requested physical CPU cores, 16 GiB requested memory",
+    "persistent_resources": false
+  }
+}
