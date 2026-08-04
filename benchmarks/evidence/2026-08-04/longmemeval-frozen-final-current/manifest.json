@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "benchmark": "longmemeval-s-cleaned-frozen-current-source",
+  "lane": "component",
+  "evidence_status": "reproducible",
+  "git": {
+    "commit": "252fbe0",
+    "worktree": "codex/bilinc-benchmark-dominance-20260804",
+    "dirty_at_run": false,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "96b790e7ec30f05ccc4800f65ec52212fb9c07913ba3c867a90c4ae101f262c7",
+      "src/bilinc/core/vector_search.py": "9dcd461dc94aa3a9b730d7df92803358fa8e2014dfc4951dc50cd99ea6b4d39f"
+    },
+    "longmemeval_runner_unchanged": true,
+    "metric_implementation_unchanged": true,
+    "import_boundary": "benchmarks/longmemeval_bench.py imports benchmarks.metrics only; it does not import bilinc.core or StatePlane"
+  },
+  "dataset": {
+    "source": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned",
+    "release": "longmemeval_s_cleaned",
+    "url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json",
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "questions": 500
+  },
+  "runner": {
+    "runner_sha256": "76b198059d119e5d3c35ee0bb8725230f6d1f83b59d7d98858b8d1f179617b14",
+    "metric_sha256": "b207338e307c5a8dc6b1493f31cf6d8a1e70b836c0f6574ea339502e452914ba",
+    "protocol": "hybrid retrieval, top-k=5, frozen local runner",
+    "protocol_hash": "c4c07e60e1e708ae0d144103e458406a83f38c24d413b66c0454b1d61fc5f43d",
+    "python": "3.11.7",
+    "chromadb": "1.5.9",
+    "command": "PYTHONPATH=. /private/tmp/bilinc-longmem-final.oFrmfX/venv/bin/python -u benchmarks/longmemeval_bench.py /private/tmp/bilinc-longmem-final.oFrmfX/longmemeval_s_cleaned.json --mode hybrid --top-k 5",
+    "scope": "isolated ChromaDB retrieval component; not end-to-end StatePlane"
+  },
+  "environment": {
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "execution": "temporary isolated virtual environment",
+    "modal_app_id": null,
+    "persistent_resources": false,
+    "resources_active_after_run": false,
+    "modal_billing": {"run_usd": 0.0}
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-04/longmemeval-final/current-result.log",
+      "sha256": "1c2483785a8461b8ded4cc651a7e76c5de13550525e82112c11748f5d0089d95"
+    }
+  ],
+  "metrics": {
+    "questions": 500,
+    "hit_at_5": 0.98,
+    "ndcg_at_5": 0.913,
+    "hit_at_5_floor": 0.98,
+    "ndcg_at_5_floor": 0.913,
+    "guardrail_pass": true
+  },
+  "limitations": [
+    "This is the frozen isolated retrieval guardrail, not end-to-end StatePlane performance.",
+    "The result does not establish a public leaderboard position.",
+    "The benchmark runner does not exercise the changed StatePlane/vector_search import path; the result is a protocol and environment receipt, not a product-core delta."
+  ],
+  "disallowed_claims": [
+    "Do not call this an end-to-end StatePlane score.",
+    "Do not use this component result as an official general memory benchmark leaderboard claim."
+  ]
+}
