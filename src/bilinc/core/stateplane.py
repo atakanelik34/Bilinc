@@ -55,6 +55,9 @@ class StatePlane:
     INTELLIGENT_RECALL_LEXICAL_WEIGHT = 0.25
     INTELLIGENT_RECALL_HYBRID_WEIGHT = 0.55
     INTELLIGENT_RECALL_ENTITY_WEIGHT = 0.2
+    # Explicitly enabled local semantic retrieval is a small additive signal;
+    # the default path remains unchanged when no semantic model is configured.
+    INTELLIGENT_RECALL_SEMANTIC_WEIGHT = 0.05
     REFLECTION_DEFAULT_THRESHOLD = 0.55
     REFLECTION_MAX_PASSES = 3
     RECALL_EXPLAIN_SENSITIVE_KEYS = {
@@ -573,6 +576,7 @@ class StatePlane:
 
             lexical_ranked = self._rank_lexical_keys(query, candidates)
             hybrid_ranked = self._rank_hybrid_keys(query, top_k=max(limit * 3, 10))
+            semantic_ranked = self._rank_semantic_keys(query, top_k=max(limit * 10, 50))
             entity_boosts = self._compute_entity_boosts(query, candidates)
             entity_ranked = [
                 key for key, score in sorted(entity_boosts.items(), key=lambda kv: kv[1], reverse=True) if score > 0
@@ -597,6 +601,13 @@ class StatePlane:
             self._apply_rrf_signal(
                 fused_scores,
                 signals,
+                semantic_ranked,
+                weight=self.INTELLIGENT_RECALL_SEMANTIC_WEIGHT,
+                signal_name="semantic",
+            )
+            self._apply_rrf_signal(
+                fused_scores,
+                signals,
                 entity_ranked,
                 weight=self.INTELLIGENT_RECALL_ENTITY_WEIGHT,
                 signal_name="entity_rrf",
@@ -607,7 +618,10 @@ class StatePlane:
                 if boost <= 0:
                     continue
                 fused_scores[key] = fused_scores.get(key, 0.0) + (0.25 * boost)
-                bucket = signals.setdefault(key, {"lexical": 0.0, "hybrid": 0.0, "entity": 0.0, "entity_rrf": 0.0})
+                bucket = signals.setdefault(
+                    key,
+                    {"lexical": 0.0, "hybrid": 0.0, "semantic": 0.0, "entity": 0.0, "entity_rrf": 0.0},
+                )
                 bucket["entity"] = boost
 
             self._apply_current_state_boost(query, fused_scores, candidates)
@@ -618,7 +632,10 @@ class StatePlane:
                 entry = candidates.get(key)
                 if not entry:
                     continue
-                entry_signals = signals.get(key, {"lexical": 0.0, "hybrid": 0.0, "entity": 0.0, "entity_rrf": 0.0})
+                entry_signals = signals.get(
+                    key,
+                    {"lexical": 0.0, "hybrid": 0.0, "semantic": 0.0, "entity": 0.0, "entity_rrf": 0.0},
+                )
                 result = {
                     "key": entry.key,
                     "value": entry.value,
@@ -628,6 +645,7 @@ class StatePlane:
                     "signals": {
                         "lexical": round(entry_signals.get("lexical", 0.0), 6),
                         "hybrid": round(entry_signals.get("hybrid", 0.0), 6),
+                        "semantic": round(entry_signals.get("semantic", 0.0), 6),
                         "entity": round(entry_signals.get("entity", 0.0), 6),
                     },
                 }
@@ -788,6 +806,8 @@ class StatePlane:
             reasons.append(f"lexical match{token_note}")
         if signals.get("hybrid", 0.0) > 0:
             reasons.append("hybrid/vector rerank match")
+        if signals.get("semantic", 0.0) > 0:
+            reasons.append("semantic embedding match")
         if signals.get("entity", 0.0) > 0:
             reasons.append("entity overlap match")
         if entry.importance >= 0.8:
@@ -1306,6 +1326,22 @@ class StatePlane:
         except Exception:
             return []
 
+    def _rank_semantic_keys(self, query: str, top_k: int) -> List[str]:
+        hybrid = self._get_hybrid_search()
+        conn = self._sqlite_connection()
+        if hybrid is None or conn is None:
+            return []
+        try:
+            rowids = hybrid.semantic_search(query, top_k=top_k)
+            keys: List[str] = []
+            for rowid, _score in rowids:
+                row = conn.execute("SELECT key FROM memories WHERE rowid = ?", (rowid,)).fetchone()
+                if row and row[0]:
+                    keys.append(str(row[0]))
+            return keys
+        except Exception:
+            return []
+
     def _apply_current_state_boost(
         self,
         query: str,
@@ -1409,7 +1445,10 @@ class StatePlane:
         for rank, key in enumerate(ranked_keys):
             contribution = weight / (self.INTELLIGENT_RECALL_RRF_K + rank + 1)
             fused_scores[key] = fused_scores.get(key, 0.0) + contribution
-            bucket = signals.setdefault(key, {"lexical": 0.0, "hybrid": 0.0, "entity": 0.0, "entity_rrf": 0.0})
+            bucket = signals.setdefault(
+                key,
+                {"lexical": 0.0, "hybrid": 0.0, "semantic": 0.0, "entity": 0.0, "entity_rrf": 0.0},
+            )
             bucket[signal_name] = bucket.get(signal_name, 0.0) + contribution
 
     def _sqlite_connection(self):

@@ -10,7 +10,9 @@ RRF fusion + decay-aware reranking + temporal boost.
 ORIGINAL implementation.
 """
 from __future__ import annotations
+from functools import lru_cache
 import json
+import os
 import re
 import struct
 import time
@@ -31,6 +33,34 @@ def get_embedding(text: str, base_url: str = "http://localhost:11434") -> Option
         return json.loads(resp.read()).get("embedding")
     except Exception:
         return None
+
+
+@lru_cache(maxsize=4)
+def _load_semantic_model(model_name: str, device: str, revision: str):
+    """Load an explicitly configured local semantic model, if available."""
+    try:
+        from sentence_transformers import SentenceTransformer
+
+        return SentenceTransformer(model_name, device=device, revision=revision or None)
+    except Exception:
+        return None
+
+
+def _encode_semantic(model, texts: List[str], mode: str):
+    """Encode query/document text across supported Sentence Transformers versions."""
+    kwargs = {
+        "batch_size": 64,
+        "convert_to_numpy": True,
+        "normalize_embeddings": True,
+        "show_progress_bar": False,
+    }
+    specialized = getattr(model, f"encode_{mode}", None)
+    if callable(specialized):
+        try:
+            return specialized(texts, **kwargs)
+        except (TypeError, AttributeError):
+            pass
+    return model.encode(texts, **kwargs)
 
 
 class VectorStore:
@@ -145,6 +175,73 @@ class HybridSearch:
     def __init__(self, conn, vector_store: VectorStore):
         self.conn = conn
         self.vs = vector_store
+        self._semantic_embeddings: Dict[int, Tuple[str, object]] = {}
+        self._semantic_config: Optional[Tuple[str, str]] = None
+        self._semantic_disabled = False
+
+    def semantic_search(self, query: str, top_k: int = 10) -> List[Tuple[int, float]]:
+        """Optional local semantic retrieval for explicitly configured deployments.
+
+        The base package remains dependency-free and unchanged when
+        ``BILINC_SEMANTIC_MODEL`` is unset. When configured, corpus embeddings
+        are cached per HybridSearch instance and the model is loaded once per
+        process. ``BILINC_SEMANTIC_MODEL_REVISION`` can pin a model repository
+        revision for reproducible deployments. This is a generic fallback for
+        paraphrases, abbreviations, and queries with no lexical overlap; it is
+        not a benchmark adapter.
+        """
+        if self._semantic_disabled or not query or top_k <= 0:
+            return []
+        model_name = os.environ.get("BILINC_SEMANTIC_MODEL", "").strip()
+        if not model_name:
+            return []
+        device = os.environ.get("BILINC_SEMANTIC_DEVICE", "cpu").strip() or "cpu"
+        revision = os.environ.get("BILINC_SEMANTIC_MODEL_REVISION", "").strip()
+        config = (model_name, device, revision)
+        if self._semantic_config != config:
+            self._semantic_embeddings.clear()
+            self._semantic_disabled = False
+            self._semantic_config = config
+        model = _load_semantic_model(model_name, device, revision)
+        if model is None:
+            self._semantic_disabled = True
+            return []
+
+        try:
+            import numpy as np
+
+            rows = self.conn.execute("SELECT rowid, key, value FROM memories ORDER BY rowid").fetchall()
+            if not rows:
+                return []
+            row_ids: List[int] = []
+            text_by_id: Dict[int, str] = {}
+            pending_ids: List[int] = []
+            pending_texts: List[str] = []
+            for row in rows:
+                row_id = int(row[0])
+                text = f"{row[1]} {row[2] or ''}"
+                row_ids.append(row_id)
+                text_by_id[row_id] = text
+                cached = self._semantic_embeddings.get(row_id)
+                if cached is None or cached[0] != text:
+                    pending_ids.append(row_id)
+                    pending_texts.append(text)
+
+            if pending_texts:
+                encoded = np.asarray(_encode_semantic(model, pending_texts, "document"))
+                if encoded.ndim == 1:
+                    encoded = encoded.reshape(1, -1)
+                for row_id, vector in zip(pending_ids, encoded):
+                    self._semantic_embeddings[row_id] = (text_by_id[row_id], vector)
+
+            query_vector = np.asarray(_encode_semantic(model, [query], "query"))[0]
+            matrix = np.vstack([self._semantic_embeddings[row_id][1] for row_id in row_ids])
+            scores = matrix @ query_vector
+            order = np.argsort(-scores)[:top_k]
+            return [(row_ids[int(index)], float(scores[int(index)])) for index in order]
+        except Exception:
+            self._semantic_disabled = True
+            return []
 
     def keyword_search(self, query: str, top_k: int = 10) -> List[Tuple[int, float]]:
         """FTS5 search with query expansion and LIKE fallback."""
