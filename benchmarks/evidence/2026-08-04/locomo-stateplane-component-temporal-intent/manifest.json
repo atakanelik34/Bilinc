@@ -48,7 +48,7 @@
     "modal_app_id": "ap-NhSWHN8OR5nTgQAAJrW5C3",
     "persistent_resources": false,
     "resources_active_after_run": false,
-    "modal_billing": {"run_usd": 0.01301394, "goal_cumulative_usd_after_run": 0.65812383},
+    "modal_billing": {"run_usd": 0.01385796, "goal_cumulative_usd_after_run": 0.65896785},
     "package_versions": {"bilinc": "2.1.7", "certifi": "2026.7.22"}
   },
   "raw_results": [
