@@ -2,7 +2,10 @@
 
 import asyncio
 
+import pytest
+
 from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core import vector_search
 from bilinc.core.vector_search import HybridSearch, VectorStore, expand_query
 from bilinc.storage.sqlite import SQLiteBackend
 
@@ -42,6 +45,65 @@ def test_hybrid_search_handles_natural_question_punctuation(tmp_path):
         assert keyword_results
         assert reranked
         assert reranked[0][2]["key"] == "memory:database"
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_semantic_search_is_explicitly_opt_in(monkeypatch, tmp_path):
+    async def scenario():
+        monkeypatch.delenv("BILINC_SEMANTIC_MODEL", raising=False)
+        backend = SQLiteBackend(str(tmp_path / "semantic-search.sqlite"))
+        await backend.init()
+        search = HybridSearch(backend._get_conn(), VectorStore(backend._get_conn()))
+
+        assert search.semantic_search("a paraphrase query", top_k=5) == []
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_semantic_search_ranks_by_normalized_local_embeddings(monkeypatch, tmp_path):
+    np = pytest.importorskip("numpy")
+
+    class FakeSemanticModel:
+        def encode_document(self, texts, **kwargs):
+            return np.asarray(
+                [
+                    [1.0, 0.0] if text.startswith("memory:database") else [0.0, 1.0]
+                    for text in texts
+                ]
+            )
+
+        def encode_query(self, texts, **kwargs):
+            assert texts == ["Which database stores state?"]
+            return np.asarray([[1.0, 0.0]])
+
+    async def scenario():
+        monkeypatch.setenv("BILINC_SEMANTIC_MODEL", "test/local-model")
+        monkeypatch.setattr(vector_search, "_load_semantic_model", lambda *_args: FakeSemanticModel())
+        backend = SQLiteBackend(str(tmp_path / "semantic-ranking.sqlite"))
+        await backend.init()
+        await backend.restore(
+            MemoryEntry(
+                key="memory:database",
+                value="PostgreSQL stores durable state.",
+                memory_type=MemoryType.SEMANTIC,
+            )
+        )
+        await backend.restore(
+            MemoryEntry(
+                key="memory:frontend",
+                value="React renders the dashboard.",
+                memory_type=MemoryType.SEMANTIC,
+            )
+        )
+
+        search = HybridSearch(backend._get_conn(), VectorStore(backend._get_conn()))
+        results = search.semantic_search("Which database stores state?", top_k=2)
+
+        assert results[0][0] == 1
+        assert results[0][1] > results[1][1]
         await backend.close()
 
     asyncio.run(scenario())

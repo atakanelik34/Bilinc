@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "protocol_id": "locomo-official-raw-turn-stateplane-semantic-v1",
+  "frozen_utc": "2026-08-04T05:52:25Z",
+  "base_protocol": {
+    "path": "benchmarks/protocols/2026-08-04/freeze.json",
+    "sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+    "benchmark_id": "locomo-official-retrieval-component-stateplane",
+    "lane": "component"
+  },
+  "benchmark": {
+    "id": "locomo-official-retrieval-component-stateplane-semantic-v1",
+    "source_repository": "https://github.com/snap-research/locomo",
+    "release_commit": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+    "dataset_url": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
+    "dataset_sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "conversations": 10,
+    "questions_scored": 1977,
+    "memories": 5882,
+    "top_k": 5,
+    "scope": "one isolated SQLite-backed StatePlane per conversation",
+    "ingestion": "official raw conversation turns only",
+    "retrieval": "StatePlane.recall_intelligent public API",
+    "metrics": "Hit@5, evidence recall@5, normalized binary NDCG@5",
+    "qa_or_observation_projection": false,
+    "benchmark_specific_query_expansion": false
+  },
+  "runner": {
+    "component_path": "benchmarks/runners/locomo_stateplane_component.py",
+    "component_sha256": "c4d0966c2b57d51dd305899a31aefca14dce27612410a406bbd1f8d3ab68b879",
+    "modal_path": "benchmarks/modal/locomo_semantic_candidate_runner.py",
+    "modal_sha256": "677f88983dd1ac02c972838a9e8f42e88939d976b9cd07fb24832e914b6bbf42",
+    "adapter": "none; direct public StatePlane API",
+    "baseline_mode": "BILINC_SEMANTIC_MODEL unset",
+    "candidate_mode": "BILINC_SEMANTIC_MODEL explicitly set"
+  },
+  "source_files": {
+    "src/bilinc/core/stateplane.py": "e5db6c319d5c0cafdbed5c13b875ab455601b99a3e76e61f0e9bc53b5ae8b577",
+    "src/bilinc/core/vector_search.py": "79285d2e9a3d7696d25ce60c619d16b1f2cc8988dcc00da4281c9bcf833de04a",
+    "pyproject.toml": "f77afa1353acebcbab28304dfa43d5865d20a2837adf15641a8e1fe926cd76ad",
+    "tests/test_vector_search.py": "38872fb03ade38681b420e26d2de2594e95ac5d3f7c3f1f705d4dbc7aafc9b27"
+  },
+  "product_configuration": {
+    "semantic_weight": 0.05,
+    "model_id": "sentence-transformers/all-MiniLM-L6-v2",
+    "model_revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "model_manifest_sha256": "2db4942727d159bcf555eead73a5e1384c197f72bfae286b7994267f8620b92a",
+    "model_files": {
+      "1_Pooling/config.json": "4be450dde3b0273bb9787637cfbd28fe04a7ba6ab9d36ac48e92b11e350ffc23",
+      "README.md": "dcd602d2fd35c203a247304a06fec6654a12f7941b739f9221a064fe8dc3b7f0",
+      "config.json": "953f9c0d463486b10a6871cc2fd59f223b2c70184f49815e7efbcab5d8908b41",
+      "config_sentence_transformers.json": "061ca9d39661d6c6d6de5ba27f79a1cd5770ea247f8d46412a68a498dc5ac9f3",
+      "model.safetensors": "53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db",
+      "modules.json": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf",
+      "sentence_bert_config.json": "fc1993fde0a95c24ec6c022539d41cf6e2f7c9721e5415d6fb6897472a9cd4b7",
+      "special_tokens_map.json": "303df45a03609e4ead04bc3dc1536d0ab19b5358db685b6f3da123d05ec200e3",
+      "tokenizer.json": "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037",
+      "tokenizer_config.json": "acb92769e8195aabd29b7b2137a9e6d6e25c476a4f15aa4355c233426c61576b",
+      "vocab.txt": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+    },
+    "device": "cpu",
+    "optional_extra": "semantic",
+    "dependencies": {
+      "numpy": "2.4.2",
+      "sentence-transformers": "3.4.1",
+      "torch": "2.12.1",
+      "transformers": "4.57.6",
+      "huggingface-hub": "0.36.2",
+      "safetensors": "0.8.0",
+      "tokenizers": "0.22.2"
+    }
+  },
+  "integrity": {
+    "official_dataset_immutable": true,
+    "official_runner_immutable": true,
+    "product_only_change": true,
+    "benchmark_specific_aliases_forbidden": true,
+    "benchmark_specific_cache_forbidden": true,
+    "answer_leakage_forbidden": true,
+    "longmemeval_runner_unchanged": true,
+    "longmemeval_dataset_unchanged": true
+  },
+  "hardware": {
+    "class": "Modal 8 requested physical CPU cores, 16 GiB requested memory",
+    "same_container_ab": true,
+    "persistent_resources": false
+  }
+}

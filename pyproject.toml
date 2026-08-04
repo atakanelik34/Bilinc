@@ -59,6 +59,10 @@ internal = [
     "starlette>=0.36,<2.0",
     "z3-solver>=4.12,<5.0",
 ]
+semantic = [
+    "numpy>=1.24,<3.0",
+    "sentence-transformers>=3.4,<4.0",
+]
 [project.scripts]
 bilinc = "bilinc.cli.main:main"
 
