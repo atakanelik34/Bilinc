@@ -5,7 +5,7 @@
     "path": "benchmarks/protocols/2026-08-04/freeze.json",
     "sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822"
   },
-  "source_commit": "1966e94642940da0151302c282ded0ece71ff141",
+  "source_commit": "c9baad03d6691c0baafa754de1254a8889a026ce",
   "rows": [
     {
       "benchmark_id": "longmemeval-s-cleaned-component",
