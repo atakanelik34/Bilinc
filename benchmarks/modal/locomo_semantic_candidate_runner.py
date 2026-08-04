@@ -27,6 +27,19 @@ DATASET_SHA256 = "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698f
 MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 MODEL_REVISION = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
 MODEL_MANIFEST_SHA256 = "2db4942727d159bcf555eead73a5e1384c197f72bfae286b7994267f8620b92a"
+MODEL_REQUIRED_FILES = (
+    "1_Pooling/config.json",
+    "README.md",
+    "config.json",
+    "config_sentence_transformers.json",
+    "model.safetensors",
+    "modules.json",
+    "sentence_bert_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.txt",
+)
 REMOTE_REPO = Path("/root/bilinc")
 
 
@@ -94,10 +107,11 @@ def _model_manifest() -> dict[str, Any]:
         "models--sentence-transformers--all-MiniLM-L6-v2"
     ) / "snapshots" / MODEL_REVISION
     files: dict[str, str] = {}
-    if snapshot.is_dir():
-        for path in sorted(snapshot.rglob("*")):
-            if path.is_file():
-                files[str(path.relative_to(snapshot))] = _sha256(path)
+    for name in MODEL_REQUIRED_FILES:
+        path = snapshot / name
+        if not path.is_file():
+            raise RuntimeError(f"required model file missing: {name}")
+        files[name] = _sha256(path)
     digest = hashlib.sha256()
     for name, file_hash in files.items():
         digest.update(name.encode())
@@ -136,6 +150,11 @@ def _package_versions() -> dict[str, str]:
 
 
 def _set_semantic(enabled: bool) -> None:
+    # The Rust xet transport can fail to discover the container CA bundle even
+    # though Python HTTPS is configured with certifi. Use the pinned model's
+    # regular HTTPS download path so a transport warning cannot corrupt the
+    # artifact-integrity check below.
+    os.environ["HF_HUB_DISABLE_XET"] = "1"
     for key in (
         "BILINC_SEMANTIC_MODEL",
         "BILINC_SEMANTIC_MODEL_REVISION",
