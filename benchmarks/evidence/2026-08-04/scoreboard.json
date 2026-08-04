@@ -355,7 +355,7 @@
       },
       "hardware": "Modal 8 requested CPU cores, 16 GiB memory; container reported 24 CPUs",
       "latency_seconds": {"layer1_baseline": 233.918, "layer1_candidate": 233.538, "layer2_baseline": 25.152, "layer2_candidate": 25.192},
-      "cost_usd": 0.07975089,
+      "cost_usd": 0.08200146,
       "raw_result_hashes": ["8e74741552ab78bc4dc7b27c23733f25bdb00be91fe85f744537c52727ad8239"],
       "evidence_path": "benchmarks/evidence/2026-08-04/amb-legacy-v3-semantic-candidate/manifest.json",
       "model": {"id": "sentence-transformers/all-MiniLM-L6-v2", "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41", "manifest_sha256": "2db4942727d159bcf555eead73a5e1384c197f72bfae286b7994267f8620b92a"},
@@ -392,9 +392,9 @@
   ],
   "modal": {
     "authorized_ceiling_usd": 30.0,
-    "cumulative_metered_usd": 0.56910746,
+    "cumulative_metered_usd": 0.57135803,
     "cumulative_conservative_estimate_usd": 26.005,
-    "remaining_metered_budget_usd": 29.43089254,
+    "remaining_metered_budget_usd": 29.42864197,
     "remaining_conservative_budget_usd": 3.995,
     "all_goal_apps_stopped": true,
     "persistent_resources_created": false

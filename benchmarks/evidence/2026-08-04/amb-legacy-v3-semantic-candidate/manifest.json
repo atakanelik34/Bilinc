@@ -43,8 +43,8 @@
     "persistent_resources": false,
     "resources_active_after_run": false,
     "modal_billing": {
-      "run_usd": 0.07975089,
-      "goal_cumulative_usd_after_run": 0.56910746
+      "run_usd": 0.08200146,
+      "goal_cumulative_usd_after_run": 0.57135803
     },
     "package_versions": {
       "bilinc": "2.1.7",
