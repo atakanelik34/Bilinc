@@ -64,3 +64,29 @@ def test_current_state_boost_does_not_change_general_queries():
 
     assert scores == {"older": 1.0, "newer": 1.0}
 
+
+def test_current_state_boost_demotes_explicitly_non_current_entries():
+    plane = StatePlane()
+    stale = MemoryEntry(
+        key="stale",
+        created_at=20.0,
+        updated_at=20.0,
+        invalid_at=10.0,
+    )
+    superseded = MemoryEntry(
+        key="superseded",
+        created_at=20.0,
+        updated_at=20.0,
+        superseded_by="replacement",
+    )
+    active = MemoryEntry(key="active", created_at=20.0, updated_at=20.0)
+
+    scores = {"stale": 1.0, "superseded": 1.0, "active": 1.0}
+    plane._apply_current_state_boost(
+        "what is the current deployment target",
+        scores,
+        {"stale": stale, "superseded": superseded, "active": active},
+    )
+
+    assert scores["stale"] < scores["active"]
+    assert scores["superseded"] < scores["active"]

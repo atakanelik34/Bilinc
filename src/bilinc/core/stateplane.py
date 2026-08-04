@@ -1363,11 +1363,32 @@ class StatePlane:
         oldest = min(timestamps.values())
         newest = max(timestamps.values())
         span = newest - oldest
-        if span <= 0:
-            return
+
+        def _timestamp(value: Any) -> Optional[float]:
+            try:
+                return float(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
         for key, timestamp in timestamps.items():
-            normalized_recency = (timestamp - oldest) / span
+            normalized_recency = (timestamp - oldest) / span if span > 0 else 0.0
             fused_scores[key] += 0.02 * normalized_recency
+
+            entry = candidates[key]
+            now = time.time()
+            invalid_at = _timestamp(entry.invalid_at)
+            created_at = _timestamp(entry.created_at) or 0.0
+            ttl = _timestamp(entry.ttl)
+            ttl_expired = ttl is not None and created_at + ttl <= now
+            explicitly_stale = (
+                entry.superseded_by is not None
+                or (invalid_at is not None and float(invalid_at) <= now)
+                or ttl_expired
+            )
+            valid_at = _timestamp(entry.valid_at)
+            future_dated = valid_at is not None and valid_at > now
+            if explicitly_stale or future_dated:
+                fused_scores[key] -= 0.04
 
     def _compute_entity_boosts(self, query: str, candidates: Dict[str, MemoryEntry]) -> Dict[str, float]:
         boosts: Dict[str, float] = {key: 0.0 for key in candidates}
