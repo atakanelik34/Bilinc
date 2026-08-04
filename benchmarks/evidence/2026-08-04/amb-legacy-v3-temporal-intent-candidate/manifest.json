@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "benchmark": "amb-legacy-v3-temporal-intent-candidate",
+  "lane": "product-core",
+  "evidence_status": "reproducible",
+  "decision": "valid-no-amb-gain-retain-general-correctness",
+  "git": {
+    "commit": "53390f7885c3ee0b947d4e7b0ac7cd2f983c8705",
+    "worktree": "codex/bilinc-benchmark-dominance-20260804",
+    "dirty_at_run": false,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "911f18ef0f750bd8064480b64b359419114c6fa1b73d61540be94160b7393fe4",
+      "tests/test_recall_lexical.py": "e1620e0dba09055702902d2f1b0f2d6f9c745e9d4c15ce66e869ee0311120095"
+    },
+    "adapter": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761"
+  },
+  "dataset": {
+    "source": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+    "release": "v3.0.0",
+    "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+    "license": "Apache-2.0",
+    "layer1_tests": 56,
+    "layer2_scenarios": 5,
+    "fixture_protocol": "frozen by benchmarks/protocols/2026-08-04/freeze.json"
+  },
+  "runner": {
+    "modal_runner_sha256": "579a07794acde916436b7750663025552948d3bb9d9e5b462a5725cb93fd9ba4",
+    "protocol_sha256": "0b12f09a6b729a22e512dd38e857d5fbe6fd65b2ffcae030ea0e4510c9e0f8dc",
+    "adapter_sha256": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+    "baseline_mode": "BILINC_CURRENT_STATE_INTENTS=legacy",
+    "candidate_mode": "BILINC_CURRENT_STATE_INTENTS=enabled",
+    "same_container_ab": true,
+    "store_delay_seconds": 3.0
+  },
+  "environment": {
+    "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+    "python": "3.11.5",
+    "node": "v22.23.2",
+    "modal_app_id": "ap-LIO8owoxgOSCE3U72VkAw4",
+    "persistent_resources": false,
+    "resources_active_after_run": false,
+    "modal_billing": {"run_usd": 0.07065721, "goal_cumulative_usd_after_run": 0.64201524},
+    "package_versions": {"bilinc": "2.1.7", "mcp": "1.29.0"}
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-04/amb-legacy-v3/candidates/temporal-intent-modal-pair-receipt.json",
+      "sha256": "1591cfe1a900119a9f1ddcd4adfc300084e2de61586ed3168cbfec2fe554d2c6"
+    }
+  ],
+  "metrics": {
+    "baseline": {"layer1_overall": 75.0, "layer2_overall": 40.0, "layer2_passed": 2, "layer2_total": 5},
+    "candidate": {"layer1_overall": 75.0, "layer2_overall": 40.0, "layer2_passed": 2, "layer2_total": 5},
+    "delta": {"layer1_overall": 0.0, "layer2_overall": 0.0},
+    "layer1_categories": {
+      "factual-recall": {"baseline": 100.0, "candidate": 100.0},
+      "semantic-search": {"baseline": 62.5, "candidate": 62.5},
+      "temporal-reasoning": {"baseline": 42.857142857142854, "candidate": 42.857142857142854},
+      "conflict-resolution": {"baseline": 85.71428571428571, "candidate": 85.71428571428571},
+      "selective-forgetting": {"baseline": 83.33333333333334, "candidate": 83.33333333333334},
+      "cross-session": {"baseline": 71.42857142857143, "candidate": 71.42857142857143},
+      "multi-agent": {"baseline": 0.0, "candidate": 0.0, "status": "adapter-skipped"},
+      "cost-efficiency": {"baseline": 100.0, "candidate": 100.0}
+    },
+    "layer1_wall_seconds": {"baseline": 234.937, "candidate": 234.375},
+    "layer2_wall_seconds": {"baseline": 25.368, "candidate": 25.356}
+  },
+  "limitations": [
+    "Historical AMB v3 binary harness; not current Vectorize AMB RAG/judge.",
+    "Expanded temporal intent terms are a general correctness improvement but did not change any AMB aggregate or category score.",
+    "The legacy mode exists only to make the same-container A/B reproducible; product default is enabled.",
+    "No LongMemEval score is inferred from this lane; its frozen guard remains separate."
+  ],
+  "disallowed_claims": [
+    "Do not call this an AMB benchmark improvement.",
+    "Do not call this #1 or SOTA.",
+    "Do not compare this historical harness with current Vectorize AMB results."
+  ]
+}
