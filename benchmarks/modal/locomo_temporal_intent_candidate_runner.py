@@ -71,7 +71,7 @@ app = modal.App(
         "project": "bilinc",
         "purpose": "benchmark",
         "goal": GOAL_ID,
-        "benchmark": BENCHMARK_ID,
+        "benchmark": "locomo-temporal-intent",
     },
 )
 

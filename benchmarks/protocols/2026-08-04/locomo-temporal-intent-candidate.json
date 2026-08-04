@@ -26,7 +26,7 @@
   },
   "runner": {
     "path": "benchmarks/modal/locomo_temporal_intent_candidate_runner.py",
-    "sha256": "aa6314ffe64ee3c10b0f94ceae44014279e067fce5b12c156d798cf6f642f2c8",
+    "sha256": "eb584bf4fad0971ceedb3332ffcb3d1905242c690046d6bf18c781b643f1a5ad",
     "component_runner_sha256": "c4d0966c2b57d51dd305899a31aefca14dce27612410a406bbd1f8d3ab68b879",
     "baseline_mode": "BILINC_CURRENT_STATE_INTENTS=legacy",
     "candidate_mode": "BILINC_CURRENT_STATE_INTENTS=enabled",
