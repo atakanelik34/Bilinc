@@ -58,6 +58,9 @@ class StatePlane:
     # Explicitly enabled local semantic retrieval is a small additive signal;
     # the default path remains unchanged when no semantic model is configured.
     INTELLIGENT_RECALL_SEMANTIC_WEIGHT = 0.05
+    CURRENT_STATE_QUERY_TOKENS = frozenset(
+        {"current", "currently", "now", "latest", "newest", "present"}
+    )
     REFLECTION_DEFAULT_THRESHOLD = 0.55
     REFLECTION_MAX_PASSES = 3
     RECALL_EXPLAIN_SENSITIVE_KEYS = {
@@ -1350,7 +1353,7 @@ class StatePlane:
     ) -> None:
         """Prefer newer evidence when the query explicitly asks for current state."""
         query_tokens = set(self._tokenize_query(query))
-        if "current" not in query_tokens:
+        if not query_tokens.intersection(self.CURRENT_STATE_QUERY_TOKENS):
             return
 
         timestamps = {
