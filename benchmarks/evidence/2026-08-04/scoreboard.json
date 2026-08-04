@@ -462,9 +462,9 @@
   "modal": {
     "authorized_ceiling_usd": 30.0,
     "cumulative_metered_usd": 0.65812383,
-    "cumulative_conservative_estimate_usd": 26.005,
+    "cumulative_conservative_estimate_usd": 28.005,
     "remaining_metered_budget_usd": 29.34187617,
-    "remaining_conservative_budget_usd": 3.995,
+    "remaining_conservative_budget_usd": 1.995,
     "all_goal_apps_stopped": true,
     "persistent_resources_created": false
   },
