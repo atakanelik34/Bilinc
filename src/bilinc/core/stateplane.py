@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-import os
 import re
 import json
 import time
@@ -59,13 +58,6 @@ class StatePlane:
     # Explicitly enabled local semantic retrieval is a small additive signal;
     # the default path remains unchanged when no semantic model is configured.
     INTELLIGENT_RECALL_SEMANTIC_WEIGHT = 0.05
-    # Graph expansion is bounded and only active when the caller has explicitly
-    # initialized the product graph and opts into the recall capability.
-    INTELLIGENT_RECALL_GRAPH_WEIGHT = 0.05
-    INTELLIGENT_RECALL_GRAPH_DEPTH = 2
-    INTELLIGENT_RECALL_GRAPH_SEED_LIMIT = 8
-    INTELLIGENT_RECALL_GRAPH_NODE_LIMIT = 20
-    INTELLIGENT_RECALL_GRAPH_ENV = "BILINC_GRAPH_RECALL"
     REFLECTION_DEFAULT_THRESHOLD = 0.55
     REFLECTION_MAX_PASSES = 3
     RECALL_EXPLAIN_SENSITIVE_KEYS = {
@@ -586,11 +578,6 @@ class StatePlane:
             hybrid_ranked = self._rank_hybrid_keys(query, top_k=max(limit * 3, 10))
             semantic_ranked = self._rank_semantic_keys(query, top_k=max(limit * 10, 50))
             entity_boosts = self._compute_entity_boosts(query, candidates)
-            graph_ranked = self._rank_graph_keys(
-                candidates,
-                entity_boosts,
-                top_k=max(limit * 3, 10),
-            )
             entity_ranked = [
                 key for key, score in sorted(entity_boosts.items(), key=lambda kv: kv[1], reverse=True) if score > 0
             ]
@@ -621,13 +608,6 @@ class StatePlane:
             self._apply_rrf_signal(
                 fused_scores,
                 signals,
-                graph_ranked,
-                weight=self.INTELLIGENT_RECALL_GRAPH_WEIGHT,
-                signal_name="graph",
-            )
-            self._apply_rrf_signal(
-                fused_scores,
-                signals,
                 entity_ranked,
                 weight=self.INTELLIGENT_RECALL_ENTITY_WEIGHT,
                 signal_name="entity_rrf",
@@ -640,7 +620,7 @@ class StatePlane:
                 fused_scores[key] = fused_scores.get(key, 0.0) + (0.25 * boost)
                 bucket = signals.setdefault(
                     key,
-                    {"lexical": 0.0, "hybrid": 0.0, "semantic": 0.0, "graph": 0.0, "entity": 0.0, "entity_rrf": 0.0},
+                    {"lexical": 0.0, "hybrid": 0.0, "semantic": 0.0, "entity": 0.0, "entity_rrf": 0.0},
                 )
                 bucket["entity"] = boost
 
@@ -654,7 +634,7 @@ class StatePlane:
                     continue
                 entry_signals = signals.get(
                     key,
-                    {"lexical": 0.0, "hybrid": 0.0, "semantic": 0.0, "graph": 0.0, "entity": 0.0, "entity_rrf": 0.0},
+                    {"lexical": 0.0, "hybrid": 0.0, "semantic": 0.0, "entity": 0.0, "entity_rrf": 0.0},
                 )
                 result = {
                     "key": entry.key,
@@ -666,7 +646,6 @@ class StatePlane:
                         "lexical": round(entry_signals.get("lexical", 0.0), 6),
                         "hybrid": round(entry_signals.get("hybrid", 0.0), 6),
                         "semantic": round(entry_signals.get("semantic", 0.0), 6),
-                        "graph": round(entry_signals.get("graph", 0.0), 6),
                         "entity": round(entry_signals.get("entity", 0.0), 6),
                     },
                 }
@@ -1363,48 +1342,6 @@ class StatePlane:
         except Exception:
             return []
 
-    def _rank_graph_keys(
-        self,
-        candidates: Dict[str, MemoryEntry],
-        entity_boosts: Dict[str, float],
-        top_k: int,
-    ) -> List[str]:
-        """Rank bounded memory neighbors of query-matched entity seeds."""
-        graph = getattr(self, "knowledge_graph", None)
-        related = getattr(graph, "related_memory_keys", None)
-        enabled = os.environ.get(self.INTELLIGENT_RECALL_GRAPH_ENV, "").strip().lower()
-        if enabled not in {"1", "true", "yes", "on"} or not callable(related) or top_k <= 0:
-            return []
-
-        seeds = sorted(
-            ((key, score) for key, score in entity_boosts.items() if score > 0 and key in candidates),
-            key=lambda item: (-item[1], item[0]),
-        )[: self.INTELLIGENT_RECALL_GRAPH_SEED_LIMIT]
-        if not seeds:
-            return []
-
-        scores: Dict[str, float] = {}
-        for seed_key, seed_score in seeds:
-            try:
-                neighbors = related(
-                    seed_key,
-                    max_depth=self.INTELLIGENT_RECALL_GRAPH_DEPTH,
-                    limit=self.INTELLIGENT_RECALL_GRAPH_NODE_LIMIT,
-                )
-            except Exception:
-                continue
-            for neighbor_key, depth, path_weight in neighbors:
-                if neighbor_key not in candidates or neighbor_key == seed_key:
-                    continue
-                depth_factor = 1.0 / max(int(depth), 1)
-                score = float(seed_score) * max(float(path_weight), 0.0) * depth_factor
-                scores[neighbor_key] = max(scores.get(neighbor_key, 0.0), score)
-
-        return [
-            key
-            for key, _score in sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:top_k]
-        ]
-
     def _apply_current_state_boost(
         self,
         query: str,
@@ -1510,7 +1447,7 @@ class StatePlane:
             fused_scores[key] = fused_scores.get(key, 0.0) + contribution
             bucket = signals.setdefault(
                 key,
-                {"lexical": 0.0, "hybrid": 0.0, "semantic": 0.0, "graph": 0.0, "entity": 0.0, "entity_rrf": 0.0},
+                {"lexical": 0.0, "hybrid": 0.0, "semantic": 0.0, "entity": 0.0, "entity_rrf": 0.0},
             )
             bucket[signal_name] = bucket.get(signal_name, 0.0) + contribution
 

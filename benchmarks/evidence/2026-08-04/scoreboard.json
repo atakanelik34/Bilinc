@@ -299,6 +299,31 @@
       "limitations": ["Retrieval component only; not official end-to-end QA/F1.", "Conversation-isolated scope; not global retrieval.", "Opt-in local semantic model; no public leaderboard position is claimed."]
     },
     {
+      "benchmark_id": "amb-legacy-v3-graph-candidate",
+      "lane": "product-core",
+      "status": "valid-candidate-rejected-no-gain",
+      "comparability_group": "amb-legacy-v3-frozen-generic-adapter",
+      "protocol_hash": "63a07fd34f9bc49ef3c75181f2c1ed9a448e31877dc48113146e6c4b994c0020",
+      "dataset_hash": "frozen-upstream-v3.0.0-fixtures-per-base-protocol",
+      "source_commit": "e5efa69d7e6d8f404e7a904f22e9f295f515e3ce",
+      "candidate_product_files": {
+        "src/bilinc/core/stateplane.py": "596b1e307a65d7a4b79dc5a0e51299ee63d1b269c68a5c8694a2937e18701e15",
+        "src/bilinc/core/knowledge_graph.py": "da3090a3873ccfb8f2c8d4d17db534970e1bea520ed042706ae6b8a31e7293af"
+      },
+      "adapter_hash": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+      "metrics": {
+        "baseline": {"layer1_overall": 75.0, "layer2_overall": 40.0, "layer2_passed": 2, "layer2_total": 5},
+        "candidate": {"layer1_overall": 75.0, "layer2_overall": 40.0, "layer2_passed": 2, "layer2_total": 5},
+        "delta": {"layer1_overall": 0.0, "layer2_overall": 0.0}
+      },
+      "hardware": "Modal 8 requested CPU cores, 16 GiB memory; container reported 24 CPUs",
+      "latency_seconds": {"layer1_baseline": 233.817, "layer1_candidate": 233.406, "layer2_baseline": 25.081, "layer2_candidate": 24.94},
+      "cost_usd": 0.07019728,
+      "raw_result_hashes": ["dd827a5def677ff103a35a28465e17f911ef9b80a944f706c2d35a1a631e890b"],
+      "evidence_path": "benchmarks/evidence/2026-08-04/amb-legacy-v3-graph-candidate/manifest.json",
+      "limitations": ["Historical AMB v3 binary harness; no gain in any scored category.", "Rejected candidate; not current product state."]
+    },
+    {
       "benchmark_id": "amb-current-vectorize-rag",
       "lane": "invalid",
       "status": "blocked-paid-judge",
@@ -329,10 +354,10 @@
   ],
   "modal": {
     "authorized_ceiling_usd": 30.0,
-    "cumulative_metered_usd": 0.28862354,
-    "cumulative_conservative_estimate_usd": 16.005,
-    "remaining_metered_budget_usd": 29.71137646,
-    "remaining_conservative_budget_usd": 13.995,
+    "cumulative_metered_usd": 0.40370022,
+    "cumulative_conservative_estimate_usd": 22.005,
+    "remaining_metered_budget_usd": 29.59629978,
+    "remaining_conservative_budget_usd": 7.995,
     "all_goal_apps_stopped": true,
     "persistent_resources_created": false
   },
