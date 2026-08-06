@@ -2,6 +2,14 @@
 
 All notable changes to Bilinc.
 
+## [2.1.9] — 2026-08-06
+
+### Changed
+
+- Promoted conservative lexical inflection recall with exact-form precedence and a bounded event-time metadata surface.
+- Current-state recall now collapses only a singular explicit state topic to its newest evidence while preserving multi-topic evidence and historical `include_stale` queries.
+- Preserved the cloud-only public package boundary and synchronized the SDK, CLI, MCP server manifest, and activation campaign to 2.1.9.
+
 ## [2.1.8] — 2026-08-04
 
 ### Changed
