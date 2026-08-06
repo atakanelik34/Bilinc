@@ -240,6 +240,28 @@ class TestKGSemanticIntegration:
         assert "rearc_profile" in memories
         assert "rearc_products" in memories
 
+    def test_kg_entity_memory_index_is_casefolded_and_removal_safe(self, kg: KnowledgeGraph):
+        first = MemoryEntry(
+            key="casefold:first",
+            value="Caroline discussed Bilinc.",
+            memory_type=MemoryType.EPISODIC,
+        )
+        second = MemoryEntry(
+            key="casefold:second",
+            value="Caroline confirmed the plan.",
+            memory_type=MemoryType.EPISODIC,
+        )
+
+        kg.ingest_memory_entry(first)
+        kg.ingest_memory_entry(second)
+
+        assert kg.query_memories_by_entity("CAROLINE") == ["casefold:first", "casefold:second"]
+        assert kg.entity_memory_count("caroline") == 2
+
+        assert kg.remove_entity("Caroline") is True
+        assert kg.query_memories_by_entity("caroline") == []
+        assert kg.entity_memory_count("CAROLINE") == 0
+
     def test_kg_creates_cross_memory_links_on_shared_entity(self, kg: KnowledgeGraph):
         """Ingesting two memories with same entity should add cross-memory relations."""
         first = MemoryEntry(

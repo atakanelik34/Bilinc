@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import re
 import json
 import time
@@ -28,6 +29,12 @@ from bilinc.core.dual_process import System1Engine, System2Engine, Arbiter
 from bilinc.core.verifier import StateVerifier
 from bilinc.core.audit import AuditTrail, OpType
 from bilinc.core.decay import compute_new_strength, should_prune
+from bilinc.core.temporal import (
+    classify_temporal_query,
+    entry_event_timestamp,
+    parse_temporal_timestamp,
+    temporal_query_constraints,
+)
 from bilinc.observability.metrics import MetricsCollector
 from bilinc.observability.health import HealthCheck
 from bilinc.observability.logging import log_event
@@ -54,10 +61,102 @@ class StatePlane:
     INTELLIGENT_RECALL_RRF_K = 60
     INTELLIGENT_RECALL_LEXICAL_WEIGHT = 0.25
     INTELLIGENT_RECALL_HYBRID_WEIGHT = 0.55
-    INTELLIGENT_RECALL_ENTITY_WEIGHT = 0.2
+    # Entity continuity is a tie-breaker, not a replacement for lexical or
+    # hybrid evidence. Inferred episodic entities can be frequent participant
+    # names, so keep their RRF and direct contributions deliberately small.
+    INTELLIGENT_RECALL_ENTITY_WEIGHT = 0.05
+    # Directional temporal evidence is deliberately small: it resolves ties
+    # among otherwise relevant memories without allowing chronology to outrank
+    # lexical, hybrid, semantic, or entity relevance.
+    INTELLIGENT_RECALL_TEMPORAL_WEIGHT = 0.1
     # Explicitly enabled local semantic retrieval is a small additive signal;
     # the default path remains unchanged when no semantic model is configured.
     INTELLIGENT_RECALL_SEMANTIC_WEIGHT = 0.05
+    # Optional semantic gating prevents an embedding-only signal from
+    # perturbing queries that already have strong lexical coverage.  It is
+    # enabled only by an explicit deployment flag and is otherwise inert.
+    INTELLIGENT_RECALL_ADAPTIVE_SEMANTIC_WEIGHT = 0.12
+    INTELLIGENT_RECALL_SEMANTIC_LEXICAL_COVERAGE_THRESHOLD = 0.5
+    # Graph continuity can recover a memory that does not mention the query
+    # entity directly, but only through a bounded bridge path. Keep this a
+    # small secondary signal so graph expansion cannot swamp lexical/current
+    # evidence or common conversational participants.
+    GRAPH_ENTITY_MAX_SEEDS = 8
+    GRAPH_ENTITY_MAX_BRIDGE_ENTITIES = 8
+    GRAPH_ENTITY_MAX_NEIGHBORS_PER_BRIDGE = 32
+    GRAPH_ENTITY_BRIDGE_WEIGHT = 0.06
+    # Function words are useful for query intent, but they are weak lexical
+    # evidence for memory relevance. Keep this filter scoped to lexical
+    # ranking so temporal/current-state intent and entity extraction retain
+    # the complete query token stream.
+    LEXICAL_QUERY_STOPWORDS = frozenset(
+        {
+            "a",
+            "an",
+            "and",
+            "also",
+            "as",
+            "at",
+            "about",
+            "be",
+            "been",
+            "being",
+            "but",
+            "by",
+            "can",
+            "could",
+            "did",
+            "do",
+            "does",
+            "for",
+            "from",
+            "had",
+            "has",
+            "have",
+            "he",
+            "her",
+            "his",
+            "how",
+            "i",
+            "if",
+            "in",
+            "is",
+            "it",
+            "its",
+            "may",
+            "might",
+            "of",
+            "on",
+            "or",
+            "our",
+            "she",
+            "than",
+            "that",
+            "the",
+            "their",
+            "them",
+            "then",
+            "these",
+            "they",
+            "this",
+            "those",
+            "to",
+            "was",
+            "we",
+            "were",
+            "what",
+            "when",
+            "where",
+            "which",
+            "who",
+            "why",
+            "will",
+            "with",
+            "would",
+            "you",
+            "your",
+        }
+    )
     REFLECTION_DEFAULT_THRESHOLD = 0.55
     REFLECTION_MAX_PASSES = 3
     RECALL_EXPLAIN_SENSITIVE_KEYS = {
@@ -563,6 +662,7 @@ class StatePlane:
         memory_types: Optional[List[MemoryType]] = None,
         explain: bool = False,
         include_stale: bool = False,
+        query_timestamp: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Multi-path retrieval with lightweight fusion:
@@ -578,10 +678,12 @@ class StatePlane:
             if not query or limit <= 0:
                 return []
 
+            valid_as_of = parse_temporal_timestamp(query_timestamp)
             candidates = await self._collect_recall_candidates(
                 memory_types=memory_types,
-                include_stale=include_stale,
+                include_stale=include_stale or valid_as_of is not None,
             )
+            candidates = self._filter_candidates_as_of(candidates, query_timestamp)
             if not candidates:
                 return []
 
@@ -597,7 +699,27 @@ class StatePlane:
                 top_k=max(limit * 10, 50),
                 candidate_keys=candidate_keys,
             )
-            entity_boosts = self._compute_entity_boosts(query, candidates)
+            semantic_weight = self._semantic_recall_weight(
+                query,
+                candidates,
+                lexical_ranked,
+            )
+            temporal_ranked = self._rank_temporal_keys(
+                query,
+                candidates,
+                candidate_keys=set(lexical_ranked[: max(limit * 10, 50)])
+                | set(hybrid_ranked[: max(limit * 10, 50)]),
+            )
+            bridge_protected_keys = (
+                set(lexical_ranked[:limit])
+                | set(hybrid_ranked[:limit])
+                | set(semantic_ranked[:limit])
+            )
+            entity_boosts = self._compute_entity_boosts(
+                query,
+                candidates,
+                bridge_protected_keys=bridge_protected_keys,
+            )
             entity_ranked = [
                 key for key, score in sorted(entity_boosts.items(), key=lambda kv: kv[1], reverse=True) if score > 0
             ]
@@ -622,8 +744,15 @@ class StatePlane:
                 fused_scores,
                 signals,
                 semantic_ranked,
-                weight=self.INTELLIGENT_RECALL_SEMANTIC_WEIGHT,
+                weight=semantic_weight,
                 signal_name="semantic",
+            )
+            self._apply_rrf_signal(
+                fused_scores,
+                signals,
+                temporal_ranked,
+                weight=self.INTELLIGENT_RECALL_TEMPORAL_WEIGHT,
+                signal_name="temporal",
             )
             self._apply_rrf_signal(
                 fused_scores,
@@ -637,10 +766,17 @@ class StatePlane:
             for key, boost in entity_boosts.items():
                 if boost <= 0:
                     continue
-                fused_scores[key] = fused_scores.get(key, 0.0) + (0.25 * boost)
+                fused_scores[key] = fused_scores.get(key, 0.0) + (0.02 * boost)
                 bucket = signals.setdefault(
                     key,
-                    {"lexical": 0.0, "hybrid": 0.0, "semantic": 0.0, "entity": 0.0, "entity_rrf": 0.0},
+                    {
+                        "lexical": 0.0,
+                        "hybrid": 0.0,
+                        "semantic": 0.0,
+                        "temporal": 0.0,
+                        "entity": 0.0,
+                        "entity_rrf": 0.0,
+                    },
                 )
                 bucket["entity"] = boost
 
@@ -654,7 +790,14 @@ class StatePlane:
                     continue
                 entry_signals = signals.get(
                     key,
-                    {"lexical": 0.0, "hybrid": 0.0, "semantic": 0.0, "entity": 0.0, "entity_rrf": 0.0},
+                    {
+                        "lexical": 0.0,
+                        "hybrid": 0.0,
+                        "semantic": 0.0,
+                        "temporal": 0.0,
+                        "entity": 0.0,
+                        "entity_rrf": 0.0,
+                    },
                 )
                 result = {
                     "key": entry.key,
@@ -666,6 +809,7 @@ class StatePlane:
                         "lexical": round(entry_signals.get("lexical", 0.0), 6),
                         "hybrid": round(entry_signals.get("hybrid", 0.0), 6),
                         "semantic": round(entry_signals.get("semantic", 0.0), 6),
+                        "temporal": round(entry_signals.get("temporal", 0.0), 6),
                         "entity": round(entry_signals.get("entity", 0.0), 6),
                     },
                 }
@@ -738,6 +882,7 @@ class StatePlane:
         max_reflections: Optional[int] = None,
         adequacy_threshold: Optional[float] = None,
         explain: bool = False,
+        query_timestamp: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run recall with a named profile and attach optional read-only evidence metadata."""
         resolved = self.resolve_recall_profile(profile)
@@ -752,6 +897,7 @@ class StatePlane:
             adequacy_threshold=resolved["adequacy_threshold"],
             memory_types=memory_types,
             explain=explain,
+            query_timestamp=query_timestamp,
         )
         payload["profile"] = resolved["name"]
         payload["recall_profile"] = resolved
@@ -828,6 +974,8 @@ class StatePlane:
             reasons.append("hybrid/vector rerank match")
         if signals.get("semantic", 0.0) > 0:
             reasons.append("semantic embedding match")
+        if signals.get("temporal", 0.0) > 0:
+            reasons.append("directional temporal evidence")
         if signals.get("entity", 0.0) > 0:
             reasons.append("entity overlap match")
         if entry.importance >= 0.8:
@@ -931,6 +1079,7 @@ class StatePlane:
         adequacy_threshold: float = 0.55,
         memory_types: Optional[List[MemoryType]] = None,
         explain: bool = False,
+        query_timestamp: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Reflection loop:
@@ -951,6 +1100,7 @@ class StatePlane:
                 limit=limit,
                 memory_types=memory_types,
                 explain=explain,
+                query_timestamp=query_timestamp,
             )
             adequacy = self._evaluate_recall_adequacy(current_query, results)
 
@@ -969,6 +1119,7 @@ class StatePlane:
                     limit=limit,
                     memory_types=memory_types,
                     explain=explain,
+                    query_timestamp=query_timestamp,
                 )
                 next_adequacy = self._evaluate_recall_adequacy(current_query, next_results)
 
@@ -1273,6 +1424,36 @@ class StatePlane:
                 candidates[entry.key] = entry
         return candidates
 
+    def _filter_candidates_as_of(
+        self,
+        candidates: Dict[str, MemoryEntry],
+        query_timestamp: Optional[str],
+    ) -> Dict[str, MemoryEntry]:
+        """Apply explicit point-in-time visibility without changing default recall."""
+
+        cutoff = parse_temporal_timestamp(query_timestamp)
+        if cutoff is None:
+            return candidates
+
+        filtered: Dict[str, MemoryEntry] = {}
+        for key, entry in candidates.items():
+            event_timestamp = entry_event_timestamp(entry)
+            if event_timestamp is not None and event_timestamp > cutoff:
+                continue
+
+            valid_at = parse_temporal_timestamp(entry.valid_at)
+            if valid_at is not None and valid_at > cutoff:
+                continue
+            invalid_at = parse_temporal_timestamp(entry.invalid_at)
+            if invalid_at is not None and invalid_at <= cutoff:
+                continue
+            created_at = parse_temporal_timestamp(entry.created_at)
+            ttl = parse_temporal_timestamp(entry.ttl)
+            if created_at is not None and ttl is not None and created_at + ttl <= cutoff:
+                continue
+            filtered[key] = entry
+        return filtered
+
     def _is_recallable_entry(self, entry: MemoryEntry, now: Optional[float] = None) -> bool:
         """Return whether an entry belongs in the default current-state view."""
         now = time.time() if now is None else float(now)
@@ -1339,7 +1520,11 @@ class StatePlane:
         return " ".join(expanded_tokens)
 
     def _rank_lexical_keys(self, query: str, candidates: Dict[str, MemoryEntry]) -> List[str]:
-        tokens = set(self._tokenize_query(query))
+        tokens = {
+            token
+            for token in self._tokenize_query(query)
+            if token not in self.LEXICAL_QUERY_STOPWORDS
+        }
         if not tokens:
             return []
         # Use corpus specificity as a bounded tie-breaker. Coverage remains
@@ -1368,6 +1553,43 @@ class StatePlane:
             scored.append((key, score))
         scored.sort(key=lambda kv: kv[1], reverse=True)
         return [k for k, _ in scored]
+
+    def _semantic_recall_weight(
+        self,
+        query: str,
+        candidates: Dict[str, MemoryEntry],
+        lexical_ranked: List[str],
+    ) -> float:
+        """Return the semantic RRF weight for an explicitly adaptive deployment.
+
+        Strong lexical coverage is already a useful relevance signal, so
+        semantic retrieval is gated off in that case.  With weak or absent
+        lexical coverage, the semantic signal receives a bounded additive
+        weight.  The environment flag keeps this experiment opt-in and
+        preserves the existing default path byte-for-byte in behavior.
+        """
+        base_weight = self.INTELLIGENT_RECALL_SEMANTIC_WEIGHT
+        enabled = os.environ.get("BILINC_SEMANTIC_ADAPTIVE_WEIGHT", "").strip().lower()
+        if enabled not in {"1", "true", "yes", "on"}:
+            return base_weight
+
+        tokens = set(self._tokenize_query(query))
+        if not tokens or not lexical_ranked:
+            return self.INTELLIGENT_RECALL_ADAPTIVE_SEMANTIC_WEIGHT
+
+        probe_keys = lexical_ranked[: min(10, len(lexical_ranked))]
+        best_coverage = 0.0
+        for key in probe_keys:
+            entry = candidates.get(key)
+            if entry is None:
+                continue
+            text = f"{entry.key} {entry.value}".lower()
+            coverage = sum(1 for token in tokens if token in text) / len(tokens)
+            best_coverage = max(best_coverage, coverage)
+
+        if best_coverage >= self.INTELLIGENT_RECALL_SEMANTIC_LEXICAL_COVERAGE_THRESHOLD:
+            return 0.0
+        return self.INTELLIGENT_RECALL_ADAPTIVE_SEMANTIC_WEIGHT
 
     def _rank_hybrid_keys(
         self,
@@ -1412,6 +1634,88 @@ class StatePlane:
             return keys
         except Exception:
             return []
+
+    def _rank_temporal_keys(
+        self,
+        query: str,
+        candidates: Dict[str, MemoryEntry],
+        candidate_keys: Optional[set[str]] = None,
+    ) -> List[str]:
+        """Rank relevant memories by explicit event time for directional queries.
+
+        This is a bounded secondary signal. It only activates for queries that
+        explicitly express an ordering direction (before/after/ordering), and
+        it never substitutes ingestion time for an explicit source/event time.
+        Queries such as ``when`` remain governed by lexical and hybrid
+        relevance because they do not provide a direction to sort by.
+        """
+        query_type = classify_temporal_query(query)
+        constraints = temporal_query_constraints(query)
+        if query_type not in {"before", "after", "ordering"} and not constraints:
+            return []
+
+        allowed = set(candidates) if candidate_keys is None else set(candidate_keys)
+        timestamped: List[tuple[str, float]] = []
+        for key in allowed:
+            entry = candidates.get(key)
+            if entry is None:
+                continue
+            timestamp = entry_event_timestamp(entry)
+            if timestamp is not None:
+                timestamped.append((key, timestamp))
+        if len(timestamped) < 2:
+            return []
+
+        # Explicit date constraints are a generic relevance signal: prefer
+        # entries whose source event falls in the requested year/month/day.
+        # Directional queries retain chronological ordering within each match
+        # group. Stable key order makes equal timestamps deterministic across
+        # SQLite/PostgreSQL backends.
+        date_match_active = False
+        if constraints:
+            from datetime import datetime, timezone
+
+            def match_rank(item: tuple[str, float]) -> tuple[int, float, str]:
+                key, timestamp = item
+                event = datetime.fromtimestamp(timestamp, timezone.utc)
+                matches = 0
+                if "year" in constraints:
+                    matches += int(constraints["year"] == event.year)
+                if "month" in constraints:
+                    matches += int(constraints["month"] == event.month)
+                if "day" in constraints:
+                    matches += int(constraints["day"] == event.day)
+                return matches, timestamp, key
+
+            def matches_constraint(item: tuple[str, float]) -> bool:
+                _key, timestamp = item
+                event = datetime.fromtimestamp(timestamp, timezone.utc)
+                return all(
+                    getattr(event, field) == expected
+                    for field, expected in constraints.items()
+                )
+
+            matched = [item for item in timestamped if matches_constraint(item)]
+            if matched and len(matched) < len(timestamped):
+                timestamped = matched
+                date_match_active = True
+            elif query_type not in {"before", "after", "ordering"}:
+                # A year shared by every candidate is not a useful ranking
+                # signal and should not perturb ordinary factual recall.
+                return []
+
+        reverse = query_type == "after"
+        if date_match_active:
+            timestamped.sort(
+                key=lambda item: (
+                    -match_rank(item)[0],
+                    -item[1] if reverse else item[1],
+                    item[0],
+                )
+            )
+        else:
+            timestamped.sort(key=lambda item: (item[1], item[0]), reverse=reverse)
+        return [key for key, _timestamp in timestamped]
 
     def _apply_current_state_boost(
         self,
@@ -1461,17 +1765,143 @@ class StatePlane:
             if explicitly_stale or future_dated:
                 fused_scores[key] -= 0.04
 
-    def _compute_entity_boosts(self, query: str, candidates: Dict[str, MemoryEntry]) -> Dict[str, float]:
+    def _compute_entity_boosts(
+        self,
+        query: str,
+        candidates: Dict[str, MemoryEntry],
+        bridge_protected_keys: Optional[set[str]] = None,
+    ) -> Dict[str, float]:
         boosts: Dict[str, float] = {key: 0.0 for key in candidates}
         if hasattr(self, "knowledge_graph") and self.knowledge_graph:
-            for key in candidates:
-                try:
-                    boosts[key] = float(self.knowledge_graph.compute_entity_overlap_boost(query, key))
-                except Exception:
-                    boosts[key] = 0.0
+            boosts.update(
+                self._graph_entity_boosts(
+                    query,
+                    candidates,
+                    bridge_protected_keys=bridge_protected_keys,
+                )
+            )
 
-        for memory_key, boost in self._entity_projection_boosts(query, set(candidates.keys())).items():
+        # The graph is authoritative when initialized. The SQLite projection
+        # is still used for deployments that do not keep an in-memory graph,
+        # but applying both signals would double-count episodic entities.
+        projection_boosts = {}
+        if not (hasattr(self, "knowledge_graph") and self.knowledge_graph):
+            projection_boosts = self._entity_projection_boosts(query, set(candidates.keys()))
+        for memory_key, boost in projection_boosts.items():
             boosts[memory_key] = min(1.0, boosts.get(memory_key, 0.0) + boost)
+        return boosts
+
+    def _graph_entity_boosts(
+        self,
+        query: str,
+        candidates: Dict[str, MemoryEntry],
+        bridge_protected_keys: Optional[set[str]] = None,
+    ) -> Dict[str, float]:
+        """Score graph entities with bounded inverse-frequency weighting.
+
+        Conversational turns often repeat participant names. Treating a
+        ubiquitous participant as a strong relevance signal can swamp lexical
+        and temporal evidence, so common entities contribute less while rare
+        entities retain a bounded continuity signal.
+        """
+        graph = getattr(self, "knowledge_graph", None)
+        if not graph or not candidates:
+            return {}
+        try:
+            query_entities = {
+                str(entity).casefold()
+                for entity in graph._extract_entities_from_text(query)
+                if str(entity).strip()
+            }
+        except Exception:
+            return {}
+        if not query_entities:
+            return {}
+
+        memory_entities: Dict[str, set[str]] = {}
+        entity_frequency: Dict[str, int] = {}
+        for key in candidates:
+            try:
+                entities = {
+                    str(entity).casefold()
+                    for entity in graph.memory_entities(key)
+                    if str(entity).strip()
+                }
+            except Exception:
+                entities = set()
+            memory_entities[key] = entities
+            for entity in entities & query_entities:
+                entity_frequency[entity] = entity_frequency.get(entity, 0) + 1
+
+        corpus_size = max(len(candidates), 1)
+        denominator = math.log(corpus_size + 1.0)
+
+        def inverse_frequency(entity: str) -> float:
+            frequency = entity_frequency.get(entity, 0)
+            if frequency <= 0:
+                return 0.0
+            if corpus_size < 20:
+                return 1.0 if frequency <= 1 else 0.25
+            if frequency >= corpus_size * 0.5:
+                return 0.0
+            return max(
+                0.0,
+                min(1.0, math.log((corpus_size + 1.0) / (frequency + 1.0)) / denominator),
+            )
+
+        boosts: Dict[str, float] = {}
+        for key, entities in memory_entities.items():
+            overlap = entities & query_entities
+            if not overlap:
+                continue
+            boosts[key] = min(0.4, sum(0.2 * inverse_frequency(entity) for entity in overlap))
+
+        if not getattr(self, "enable_graph_bridge_recall", False):
+            return boosts
+
+        # Bounded two-hop continuity: query entity -> seed memory -> shared
+        # bridge entity -> candidate memory. This is intentionally derived
+        # from the generic entity-memory index rather than benchmark text or
+        # query-specific aliases. It lets a relation spread across multiple
+        # memories remain retrievable without making every graph neighbor a
+        # high-confidence hit.
+        direct_seed_keys = [
+            key for key, score in boosts.items() if score > 0
+        ]
+        direct_seed_keys.sort(key=lambda key: (-boosts[key], key))
+        for seed_key in direct_seed_keys[: self.GRAPH_ENTITY_MAX_SEEDS]:
+            seed_entities = memory_entities.get(seed_key, set())
+            bridge_entities = sorted(seed_entities - query_entities)
+            for bridge_entity in bridge_entities[: self.GRAPH_ENTITY_MAX_BRIDGE_ENTITIES]:
+                linked_keys = graph.query_memories_by_entity(
+                    bridge_entity,
+                    limit=self.GRAPH_ENTITY_MAX_NEIGHBORS_PER_BRIDGE,
+                )
+                frequency = graph.entity_memory_count(bridge_entity)
+                if frequency <= 0 or frequency >= corpus_size * 0.5:
+                    continue
+                bridge_specificity = max(
+                    0.0,
+                    min(
+                        1.0,
+                        math.log((corpus_size + 1.0) / (frequency + 1.0)) / denominator,
+                    ),
+                )
+                if bridge_specificity <= 0:
+                    continue
+                for neighbor_key in linked_keys:
+                    if neighbor_key == seed_key or neighbor_key not in candidates:
+                        continue
+                    if bridge_protected_keys and neighbor_key in bridge_protected_keys:
+                        continue
+                    neighbor_entities = memory_entities.get(neighbor_key, set())
+                    if bridge_entity not in neighbor_entities:
+                        continue
+                    bridge_boost = self.GRAPH_ENTITY_BRIDGE_WEIGHT * bridge_specificity
+                    boosts[neighbor_key] = min(
+                        0.16,
+                        boosts.get(neighbor_key, 0.0) + bridge_boost,
+                    )
         return boosts
 
     def _entity_projection_boosts(self, query: str, candidate_keys: set[str]) -> Dict[str, float]:
@@ -1496,18 +1926,39 @@ class StatePlane:
             normalized_names = {" ".join(str(name).lower().split()) for name in names if str(name).strip()}
             if normalized_names & normalized_seeds:
                 entity_ids.add(row["id"])
-        for entity_id in list(entity_ids)[:5]:
+        corpus_size = max(len(candidate_keys), 1)
+        denominator = math.log(corpus_size + 1.0)
+        for entity_id in sorted(entity_ids)[:5]:
             try:
+                frequency_row = conn.execute(
+                    "SELECT COUNT(DISTINCT memory_key) AS frequency FROM entity_mentions WHERE entity_id = ? AND source != ?",
+                    (entity_id, "proper_noun_projection"),
+                ).fetchone()
+                frequency = int(frequency_row["frequency"] or 0) if frequency_row else 0
+                if frequency <= 0:
+                    continue
+                if corpus_size < 20:
+                    inverse_frequency = 1.0 if frequency <= 1 else 0.25
+                else:
+                    if frequency >= corpus_size * 0.5:
+                        continue
+                    inverse_frequency = max(
+                        0.0,
+                        min(1.0, math.log((corpus_size + 1.0) / (frequency + 1.0)) / denominator),
+                    )
                 rows = conn.execute(
-                    "SELECT DISTINCT memory_key FROM entity_mentions WHERE entity_id = ? LIMIT 20",
-                    (entity_id,),
+                    "SELECT DISTINCT memory_key FROM entity_mentions WHERE entity_id = ? AND source != ? LIMIT 200",
+                    (entity_id, "proper_noun_projection"),
                 ).fetchall()
             except Exception:
                 continue
             for row in rows:
                 memory_key = row["memory_key"]
                 if memory_key in candidate_keys:
-                    boosts[memory_key] = min(1.0, boosts.get(memory_key, 0.0) + 0.6)
+                    boosts[memory_key] = min(
+                        1.0,
+                        boosts.get(memory_key, 0.0) + (0.6 * inverse_frequency),
+                    )
         return boosts
 
     def _entity_seed_phrases(self, query: str) -> List[str]:
@@ -1539,7 +1990,14 @@ class StatePlane:
             fused_scores[key] = fused_scores.get(key, 0.0) + contribution
             bucket = signals.setdefault(
                 key,
-                {"lexical": 0.0, "hybrid": 0.0, "semantic": 0.0, "entity": 0.0, "entity_rrf": 0.0},
+                {
+                    "lexical": 0.0,
+                    "hybrid": 0.0,
+                    "semantic": 0.0,
+                    "temporal": 0.0,
+                    "entity": 0.0,
+                    "entity_rrf": 0.0,
+                },
             )
             bucket[signal_name] = bucket.get(signal_name, 0.0) + contribution
 
@@ -1887,10 +2345,30 @@ class StatePlane:
         self.agm_engine = agm_engine or AGMEngine()
         return self.agm_engine
 
-    def init_knowledge_graph(self, kg=None):
-        """Initialize Knowledge Graph on this StatePlane."""
+    def init_knowledge_graph(
+        self,
+        kg=None,
+        materialize_cross_memory_links: bool = True,
+        enable_graph_bridge_recall: bool = False,
+    ):
+        """Initialize Knowledge Graph on this StatePlane.
+
+        The entity-memory index remains complete for retrieval. Materializing
+        every co-occurrence edge is an optional graph-exploration surface and
+        can be disabled explicitly for index-only deployments. The default
+        keeps the existing cross-memory edge behavior for API compatibility;
+        edge fan-out remains bounded by KnowledgeGraph's caps.
+        """
         from bilinc.core.knowledge_graph import KnowledgeGraph
-        self.knowledge_graph = kg or KnowledgeGraph()
+        if kg is None:
+            link_limit = 64 if materialize_cross_memory_links else 0
+            entry_limit = 128 if materialize_cross_memory_links else 0
+            kg = KnowledgeGraph(
+                max_cross_memory_links_per_entity=link_limit,
+                max_cross_memory_links_per_entry=entry_limit,
+            )
+        self.knowledge_graph = kg
+        self.enable_graph_bridge_recall = bool(enable_graph_bridge_recall)
         return self.knowledge_graph
 
     def init_belief_sync(self, sync_engine=None):
@@ -1948,8 +2426,6 @@ class StatePlane:
 
             if hasattr(self, "agm_engine") and self.agm_engine:
                 result = self.agm_engine.revise(entry)
-                if hasattr(self, "knowledge_graph") and self.knowledge_graph:
-                    self.knowledge_graph.ingest_memory_entry(entry)
 
                 previous_entry = await self.backend.load(key) if self.backend else None
                 if self.backend and result.success:
@@ -1959,6 +2435,7 @@ class StatePlane:
                             f"persistence_write_failed: backend save returned false for key '{key}'"
                         )
                     await self._project_claims_for_entry(entry)
+                    await self._project_entities_for_entry(entry)
                     await self._append_memory_event(
                         operation=EventOperation.REVISE.value if previous_entry else EventOperation.COMMIT.value,
                         subject=key,
@@ -1982,6 +2459,13 @@ class StatePlane:
                         after_value=entry.to_dict(),
                     )
 
+                # Keep an explicitly enabled graph in sync even when the
+                # belief revision result is the only state transition. Do it
+                # after persistence so a failed write cannot leak a graph
+                # projection that the backend does not contain.
+                if result.success and hasattr(self, "knowledge_graph") and self.knowledge_graph:
+                    self.knowledge_graph.ingest_memory_entry(entry)
+
                 return result
             else:
                 # Fallback mode
@@ -1993,6 +2477,7 @@ class StatePlane:
                             f"persistence_write_failed: backend save returned false for key '{key}'"
                         )
                     await self._project_claims_for_entry(entry)
+                    await self._project_entities_for_entry(entry)
                     await self._append_memory_event(
                         operation=EventOperation.REVISE.value if previous_entry else EventOperation.COMMIT.value,
                         subject=key,
@@ -2002,6 +2487,8 @@ class StatePlane:
                         after_value=entry.to_dict(),
                         payload_json={"metadata": entry.metadata, "source": entry.source, "session_id": entry.session_id},
                     )
+                if hasattr(self, "knowledge_graph") and self.knowledge_graph:
+                    self.knowledge_graph.ingest_memory_entry(entry)
                 return entry
         except Exception:
             if hasattr(self, 'metrics') and self.metrics:

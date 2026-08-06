@@ -11,8 +11,48 @@ Based on Allen's interval algebra.
 ORIGINAL implementation.
 """
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timezone
 from enum import Enum
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+
+_MONTH_NAMES = {
+    name.lower(): index
+    for index, name in enumerate(
+        (
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ),
+        start=1,
+    )
+}
+_MONTH_NAMES.update(
+    {
+        "jan": 1,
+        "feb": 2,
+        "mar": 3,
+        "apr": 4,
+        "jun": 6,
+        "jul": 7,
+        "aug": 8,
+        "sep": 9,
+        "sept": 9,
+        "oct": 10,
+        "nov": 11,
+        "dec": 12,
+    }
+)
 
 
 class TemporalRelation(str, Enum):
@@ -22,6 +62,96 @@ class TemporalRelation(str, Enum):
     CONTAINS = "contains"
     OVERLAPS = "overlaps"
     EQUALS = "equals"
+
+
+def parse_temporal_timestamp(value: Any) -> Optional[float]:
+    """Convert common event-time representations to a UTC epoch safely."""
+
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value).strip()
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            parsed = None
+        if parsed is None:
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                # Accept human-readable source timestamps such as
+                # ``1:56 pm on 8 May, 2023`` without making callers normalize
+                # event metadata first.  This remains a generic parser for
+                # common English date forms, not a benchmark-specific rule.
+                normalized = re.sub(r"(\d{1,2})(st|nd|rd|th)\b", r"\1", text, flags=re.IGNORECASE)
+                parsed = None
+                for date_format in (
+                    "%I:%M %p on %d %B, %Y",
+                    "%I:%M %p on %d %b, %Y",
+                    "%d %B, %Y %I:%M %p",
+                    "%d %b, %Y %I:%M %p",
+                    "%B %d, %Y %I:%M %p",
+                    "%b %d, %Y %I:%M %p",
+                ):
+                    try:
+                        parsed = datetime.strptime(normalized, date_format)
+                        break
+                    except ValueError:
+                        continue
+                if parsed is None:
+                    return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def entry_event_timestamp(entry: Any) -> Optional[float]:
+    """Return an entry's explicit event timestamp, never its ingestion time."""
+
+    if isinstance(entry, dict):
+        metadata = entry.get("metadata")
+        get_value = entry.get
+    else:
+        metadata = getattr(entry, "metadata", None)
+
+        def get_value(key: str, default: Any = None) -> Any:
+            return getattr(entry, key, default)
+
+    metadata = metadata if isinstance(metadata, dict) else {}
+    for key in ("source_timestamp", "source_date_time", "event_timestamp", "occurred_at", "timestamp"):
+        parsed = parse_temporal_timestamp(metadata.get(key))
+        if parsed is not None:
+            return parsed
+    return parse_temporal_timestamp(get_value("valid_at"))
+
+
+def temporal_query_constraints(query: str) -> Dict[str, int]:
+    """Extract explicit month/day/year constraints from a natural query."""
+
+    text = str(query or "").lower()
+    constraints: Dict[str, int] = {}
+    year_match = re.search(r"\b((?:19|20)\d{2})\b", text)
+    if year_match:
+        constraints["year"] = int(year_match.group(1))
+
+    month_pattern = "|".join(sorted(_MONTH_NAMES, key=len, reverse=True))
+    month_match = re.search(rf"\b({month_pattern})\b", text)
+    if month_match:
+        constraints["month"] = _MONTH_NAMES[month_match.group(1)]
+
+        after_month = text[month_match.end() :]
+        before_month = text[: month_match.start()]
+        day_match = re.match(r"\s+(\d{1,2})(?:st|nd|rd|th)?\b", after_month)
+        if not day_match:
+            day_match = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s*$", before_month)
+        if day_match:
+            day = int(day_match.group(1))
+            if 1 <= day <= 31:
+                constraints["day"] = day
+
+    return constraints
 
 
 def classify_temporal_query(query: str) -> Optional[str]:

@@ -10,11 +10,14 @@ RRF fusion + decay-aware reranking + temporal boost.
 ORIGINAL implementation.
 """
 from __future__ import annotations
+from collections import OrderedDict
 from functools import lru_cache
+import hashlib
 import json
 import os
 import re
 import struct
+from threading import RLock
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -61,6 +64,99 @@ def _encode_semantic(model, texts: List[str], mode: str):
         except (TypeError, AttributeError):
             pass
     return model.encode(texts, **kwargs)
+
+
+_SEMANTIC_CACHE_DEFAULT_SIZE = 4096
+_SEMANTIC_CACHE_DEFAULT_BYTES = 16 * 1024 * 1024
+_semantic_document_cache: OrderedDict[Tuple[str, str, str, str], Tuple[object, int]] = OrderedDict()
+_semantic_document_cache_lock = RLock()
+_semantic_document_cache_bytes = 0
+
+
+def _semantic_cache_size() -> int:
+    """Return the bounded process cache size for opt-in document vectors."""
+
+    raw_size = os.environ.get("BILINC_SEMANTIC_CACHE_SIZE", "")
+    try:
+        return max(0, int(raw_size)) if raw_size else _SEMANTIC_CACHE_DEFAULT_SIZE
+    except (TypeError, ValueError):
+        return _SEMANTIC_CACHE_DEFAULT_SIZE
+
+
+def _semantic_cache_max_bytes() -> int:
+    """Return the bounded process cache byte budget."""
+
+    raw_size = os.environ.get("BILINC_SEMANTIC_CACHE_MAX_BYTES", "")
+    try:
+        return max(0, int(raw_size)) if raw_size else _SEMANTIC_CACHE_DEFAULT_BYTES
+    except (TypeError, ValueError):
+        return _SEMANTIC_CACHE_DEFAULT_BYTES
+
+
+def _semantic_cache_key(config: Tuple[str, str, str], text: str) -> Tuple[str, str, str, str]:
+    """Key vectors without retaining raw memory text in the process-wide map."""
+
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return (*config, digest)
+
+
+def _semantic_cache_trim(size: int, max_bytes: int) -> None:
+    global _semantic_document_cache_bytes
+    while _semantic_document_cache and (
+        len(_semantic_document_cache) > size or _semantic_document_cache_bytes > max_bytes
+    ):
+        _key, (_vector, vector_bytes) = _semantic_document_cache.popitem(last=False)
+        _semantic_document_cache_bytes -= vector_bytes
+
+
+def _semantic_cache_get(config: Tuple[str, str, str], text: str):
+    size = _semantic_cache_size()
+    max_bytes = _semantic_cache_max_bytes()
+    with _semantic_document_cache_lock:
+        if size <= 0 or max_bytes <= 0:
+            _semantic_document_cache.clear()
+            global _semantic_document_cache_bytes
+            _semantic_document_cache_bytes = 0
+            return None
+        _semantic_cache_trim(size, max_bytes)
+        key = _semantic_cache_key(config, text)
+        cached = _semantic_document_cache.get(key)
+        if cached is not None:
+            _semantic_document_cache.move_to_end(key)
+            return cached[0]
+        return None
+
+
+def _semantic_cache_put(config: Tuple[str, str, str], text: str, vector: object) -> None:
+    size = _semantic_cache_size()
+    max_bytes = _semantic_cache_max_bytes()
+    vector_bytes = int(getattr(vector, "nbytes", 0) or 0)
+    with _semantic_document_cache_lock:
+        global _semantic_document_cache_bytes
+        if size <= 0 or max_bytes <= 0:
+            _semantic_document_cache.clear()
+            _semantic_document_cache_bytes = 0
+            return
+        key = _semantic_cache_key(config, text)
+        previous = _semantic_document_cache.pop(key, None)
+        if previous is not None:
+            _semantic_document_cache_bytes -= previous[1]
+        if vector_bytes > max_bytes:
+            _semantic_cache_trim(size, max_bytes)
+            return
+        _semantic_document_cache[key] = (vector, vector_bytes)
+        _semantic_document_cache.move_to_end(key)
+        _semantic_document_cache_bytes += vector_bytes
+        _semantic_cache_trim(size, max_bytes)
+
+
+def _clear_semantic_document_cache() -> None:
+    """Clear the process cache; intended for isolated tests and diagnostics."""
+
+    with _semantic_document_cache_lock:
+        global _semantic_document_cache_bytes
+        _semantic_document_cache.clear()
+        _semantic_document_cache_bytes = 0
 
 
 class VectorStore:
@@ -187,8 +283,12 @@ class HybridSearch:
         self.conn = conn
         self.vs = vector_store
         self._semantic_embeddings: Dict[int, Tuple[str, object]] = {}
-        self._semantic_config: Optional[Tuple[str, str]] = None
+        self._semantic_matrix: object | None = None
+        self._semantic_matrix_row_ids: Tuple[int, ...] = ()
+        self._semantic_matrix_signature: Tuple[Tuple[int, str], ...] = ()
+        self._semantic_config: Optional[Tuple[str, str, str]] = None
         self._semantic_disabled = False
+        self._semantic_lock = RLock()
 
     def _rowids_for_allowed_keys(self, allowed_keys: Optional[set[str]]) -> Optional[set[int]]:
         if allowed_keys is None:
@@ -203,6 +303,15 @@ class HybridSearch:
             return set()
 
     def semantic_search(
+        self,
+        query: str,
+        top_k: int = 10,
+        allowed_keys: Optional[set[str]] = None,
+    ) -> List[Tuple[int, float]]:
+        with self._semantic_lock:
+            return self._semantic_search_unlocked(query, top_k, allowed_keys)
+
+    def _semantic_search_unlocked(
         self,
         query: str,
         top_k: int = 10,
@@ -228,6 +337,9 @@ class HybridSearch:
         config = (model_name, device, revision)
         if self._semantic_config != config:
             self._semantic_embeddings.clear()
+            self._semantic_matrix = None
+            self._semantic_matrix_row_ids = ()
+            self._semantic_matrix_signature = ()
             self._semantic_disabled = False
             self._semantic_config = config
         model = _load_semantic_model(model_name, device, revision)
@@ -246,29 +358,43 @@ class HybridSearch:
                 rows = [row for row in rows if int(row[0]) in allowed_rowids]
             if not rows:
                 return []
-            row_ids: List[int] = []
             text_by_id: Dict[int, str] = {}
-            pending_ids: List[int] = []
-            pending_texts: List[str] = []
+            pending_ids_by_text: Dict[str, List[int]] = {}
             for row in rows:
                 row_id = int(row[0])
                 text = f"{row[1]} {row[2] or ''}"
-                row_ids.append(row_id)
                 text_by_id[row_id] = text
                 cached = self._semantic_embeddings.get(row_id)
                 if cached is None or cached[0] != text:
-                    pending_ids.append(row_id)
-                    pending_texts.append(text)
+                    shared = _semantic_cache_get(config, text)
+                    if shared is not None:
+                        self._semantic_embeddings[row_id] = (text, shared)
+                    else:
+                        pending_ids_by_text.setdefault(text, []).append(row_id)
 
+            pending_texts = list(pending_ids_by_text)
             if pending_texts:
                 encoded = np.asarray(_encode_semantic(model, pending_texts, "document"))
                 if encoded.ndim == 1:
                     encoded = encoded.reshape(1, -1)
-                for row_id, vector in zip(pending_ids, encoded):
-                    self._semantic_embeddings[row_id] = (text_by_id[row_id], vector)
+                for text, vector in zip(pending_texts, encoded):
+                    _semantic_cache_put(config, text, vector)
+                    for row_id in pending_ids_by_text[text]:
+                        self._semantic_embeddings[row_id] = (text, vector)
 
             query_vector = np.asarray(_encode_semantic(model, [query], "query"))[0]
-            matrix = np.vstack([self._semantic_embeddings[row_id][1] for row_id in row_ids])
+            signature = tuple((row_id, text_by_id[row_id]) for row_id in text_by_id)
+            if signature != self._semantic_matrix_signature:
+                row_ids = tuple(text_by_id)
+                matrix = np.vstack([self._semantic_embeddings[row_id][1] for row_id in row_ids])
+                self._semantic_matrix = matrix
+                self._semantic_matrix_row_ids = row_ids
+                self._semantic_matrix_signature = signature
+            else:
+                matrix = self._semantic_matrix
+                row_ids = self._semantic_matrix_row_ids
+            if matrix is None or not row_ids:
+                return []
             scores = matrix @ query_vector
             order = np.argsort(-scores)[:top_k]
             return [(row_ids[int(index)], float(scores[int(index)])) for index in order]

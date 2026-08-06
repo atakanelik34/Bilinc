@@ -140,7 +140,38 @@ def _claim_entity_names(claim: Any) -> list[str]:
 
 
 _CAPITALIZED_PHRASE_RE = re.compile(r"\b[A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){0,3}\b")
-_STOP_PHRASES = {"The", "A", "An", "And", "Or", "But", "This", "That", "These", "Those", "I"}
+_STOP_PHRASES = {
+    "The",
+    "A",
+    "An",
+    "And",
+    "Or",
+    "But",
+    "This",
+    "That",
+    "These",
+    "Those",
+    "I",
+    "What",
+    "When",
+    "Where",
+    "Why",
+    "How",
+    "Which",
+    "Who",
+    "Would",
+    "Could",
+    "Can",
+    "Did",
+    "Does",
+    "Do",
+    "Is",
+    "Are",
+    "Was",
+    "Were",
+    "Has",
+    "Have",
+}
 
 
 def _safe_capitalized_phrases(value: Any) -> list[str]:
@@ -189,19 +220,23 @@ def extract_entities_from_entry(entry: MemoryEntry) -> list[EntityMention]:
                 entity = Entity(canonical_name=name, entity_type="claim")
                 entities.setdefault(entity.id, entity)
 
-    # Heuristic extraction is intentionally conservative and only used for semantic text
-    # without explicit structured entity, relation, or claim hints.
-    if entry.memory_type.value == "semantic" and not raw_entities and not raw_claims and not raw_relations:
+    # Heuristic extraction is intentionally conservative and used for semantic
+    # and episodic text without explicit structured entity, relation, or claim
+    # hints. Episodic continuity needs the same entity backlinks as durable
+    # facts, while the capitalized-phrase and count limits keep extraction
+    # bounded and deterministic.
+    if entry.memory_type.value in {"semantic", "episodic"} and not raw_entities and not raw_claims and not raw_relations:
         for name in _safe_capitalized_phrases(entry.value):
             entity = Entity(canonical_name=name, entity_type="proper_noun")
             entities.setdefault(entity.id, entity)
 
+    heuristic_only = not raw_entities and not raw_claims and not raw_relations
     return [
         EntityMention(
             entity_id=entity.id,
             memory_key=entry.key,
             mention_text=entity.canonical_name,
-            source="entity_projection",
+            source="proper_noun_projection" if heuristic_only else "entity_projection",
             confidence=0.9 if entity.entity_type != "proper_noun" else 0.6,
         )
         for entity in entities.values()

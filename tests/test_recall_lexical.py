@@ -34,6 +34,31 @@ def test_lexical_specificity_breaks_common_word_ties():
     assert ranked[0] == "specific"
 
 
+def test_adaptive_semantic_weight_is_opt_in_and_gated_by_lexical_coverage(monkeypatch):
+    plane = StatePlane()
+    candidates = {
+        "database": MemoryEntry(
+            key="database",
+            value="database stores durable state",
+            memory_type=MemoryType.SEMANTIC,
+        ),
+        "unrelated": MemoryEntry(
+            key="unrelated",
+            value="the service uses a remote queue",
+            memory_type=MemoryType.SEMANTIC,
+        ),
+    }
+    query = "Which database stores state?"
+    lexical_ranked = plane._rank_lexical_keys(query, candidates)
+
+    monkeypatch.delenv("BILINC_SEMANTIC_ADAPTIVE_WEIGHT", raising=False)
+    assert plane._semantic_recall_weight(query, candidates, lexical_ranked) == 0.05
+
+    monkeypatch.setenv("BILINC_SEMANTIC_ADAPTIVE_WEIGHT", "1")
+    assert plane._semantic_recall_weight(query, candidates, lexical_ranked) == 0.0
+    assert plane._semantic_recall_weight("Which platform is preferred?", candidates, []) == 0.12
+
+
 def test_current_state_boost_is_opt_in_and_timestamp_based():
     plane = StatePlane()
     older = MemoryEntry(
