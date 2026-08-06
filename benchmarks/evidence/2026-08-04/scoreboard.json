@@ -5,7 +5,7 @@
     "path": "benchmarks/protocols/2026-08-04/freeze.json",
     "sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822"
   },
-  "source_commit": "4c2d721ae1aa5f4c123390c3a84a13ff329dade4",
+  "source_commit": "9629fe6e7d47318c427a83705b0f82c5bfd251c8",
   "rows": [
     {
       "benchmark_id": "longmemeval-s-cleaned-component",
@@ -647,14 +647,61 @@
       "raw_result_hashes": ["b7897249ff1dfdf722673c4598ba1c644b53c1f41ad2d65407b0c1887869ba35"],
       "evidence_path": "benchmarks/evidence/2026-08-06/longmemeval-frozen-current-modal/manifest.json",
       "limitations": ["Frozen isolated retrieval guardrail, not end-to-end StatePlane.", "The wrapper's rounded weighted average was 0.97994 and exited 1; exact shard counts uniquely verified 490/500 = 0.980.", "No leaderboard or SOTA claim."]
+    },
+    {
+      "benchmark_id": "amb-legacy-v3-layer2-current-state-projection-clean-modal",
+      "lane": "product-core",
+      "status": "valid-current-product-core-gain",
+      "comparability_group": "amb-legacy-v3-frozen-generic-adapter",
+      "dataset_hash": "038345777409ff4097cceae44cc2337eed534e88ef946e5adb70da5309b082ae",
+      "source_commit": "9629fe6e7d47318c427a83705b0f82c5bfd251c8",
+      "adapter_hash": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+      "metrics": {"layer2_overall": 100.0, "layer2_passed": 5, "layer2_total": 5, "previous_generic_product_core_layer2": 40.0, "delta": 60.0, "layer1_status": "not_run"},
+      "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+      "hardware": "Modal 8 requested CPU, 16 GiB memory; container reported 24 CPUs",
+      "cost_usd": 0.00421017,
+      "raw_result_hashes": ["1caff86731a0a310aaee947871100dec00abb2ed6ea63210b2f8ad93d2cb6535"],
+      "evidence_path": "benchmarks/evidence/2026-08-06/amb-legacy-v3-current-projection-clean-modal/manifest.json",
+      "limitations": ["Historical AMB v3 binary harness; not current Vectorize AMB RAG/judge.", "Layer 2 only; Layer 1 was not rerun in this receipt.", "Not an official leaderboard or SOTA claim."]
+    },
+    {
+      "benchmark_id": "locomo-official-retrieval-component-stateplane-current-projection-clean-modal",
+      "lane": "component",
+      "status": "valid-current-source-no-regression",
+      "comparability_group": "locomo-official-raw-turn-stateplane-component",
+      "dataset_hash": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+      "source_commit": "9629fe6e7d47318c427a83705b0f82c5bfd251c8",
+      "adapter_hash": "none; direct public StatePlane API",
+      "metrics": {"questions": 1977, "memories": 5882, "hit_at_5": 0.5655032878098128, "evidence_recall_at_5": 0.5195393704453779, "ndcg_at_5": 0.43659001197514796, "delta": {"hit_at_5": 0.0, "evidence_recall_at_5": 0.0, "ndcg_at_5": 0.0}},
+      "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+      "hardware": "Modal 8 requested CPU, 16 GiB memory; container reported 24 CPUs",
+      "cost_usd": 0.00883026,
+      "raw_result_hashes": ["dc044a16d6e31342d35f4f58c33adacaf4c8f80d37e9156ba1900a6f2071c868"],
+      "evidence_path": "benchmarks/evidence/2026-08-06/locomo-stateplane-current-projection-clean-modal/manifest.json",
+      "limitations": ["Retrieval component only; not official end-to-end LoCoMo QA/F1.", "This receipt establishes no regression, not a LoCoMo score improvement.", "No public leaderboard or SOTA claim."]
+    },
+    {
+      "benchmark_id": "bilinc-enterprise-foundation-modal-verification",
+      "lane": "product-core",
+      "status": "valid-modal-foundation-verification",
+      "comparability_group": "bilinc-enterprise-foundation-verification",
+      "source_commit": "a8089be5f567a347c9521c5e4ffd3df2c43bf342",
+      "metrics": {"backend_tests": "604 passed", "web_tests": "28 passed", "web_build": true, "traceability_requirements": 35, "all_commands_passed": true},
+      "protocol_hash": "1a9e23a10d418ae15958b4d4ae1163fbcce2fa67bb89ccf0481c904f728eb6ba",
+      "hardware": "Modal 8 requested CPU, 16 GiB memory; container reported 24 CPUs",
+      "cost_usd": 0.00281324,
+      "raw_result_hashes": ["582c23e883865f3a3d2f10924f9a4686ba5e09945ad39aa0b865a4f5a4fbe646"],
+      "evidence_path": "benchmarks/evidence/2026-08-06/bilinc-enterprise-foundation-modal-verification/manifest.json",
+      "limitations": ["Foundation verification only; not full Docker/PostgreSQL/appliance acceptance.", "Not SELLABLE_RC or commercial release evidence."]
     }
   ],
   "modal": {
     "authorized_ceiling_usd": 30.0,
-    "cumulative_metered_usd": 7.90019928,
-    "cumulative_conservative_estimate_usd": 29.07756840,
-    "remaining_metered_budget_usd": 22.09980072,
-    "remaining_conservative_budget_usd": 0.92243160,
+    "cumulative_metered_usd": 7.95788521,
+    "cumulative_conservative_estimate_usd": 29.20,
+    "remaining_metered_budget_usd": 22.04211479,
+    "remaining_conservative_budget_usd": 0.80,
+    "billing_note": "Modal billing report now includes final Enterprise app ap-ckdLpYM31CJgP4XMS2NfZC at 0.00281324 USD; current goal-tagged metered total is 7.95788521 USD.",
     "all_goal_apps_stopped": true,
     "persistent_resources_created": false
   },

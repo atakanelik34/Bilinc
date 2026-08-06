@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "benchmark": "locomo-official-retrieval-component-stateplane-current-projection-clean-modal",
+  "lane": "component",
+  "evidence_status": "reproducible",
+  "decision": "accepted-no-regression",
+  "git": {
+    "commit": "9629fe6e7d47318c427a83705b0f82c5bfd251c8",
+    "worktree": "main",
+    "dirty_at_run": false,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "a46fbf659dc9328d18c2ba55c560b7ebb88201d4f006bbf6f888f9145741b33a"
+    },
+    "adapter": "none; direct public StatePlane API",
+    "modal_runner": "benchmarks/modal/locomo_runner.py",
+    "modal_runner_sha256": "c3f40d02745143294c917e29f1e0416a51b5db1ab670f8e935123305f64238eb"
+  },
+  "dataset": {
+    "source": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
+    "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "conversations": 10,
+    "questions": 1977,
+    "license_note": "Public upstream dataset; exact licensing terms retained with upstream source."
+  },
+  "runner": {
+    "command": "python3 benchmarks/modal/locomo_runner.py --top-k 5 --receipt-path benchmarks/runs/2026-08-06/locomo-stateplane-current-projection-clean-modal/receipt.json",
+    "protocol": "one isolated SQLite-backed StatePlane per conversation; official raw conversation turns only; top-k=5; no benchmark-specific query expansion or answer projection",
+    "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822"
+  },
+  "environment": {
+    "platform": "Modal Linux single-use container",
+    "hardware": "8 requested CPU, 16 GiB requested memory; container reported 24 CPUs",
+    "python": "3.11.5",
+    "node": "v22.23.2",
+    "modal_app_ids": ["ap-Uvvs66EPru2Fddki0dqHMG"],
+    "modal_cost_usd": 0.00883026,
+    "persistent_resources": false,
+    "resources_active_after_run": false
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-06/locomo-stateplane-current-projection-clean-modal/receipt.json",
+      "sha256": "dc044a16d6e31342d35f4f58c33adacaf4c8f80d37e9156ba1900a6f2071c868"
+    }
+  ],
+  "metrics": {
+    "questions": 1977,
+    "memories": 5882,
+    "hit_at_5": 0.5655032878098128,
+    "evidence_recall_at_5": 0.5195393704453779,
+    "ndcg_at_5": 0.43659001197514796,
+    "category_metrics": {
+      "adversarial": {"n": 446, "hit_at_5": 0.5852017937219731, "evidence_recall_at_5": 0.5795964125560538, "ndcg_at_5": 0.47053467389933445},
+      "multi-hop": {"n": 320, "hit_at_5": 0.653125, "evidence_recall_at_5": 0.6247395833333333, "ndcg_at_5": 0.5405226596748955},
+      "open-domain": {"n": 841, "hit_at_5": 0.5933412604042806, "evidence_recall_at_5": 0.5788743559254855, "ndcg_at_5": 0.4840841976024514},
+      "single-hop": {"n": 281, "hit_at_5": 0.4306049822064057, "evidence_recall_at_5": 0.22246152424088372, "ndcg_at_5": 0.20422501386007713},
+      "temporal": {"n": 89, "hit_at_5": 0.3146067415730337, "evidence_recall_at_5": 0.21761401189689356, "ndcg_at_5": 0.17764830271299314}
+    },
+    "comparison": {
+      "previous_current_source": {"hit_at_5": 0.5655032878098128, "evidence_recall_at_5": 0.5195393704453779, "ndcg_at_5": 0.43659001197514796},
+      "delta": {"hit_at_5": 0.0, "evidence_recall_at_5": 0.0, "ndcg_at_5": 0.0}
+    }
+  },
+  "limitations": [
+    "Retrieval component only; not official end-to-end LoCoMo QA/F1.",
+    "Conversation-isolated scope; not a global cross-conversation score.",
+    "No public leaderboard or SOTA claim is made."
+  ],
+  "disallowed_claims": [
+    "Do not call this an official end-to-end LoCoMo leaderboard position.",
+    "Do not compare this component result directly with QA-generation scores.",
+    "Do not claim the projection improved LoCoMo; this receipt establishes no regression."
+  ]
+}
