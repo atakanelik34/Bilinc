@@ -582,14 +582,37 @@
       "raw_result_hashes": ["e7ab10cde2baf51c5bec47bbd14bf8fda645435e903dfb8d30094b5ea109ef9d", "a246b8d829a6b26803699c9842ddad6b96647192eef6c7b1eb4d2e1e003c2464"],
       "evidence_path": "benchmarks/evidence/2026-08-06/amb-legacy-v3-fallback-modal/manifest.json",
       "limitations": ["Historical v3 binary harness; not current Vectorize AMB RAG/judge.", "Bounded sparse fallback is generic and disabled for dense corpora.", "Multi-agent category skipped; result is not a leaderboard or SOTA claim."]
+    },
+    {
+      "benchmark_id": "locomo-official-retrieval-component-stateplane-semantic-current-modal",
+      "lane": "component",
+      "status": "valid-candidate-accepted-general-semantic-gain",
+      "comparability_group": "locomo-official-raw-turn-stateplane-component",
+      "dataset_hash": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+      "source_commit": "4c2d721ae1aa5f4c123390c3a84a13ff329dade4",
+      "adapter_hash": "none; direct public StatePlane API",
+      "metrics": {
+        "questions": 1977,
+        "baseline": {"hit_at_5": 0.5655032878098128, "evidence_recall_at_5": 0.5195393704453779, "ndcg_at_5": 0.43659001197514796},
+        "candidate": {"hit_at_5": 0.5781487101669196, "evidence_recall_at_5": 0.5305949431376362, "ndcg_at_5": 0.4456152144580268},
+        "candidate_delta": {"hit_at_5": 0.0126454223571068, "evidence_recall_at_5": 0.0110555726922583, "ndcg_at_5": 0.00902520248287884}
+      },
+      "protocol_hash": "5affd6e5b0ed7b0a8a426fda8026dc5f11b170ecc88b82a5695cd5563a0239b2",
+      "model": {"id": "sentence-transformers/all-MiniLM-L6-v2", "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41", "manifest_sha256": "2db4942727d159bcf555eead73a5e1384c197f72bfae286b7994267f8620b92a"},
+      "hardware": "Modal 8 requested CPU, 16 GiB memory; container reported 24 CPUs",
+      "latency_seconds": {"baseline": 49.881, "candidate": 117.75},
+      "cost_usd": 0.01998162,
+      "raw_result_hashes": ["b5bf627104acd8c83f67f91d929b007ff523bef9572c88f0ab48723e93a9b061"],
+      "evidence_path": "benchmarks/evidence/2026-08-06/locomo-stateplane-semantic-current-modal/manifest.json",
+      "limitations": ["Retrieval component only; not official end-to-end LoCoMo QA/F1.", "Opt-in semantic dependency and higher latency; no default backend change.", "No public leaderboard or SOTA claim."]
     }
   ],
   "modal": {
     "authorized_ceiling_usd": 30.0,
-    "cumulative_metered_usd": 6.91144557,
-    "cumulative_conservative_estimate_usd": 28.08881469,
-    "remaining_metered_budget_usd": 23.08855443,
-    "remaining_conservative_budget_usd": 1.91118531,
+    "cumulative_metered_usd": 6.93142719,
+    "cumulative_conservative_estimate_usd": 28.10879631,
+    "remaining_metered_budget_usd": 23.06857281,
+    "remaining_conservative_budget_usd": 1.89120369,
     "all_goal_apps_stopped": true,
     "persistent_resources_created": false
   },

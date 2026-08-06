@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "benchmark": "locomo-official-retrieval-component-stateplane-semantic-current-modal",
+  "lane": "component",
+  "evidence_status": "reproducible",
+  "decision": "accepted-general-optional-semantic-gain",
+  "git": {
+    "commit": "4c2d721ae1aa5f4c123390c3a84a13ff329dade4",
+    "worktree": "main",
+    "dirty_at_run": false,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "c99254b31141b53d98fc816cbb2820c74aa87e07293cd86cfac642ae281d21ff",
+      "src/bilinc/core/vector_search.py": "a6e4b5ff8657abc539b67cb398ef03309125a33bcf083ba33a731c5bfa4e0aa6"
+    },
+    "component_runner": "benchmarks/runners/locomo_stateplane_component.py",
+    "component_runner_sha256": "c4d0966c2b57d51dd305899a31aefca14dce27612410a406bbd1f8d3ab68b879",
+    "modal_runner": "benchmarks/modal/locomo_semantic_candidate_runner.py",
+    "modal_runner_sha256": "ede3fc8031811527be8683411fbaac9a44c9eaa906d26d4e9c13637dd55be51a"
+  },
+  "dataset": {
+    "source": "https://github.com/snap-research/locomo",
+    "release": "main at frozen source commit",
+    "release_commit": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+    "url": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
+    "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "license": "CC BY-NC 4.0",
+    "conversations": 10,
+    "qa_total": 1986,
+    "qa_scored": 1977,
+    "memories": 5882
+  },
+  "runner": {
+    "protocol": "one isolated SQLite-backed StatePlane per conversation; official raw turns only; top-k=5",
+    "base_protocol_sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+    "component_protocol_sha256": "5affd6e5b0ed7b0a8a426fda8026dc5f11b170ecc88b82a5695cd5563a0239b2",
+    "retrieval": "StatePlane.recall_intelligent public API",
+    "benchmark_specific_query_expansion": false,
+    "qa_or_observation_projection": false,
+    "metrics": "Hit@5, evidence recall@5, normalized binary NDCG@5"
+  },
+  "model": {
+    "id": "sentence-transformers/all-MiniLM-L6-v2",
+    "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "manifest_sha256": "2db4942727d159bcf555eead73a5e1384c197f72bfae286b7994267f8620b92a"
+  },
+  "environment": {
+    "platform": "Modal Linux single-use container",
+    "hardware": "8 requested CPU, 16 GiB requested memory; container reported 24 CPUs",
+    "python": "3.11.5",
+    "package_versions": {
+      "bilinc": "2.1.8",
+      "numpy": "2.4.2",
+      "sentence-transformers": "3.4.1",
+      "torch": "2.12.1",
+      "transformers": "4.57.6",
+      "huggingface-hub": "0.36.2",
+      "safetensors": "0.8.0",
+      "tokenizers": "0.22.2"
+    },
+    "modal_app_id": "ap-HvEihnI02Is2wDyiEK7YeK",
+    "modal_cost_usd": 0.01998162,
+    "persistent_resources": false,
+    "resources_active_after_run": false
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-06/locomo-stateplane-semantic-current-modal/pair-receipt.json",
+      "sha256": "b5bf627104acd8c83f67f91d929b007ff523bef9572c88f0ab48723e93a9b061"
+    }
+  ],
+  "metrics": {
+    "questions": 1977,
+    "baseline": {
+      "hit_at_5": 0.5655032878098128,
+      "evidence_recall_at_5": 0.5195393704453779,
+      "ndcg_at_5": 0.43659001197514796
+    },
+    "candidate": {
+      "hit_at_5": 0.5781487101669196,
+      "evidence_recall_at_5": 0.5305949431376362,
+      "ndcg_at_5": 0.4456152144580268
+    },
+    "candidate_delta": {
+      "hit_at_5": 0.0126454223571068,
+      "evidence_recall_at_5": 0.0110555726922583,
+      "ndcg_at_5": 0.00902520248287884
+    },
+    "category_metrics": {
+      "adversarial": {"n": 446, "hit_at_5": 0.600896860986547, "evidence_recall_at_5": 0.594170403587444, "ndcg_at_5": 0.4657928959836848},
+      "multi-hop": {"n": 320, "hit_at_5": 0.6625, "evidence_recall_at_5": 0.6325520833333333, "ndcg_at_5": 0.5558161509954493},
+      "open-domain": {"n": 841, "hit_at_5": 0.6028537455410226, "evidence_recall_at_5": 0.5901704320253667, "ndcg_at_5": 0.4960038149987628},
+      "single-hop": {"n": 281, "hit_at_5": 0.4555160142348754, "evidence_recall_at_5": 0.23283764787791772, "ndcg_at_5": 0.22173849371337928},
+      "temporal": {"n": 89, "hit_at_5": 0.3146067415730337, "evidence_recall_at_5": 0.22257105089226698, "ndcg_at_5": 0.1789747630206204}
+    }
+  },
+  "limitations": [
+    "Retrieval component only; not official end-to-end LoCoMo QA/F1.",
+    "Conversation-isolated scope; not global cross-conversation retrieval.",
+    "Semantic model is an opt-in dependency with materially higher latency; no default-backend change is implied.",
+    "No public leaderboard, #1 or SOTA claim is made."
+  ],
+  "disallowed_claims": [
+    "Do not call this an official end-to-end QA score.",
+    "Do not compare this component result with systems using different scope, metric, model or generation protocol.",
+    "Do not infer a LongMemEval result from this lane."
+  ]
+}
