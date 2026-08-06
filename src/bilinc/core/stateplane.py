@@ -70,6 +70,17 @@ class StatePlane:
     # among otherwise relevant memories without allowing chronology to outrank
     # lexical, hybrid, semantic, or entity relevance.
     INTELLIGENT_RECALL_TEMPORAL_WEIGHT = 0.1
+    # Only explicit, non-secret event-time fields participate in lexical
+    # recall. Arbitrary metadata is intentionally excluded because
+    # integrations may place credentials, ACLs, or private context alongside
+    # a memory.
+    LEXICAL_RECALL_METADATA_FIELDS = (
+        "source_timestamp",
+        "source_date_time",
+        "event_timestamp",
+        "occurred_at",
+        "timestamp",
+    )
     # Explicitly enabled local semantic retrieval is a small additive signal;
     # the default path remains unchanged when no semantic model is configured.
     INTELLIGENT_RECALL_SEMANTIC_WEIGHT = 0.05
@@ -101,6 +112,34 @@ class StatePlane:
     # evidence for memory relevance. Keep this filter scoped to lexical
     # ranking so temporal/current-state intent and entity extraction retain
     # the complete query token stream.
+    LEXICAL_NORMALIZED_MATCH_WEIGHT = 0.10
+    LEXICAL_NORMALIZED_SPECIFICITY_WEIGHT = 0.05
+    CURRENT_STATE_QUERY_MARKERS = frozenset(
+        {"current", "currently", "now", "latest", "newest", "present", "presently", "active"}
+    )
+    CURRENT_STATE_QUERY_PREDICATES = frozenset(
+        {
+            "be",
+            "do",
+            "does",
+            "did",
+            "have",
+            "has",
+            "use",
+            "uses",
+            "used",
+            "using",
+            "run",
+            "runs",
+            "running",
+            "work",
+            "works",
+            "deploy",
+            "deployed",
+            "prefer",
+            "prefers",
+        }
+    )
     LEXICAL_QUERY_STOPWORDS = frozenset(
         {
             "a",
@@ -167,6 +206,9 @@ class StatePlane:
             "would",
             "you",
             "your",
+            # Possessive/contraction fragments produced by the lightweight
+            # tokenizer (for example, ``system's`` -> ``system`` + ``s``).
+            "s",
         }
     )
     REFLECTION_DEFAULT_THRESHOLD = 0.55
@@ -701,6 +743,8 @@ class StatePlane:
                 include_stale=include_stale,
                 query_timestamp=query_timestamp,
             )
+            if not include_stale and valid_as_of is None:
+                candidates = self._collapse_current_state_candidates(query, candidates)
             if not candidates:
                 return []
 
@@ -1146,6 +1190,12 @@ class StatePlane:
             current_query = (query or "").strip()
             max_reflections = max(0, int(max_reflections))
             adequacy_threshold = max(0.0, min(1.0, float(adequacy_threshold)))
+            # An explicit singular present-state request has already selected
+            # its state slot.  Broadening it with reflective context can
+            # reintroduce superseded values, so keep the first constrained
+            # retrieval rather than widening the evidence surface.
+            if self._is_singular_current_state_query(current_query):
+                max_reflections = 0
             queries_tried = [current_query]
             reflections_used = 0
 
@@ -1607,6 +1657,152 @@ class StatePlane:
     def _tokenize_query(self, query: str) -> List[str]:
         return [token for token in re.findall(r"[a-zA-Z0-9_]+", query.lower()) if token]
 
+    @staticmethod
+    def _normalize_lexical_token(token: str) -> str:
+        """Apply conservative suffix normalization for lexical recall."""
+        normalized = str(token or "").casefold()
+        if len(normalized) < 4:
+            return normalized
+        if normalized.endswith("ies") and len(normalized) > 4:
+            return normalized[:-3] + "y"
+        if normalized.endswith("ied") and len(normalized) > 4:
+            return normalized[:-3] + "y"
+        if normalized.endswith("ing") and len(normalized) > 5:
+            stem = normalized[:-3]
+            if len(stem) > 3 and stem[-1] == stem[-2]:
+                stem = stem[:-1]
+            return stem
+        if normalized.endswith("ed") and len(normalized) > 4:
+            stem = normalized[:-2]
+            if len(stem) > 3 and stem[-1] == stem[-2]:
+                stem = stem[:-1]
+            return stem
+        if normalized.endswith("es") and len(normalized) > 4:
+            return normalized[:-2]
+        if normalized.endswith("s") and len(normalized) > 3:
+            return normalized[:-1]
+        return normalized
+
+    def _normalized_lexical_tokens(self, text: str) -> set[str]:
+        return {
+            self._normalize_lexical_token(token)
+            for token in self._tokenize_query(text)
+            if token
+        }
+
+    def _is_current_state_query(self, query: str) -> bool:
+        """Return whether a query explicitly asks for present state."""
+        return bool(
+            self._normalized_lexical_tokens(query).intersection(self.CURRENT_STATE_QUERY_MARKERS)
+        )
+
+    def _current_state_topic_tokens(self, query: str) -> set[str]:
+        """Return content tokens that can identify one mutable state topic."""
+        return {
+            token
+            for token in self._tokenize_query(query)
+            if (
+                len(token) >= 4
+                and token not in self.LEXICAL_QUERY_STOPWORDS
+                and token not in self.CURRENT_STATE_QUERY_MARKERS
+                and token not in self.CURRENT_STATE_QUERY_PREDICATES
+            )
+        }
+
+    def _is_singular_current_state_query(self, query: str) -> bool:
+        """Return whether current intent names exactly one state topic."""
+        return self._is_current_state_query(query) and len(self._current_state_topic_tokens(query)) == 1
+
+    def _collapse_current_state_candidates(
+        self,
+        query: str,
+        candidates: Dict[str, MemoryEntry],
+    ) -> Dict[str, MemoryEntry]:
+        """Keep the newest evidence for an explicitly singular state topic.
+
+        Current-state questions should not return a stale conflicting value
+        merely because it shares more lexical terms with the question.  The
+        grouping signal is deliberately narrow: a query topic must occur in
+        at least two candidate surfaces, and only the newest member of that
+        topic group is retained.  Historical requests bypass this helper.
+        """
+        if not self._is_current_state_query(query) or len(candidates) < 2:
+            return candidates
+
+        query_tokens = self._current_state_topic_tokens(query)
+        if not query_tokens:
+            return candidates
+        # Candidate collapse is intentionally conservative.  Queries with
+        # several content terms commonly ask about a person, event, or
+        # descriptive passage rather than one mutable state slot.  Removing
+        # older candidates there can erase valid evidence, so only collapse a
+        # single explicit state topic; recency boosting still applies to more
+        # complex current-state queries without deleting evidence.
+        if len(query_tokens) != 1:
+            return candidates
+
+        surfaces = {
+            key: set(self._tokenize_query(self._retrieval_surface_text(entry)))
+            for key, entry in candidates.items()
+        }
+        normalized_surfaces = {
+            key: self._normalized_lexical_tokens(self._retrieval_surface_text(entry))
+            for key, entry in candidates.items()
+        }
+        value_tokens = {
+            key: self._normalized_lexical_tokens(str(entry.value or ""))
+            for key, entry in candidates.items()
+        }
+        value_document_frequency = {
+            token: sum(token in tokens for tokens in value_tokens.values())
+            for tokens in value_tokens.values()
+            for token in tokens
+        }
+        collapsed: set[str] = set()
+
+        def timestamp(entry: MemoryEntry) -> float:
+            try:
+                return max(float(entry.updated_at or 0.0), float(entry.created_at or 0.0))
+            except (TypeError, ValueError):
+                return 0.0
+
+        for token in sorted(query_tokens):
+            normalized_token = self._normalize_lexical_token(token)
+            group = {
+                key
+                for key in candidates
+                if token in surfaces[key] or normalized_token in normalized_surfaces[key]
+            }
+            if len(group) < 2:
+                continue
+            # A later update may omit the subject noun while retaining the
+            # changed value (for example, ``moved to Nimbus`` followed by
+            # ``upgraded to Nimbus``). Expand only through non-ubiquitous
+            # value tokens so unrelated recent memories do not get folded
+            # into the state topic.
+            expanded = set(group)
+            changed = True
+            while changed:
+                changed = False
+                bridge_tokens = set().union(*(value_tokens[key] for key in expanded))
+                for key in candidates:
+                    if key in expanded:
+                        continue
+                    if any(
+                        token in bridge_tokens
+                        and value_document_frequency.get(token, 0) < len(candidates)
+                        and len(token) >= 4
+                        for token in value_tokens[key]
+                    ):
+                        expanded.add(key)
+                        changed = True
+            newest_key = max(expanded, key=lambda key: (timestamp(candidates[key]), key))
+            collapsed.update(expanded - {newest_key})
+
+        if not collapsed:
+            return candidates
+        return {key: entry for key, entry in candidates.items() if key not in collapsed}
+
     def _evaluate_recall_adequacy(self, query: str, results: List[Dict[str, Any]]) -> float:
         tokens = set(self._tokenize_query(query))
         if not tokens or not results:
@@ -1618,6 +1814,24 @@ class StatePlane:
                 if token in text:
                     coverage.add(token)
         return len(coverage) / max(len(tokens), 1)
+
+    def _retrieval_surface_text(self, entry: MemoryEntry) -> str:
+        """Build the bounded text surface used by lexical recall.
+
+        Memory keys and values remain the primary surface. Explicit event-time
+        metadata is appended so date-bearing queries can find memories whose
+        payload is relevant but does not repeat the source date. The allowlist
+        is deliberately narrow; arbitrary metadata must not become searchable
+        by accident.
+        """
+        parts = [str(entry.key or ""), str(entry.value or "")]
+        metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+        for field in self.LEXICAL_RECALL_METADATA_FIELDS:
+            value = metadata.get(field)
+            if value is None or isinstance(value, (dict, list, tuple, set)):
+                continue
+            parts.append(str(value))
+        return " ".join(parts)
 
     def _expand_reflection_query(self, query: str) -> str:
         expansions = {
@@ -1649,29 +1863,70 @@ class StatePlane:
         }
         if not tokens:
             return []
+        surface_texts = {
+            key: self._retrieval_surface_text(entry).lower()
+            for key, entry in candidates.items()
+        }
+        normalized_surfaces = {
+            key: self._normalized_lexical_tokens(text)
+            for key, text in surface_texts.items()
+        }
         # Use corpus specificity as a bounded tie-breaker. Coverage remains
         # primary, while ubiquitous conversational words no longer decide the
         # order when several memories match the same number of query terms.
         document_frequency = {
             token: sum(
                 1
-                for entry in candidates.values()
-                if token in f"{entry.key} {entry.value}".lower()
+                for text in surface_texts.values()
+                if token in text
             )
             for token in tokens
+        }
+        # Inflectional recovery is only useful when no memory contains the
+        # exact query form. If an exact form exists, keeping it authoritative
+        # prevents a common normalized variant from displacing a precise hit.
+        missing_query_tokens = {
+            token for token in tokens if document_frequency[token] == 0
+        }
+        normalized_tokens = {
+            self._normalize_lexical_token(token)
+            for token in missing_query_tokens
+        }
+        normalized_document_frequency = {
+            token: sum(
+                1
+                for surface in normalized_surfaces.values()
+                if token in surface
+            )
+            for token in normalized_tokens
         }
         corpus_size = len(candidates)
         scored: List[tuple[str, float]] = []
         for key, entry in candidates.items():
-            text = f"{entry.key} {entry.value}".lower()
+            text = surface_texts[key]
             matching_tokens = [token for token in tokens if token in text]
-            if not matching_tokens:
+            normalized_matches = [
+                token
+                for token in normalized_tokens
+                if token in normalized_surfaces[key]
+            ]
+            if not matching_tokens and not normalized_matches:
                 continue
             specificity = sum(
                 math.log((corpus_size + 1) / (document_frequency[token] + 1))
                 for token in matching_tokens
             )
-            score = len(matching_tokens) + (specificity * 0.1) + (entry.importance * 0.1)
+            normalized_specificity = sum(
+                math.log((corpus_size + 1) / (normalized_document_frequency[token] + 1))
+                for token in normalized_matches
+            )
+            score = (
+                len(matching_tokens)
+                + (specificity * 0.1)
+                + (len(normalized_matches) * self.LEXICAL_NORMALIZED_MATCH_WEIGHT)
+                + (normalized_specificity * self.LEXICAL_NORMALIZED_SPECIFICITY_WEIGHT)
+                + (entry.importance * 0.1)
+            )
             scored.append((key, score))
         scored.sort(key=lambda kv: kv[1], reverse=True)
         return [k for k, _ in scored]
@@ -1683,10 +1938,23 @@ class StatePlane:
             return []
         scored: List[tuple[str, float]] = []
         for key, entry in candidates.items():
-            text = f"{entry.key} {entry.value}".casefold()
+            text = self._retrieval_surface_text(entry).casefold()
             matching_tokens = [token for token in tokens if token in text]
-            if matching_tokens:
-                scored.append((key, len(matching_tokens) + (entry.importance * 0.1)))
+            normalized_surface = self._normalized_lexical_tokens(text)
+            normalized_matches = [
+                self._normalize_lexical_token(token)
+                for token in tokens
+                if self._normalize_lexical_token(token) in normalized_surface and token not in matching_tokens
+            ]
+            if matching_tokens or normalized_matches:
+                scored.append(
+                    (
+                        key,
+                        len(matching_tokens)
+                        + (len(normalized_matches) * self.LEXICAL_NORMALIZED_MATCH_WEIGHT)
+                        + (entry.importance * 0.1),
+                    )
+                )
         scored.sort(key=lambda item: item[1], reverse=True)
         return [key for key, _ in scored]
 
@@ -1739,7 +2007,7 @@ class StatePlane:
         weight.  The environment flag keeps this experiment opt-in and
         preserves the existing default path byte-for-byte in behavior.
         """
-        base_weight = self.INTELLIGENT_RECALL_SEMANTIC_WEIGHT
+        base_weight = self._semantic_recall_rrf_weight()
         enabled = os.environ.get("BILINC_SEMANTIC_ADAPTIVE_WEIGHT", "").strip().lower()
         if enabled not in {"1", "true", "yes", "on"}:
             return base_weight
@@ -1754,13 +2022,26 @@ class StatePlane:
             entry = candidates.get(key)
             if entry is None:
                 continue
-            text = f"{entry.key} {entry.value}".lower()
+            text = self._retrieval_surface_text(entry).lower()
             coverage = sum(1 for token in tokens if token in text) / len(tokens)
             best_coverage = max(best_coverage, coverage)
 
         if best_coverage >= self.INTELLIGENT_RECALL_SEMANTIC_LEXICAL_COVERAGE_THRESHOLD:
             return 0.0
         return self.INTELLIGENT_RECALL_ADAPTIVE_SEMANTIC_WEIGHT
+
+    def _semantic_recall_rrf_weight(self) -> float:
+        """Resolve an opt-in semantic RRF weight without changing defaults."""
+        raw = os.environ.get("BILINC_SEMANTIC_RRF_WEIGHT", "").strip()
+        if not raw:
+            return self.INTELLIGENT_RECALL_SEMANTIC_WEIGHT
+        try:
+            weight = float(raw)
+        except (TypeError, ValueError):
+            return self.INTELLIGENT_RECALL_SEMANTIC_WEIGHT
+        if not math.isfinite(weight):
+            return self.INTELLIGENT_RECALL_SEMANTIC_WEIGHT
+        return min(max(weight, 0.0), 1.0)
 
     def _rank_hybrid_keys(
         self,
@@ -1895,8 +2176,7 @@ class StatePlane:
         candidates: Dict[str, MemoryEntry],
     ) -> None:
         """Prefer newer evidence when the query explicitly asks for current state."""
-        query_tokens = set(self._tokenize_query(query))
-        if "current" not in query_tokens:
+        if not self._is_singular_current_state_query(query):
             return
 
         timestamps = {

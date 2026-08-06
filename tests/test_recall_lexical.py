@@ -34,6 +34,48 @@ def test_lexical_specificity_breaks_common_word_ties():
     assert ranked[0] == "specific"
 
 
+def test_lexical_recall_bridges_common_inflections_without_synonyms():
+    plane = StatePlane()
+    candidates = {
+        "distractor": MemoryEntry(
+            key="distractor",
+            value="The team planned a conference in the city.",
+            memory_type=MemoryType.SEMANTIC,
+        ),
+        "target": MemoryEntry(
+            key="target",
+            value="The team went camping in the mountains.",
+            memory_type=MemoryType.SEMANTIC,
+        ),
+    }
+
+    ranked = plane._rank_lexical_keys("Where did the team's camped trip happen?", candidates)
+
+    assert ranked[0] == "target"
+    assert plane._normalize_lexical_token("camped") == "camp"
+    assert plane._normalize_lexical_token("camping") == "camp"
+
+
+def test_lexical_exact_form_remains_authoritative_over_inflectional_variants():
+    plane = StatePlane()
+    candidates = {
+        "exact": MemoryEntry(
+            key="exact",
+            value="The country visit was documented.",
+            memory_type=MemoryType.SEMANTIC,
+        ),
+        "variant": MemoryEntry(
+            key="variant",
+            value="They visited another country.",
+            memory_type=MemoryType.SEMANTIC,
+        ),
+    }
+
+    ranked = plane._rank_lexical_keys("Which country did they visit?", candidates)
+
+    assert ranked[0] == "exact"
+
+
 def test_surface_fallback_is_bounded_and_available_for_sparse_stores():
     plane = StatePlane()
     candidates = {
@@ -95,6 +137,64 @@ async def test_default_recall_projects_generic_migration_to_current_state(tmp_pa
     assert historical[0]["value"] == raw
 
 
+@pytest.mark.asyncio
+async def test_current_intent_keeps_latest_entry_for_one_state_topic(tmp_path):
+    backend = SQLiteBackend(str(tmp_path / "current-topic.sqlite"))
+    plane = StatePlane(backend=backend, enable_verification=False, enable_audit=False)
+    await plane.init()
+    now = time.time()
+    entries = [
+        ("old", "The workspace used an Ember cluster.", now - 30),
+        ("middle", "The workspace moved to a Nimbus cluster.", now - 20),
+        ("latest", "The workspace upgraded to the Nimbus runtime.", now - 10),
+    ]
+    for key, value, stamp in entries:
+        await backend.restore(
+            MemoryEntry(
+                key=key,
+                value=value,
+                memory_type=MemoryType.SEMANTIC,
+                created_at=stamp,
+                updated_at=stamp,
+            )
+        )
+
+    results = await plane.recall_intelligent("what cluster do we currently use", limit=5)
+    profiled = await plane.recall_profiled("what cluster do we currently use", limit=5)
+
+    assert plane._is_current_state_query("what cluster do we currently use") is True
+    assert plane._is_singular_current_state_query("what cluster do we currently use") is True
+    assert [result["key"] for result in results] == ["latest"]
+    assert [result["key"] for result in profiled["results"]] == ["latest"]
+    assert "Nimbus runtime" in results[0]["value"]
+
+
+@pytest.mark.asyncio
+async def test_current_intent_preserves_multi_topic_evidence(tmp_path):
+    backend = SQLiteBackend(str(tmp_path / "current-multi-topic.sqlite"))
+    plane = StatePlane(backend=backend, enable_verification=False, enable_audit=False)
+    await plane.init()
+    now = time.time()
+    entries = [
+        ("older", "Mira joined the Harbor book club.", now - 20),
+        ("latest", "Mira is currently reading a history book.", now - 10),
+    ]
+    for key, value, stamp in entries:
+        await backend.restore(
+            MemoryEntry(
+                key=key,
+                value=value,
+                memory_type=MemoryType.SEMANTIC,
+                created_at=stamp,
+                updated_at=stamp,
+            )
+        )
+
+    results = await plane.recall_intelligent("what book is Mira currently reading", limit=5)
+
+    assert {result["key"] for result in results} == {"older", "latest"}
+
+
 def test_adaptive_semantic_weight_is_opt_in_and_gated_by_lexical_coverage(monkeypatch):
     plane = StatePlane()
     candidates = {
@@ -120,6 +220,44 @@ def test_adaptive_semantic_weight_is_opt_in_and_gated_by_lexical_coverage(monkey
     assert plane._semantic_recall_weight("Which platform is preferred?", candidates, []) == 0.12
 
 
+def test_semantic_rrf_weight_is_configurable_and_bounded(monkeypatch):
+    plane = StatePlane()
+
+    monkeypatch.delenv("BILINC_SEMANTIC_RRF_WEIGHT", raising=False)
+    assert plane._semantic_recall_rrf_weight() == 0.05
+
+    monkeypatch.setenv("BILINC_SEMANTIC_RRF_WEIGHT", "0.12")
+    assert plane._semantic_recall_rrf_weight() == 0.12
+
+    monkeypatch.setenv("BILINC_SEMANTIC_RRF_WEIGHT", "not-a-number")
+    assert plane._semantic_recall_rrf_weight() == 0.05
+
+    monkeypatch.setenv("BILINC_SEMANTIC_RRF_WEIGHT", "4")
+    assert plane._semantic_recall_rrf_weight() == 1.0
+
+    monkeypatch.setenv("BILINC_SEMANTIC_RRF_WEIGHT", "-1")
+    assert plane._semantic_recall_rrf_weight() == 0.0
+
+
+def test_lexical_retrieval_surface_allows_event_time_but_not_arbitrary_metadata():
+    plane = StatePlane()
+    entry = MemoryEntry(
+        key="memory:event",
+        value="the project update was recorded",
+        metadata={
+            "source_date_time": "8 May, 2023",
+            "secret": "do-not-index-this",
+            "private": "customer context",
+        },
+    )
+
+    surface = plane._retrieval_surface_text(entry)
+
+    assert "8 May, 2023" in surface
+    assert "do-not-index-this" not in surface
+    assert "customer context" not in surface
+
+
 def test_current_state_boost_is_opt_in_and_timestamp_based():
     plane = StatePlane()
     older = MemoryEntry(
@@ -138,7 +276,7 @@ def test_current_state_boost_is_opt_in_and_timestamp_based():
     )
     scores = {"older": 1.0, "newer": 1.0}
 
-    plane._apply_current_state_boost("what is the current deployment target", scores, {"older": older, "newer": newer})
+    plane._apply_current_state_boost("what is the current deployment", scores, {"older": older, "newer": newer})
 
     assert scores["newer"] > scores["older"]
 
@@ -174,7 +312,7 @@ def test_current_state_boost_demotes_explicitly_non_current_entries():
 
     scores = {"stale": 1.0, "superseded": 1.0, "active": 1.0}
     plane._apply_current_state_boost(
-        "what is the current deployment target",
+        "what is the current deployment",
         scores,
         {"stale": stale, "superseded": superseded, "active": active},
     )

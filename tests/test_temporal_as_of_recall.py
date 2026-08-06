@@ -95,6 +95,34 @@ async def test_recall_without_as_of_preserves_existing_behavior(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_recall_uses_safe_source_date_metadata_for_date_queries(tmp_path):
+    backend = SQLiteBackend(str(tmp_path / "date-metadata-recall.sqlite"))
+    plane = StatePlane(backend=backend, enable_verification=False, enable_audit=False)
+    await plane.init()
+
+    candidates = {}
+    for key, source_date_time in (
+        ("memory:may", "1:56 pm on 8 May, 2023"),
+        ("memory:june", "1:56 pm on 8 June, 2023"),
+    ):
+        entry = MemoryEntry(
+            key=key,
+            value="the project update was recorded",
+            memory_type=MemoryType.EPISODIC,
+            metadata={"source_date_time": source_date_time},
+        )
+        candidates[key] = entry
+        await backend.restore(
+            entry
+        )
+
+    assert plane._rank_lexical_keys("What happened on 8 May 2023?", candidates)[0] == "memory:may"
+    results = await plane.recall_intelligent("What happened on 8 May 2023?", limit=1)
+
+    assert [result["key"] for result in results] == ["memory:may"]
+
+
+@pytest.mark.asyncio
 async def test_recall_as_of_restores_historical_superseded_state(tmp_path):
     backend = SQLiteBackend(str(tmp_path / "as-of-superseded.sqlite"))
     plane = StatePlane(backend=backend, enable_verification=False, enable_audit=False)
