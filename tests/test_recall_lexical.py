@@ -34,6 +34,21 @@ def test_lexical_specificity_breaks_common_word_ties():
     assert ranked[0] == "specific"
 
 
+def test_surface_fallback_is_bounded_and_available_for_sparse_stores():
+    plane = StatePlane()
+    candidates = {
+        "payment": MemoryEntry(
+            key="payment",
+            value="Payment processing uses Stripe with webhooks.",
+            memory_type=MemoryType.SEMANTIC,
+        )
+    }
+
+    assert plane._rank_lexical_keys("how do we handle money", candidates) == []
+    assert plane._rank_surface_fallback_keys("how do we handle money", candidates) == ["payment"]
+    assert plane.SURFACE_FALLBACK_MAX_CANDIDATES == 128
+
+
 def test_adaptive_semantic_weight_is_opt_in_and_gated_by_lexical_coverage(monkeypatch):
     plane = StatePlane()
     candidates = {
