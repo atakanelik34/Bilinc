@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from bilinc.core.models import MemoryType
+from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.stateplane import StatePlane
 from bilinc.mcp_server.server_v2 import _handle_bilinc_recall_smart
 from bilinc.storage.sqlite import SQLiteBackend
@@ -113,6 +113,41 @@ async def test_mcp_recall_smart_string_false_does_not_enable_explain(tmp_path):
 
     assert payload["success"] is True
     assert "why_retrieved" not in payload["results"][0]
+
+
+@pytest.mark.asyncio
+async def test_mcp_recall_smart_propagates_point_in_time_cutoff(tmp_path):
+    plane = await make_temp_plane(tmp_path)
+    await plane.backend.restore(
+        MemoryEntry(
+            key="mem:past",
+            value="deployment target was past-host",
+            memory_type=MemoryType.SEMANTIC,
+            metadata={"event_timestamp": "2024-01-01T00:00:00Z"},
+        )
+    )
+    await plane.backend.restore(
+        MemoryEntry(
+            key="mem:future",
+            value="deployment target is future-host",
+            memory_type=MemoryType.SEMANTIC,
+            metadata={"event_timestamp": "2024-02-01T00:00:00Z"},
+        )
+    )
+
+    result = await _handle_bilinc_recall_smart(
+        plane,
+        {
+            "query": "deployment target",
+            "limit": 10,
+            "max_reflections": 0,
+            "query_timestamp": "2024-01-15T00:00:00Z",
+        },
+    )
+    payload = json.loads(result[0].text)
+
+    assert payload["success"] is True
+    assert [item["key"] for item in payload["results"]] == ["mem:past"]
 
 
 @pytest.mark.asyncio

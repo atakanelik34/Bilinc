@@ -532,6 +532,10 @@ def _create_server_v2(
                         "adequacy_threshold": {"type": "number", "default": 0.55},
                         "profile": {"type": "string", "enum": ["fast", "balanced", "verified", "deep"]},
                         "explain": {"type": "boolean", "default": False},
+                        "query_timestamp": {
+                            "type": "string",
+                            "description": "Optional ISO-8601 or epoch event-time cutoff for point-in-time recall.",
+                        },
                         "memory_types": {
                             "type": "array",
                             "items": {"type": "string", "enum": ["episodic", "procedural", "semantic", "working", "spatial"]},
@@ -1698,6 +1702,7 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
     max_reflections = int(args.get("max_reflections", 2))
     adequacy_threshold = float(args.get("adequacy_threshold", 0.55))
     explain = _coerce_bool(args.get("explain"), default=False)
+    query_timestamp = args.get("query_timestamp")
     raw_types = args.get("memory_types") or []
     memory_types = []
     for mt in raw_types:
@@ -1714,6 +1719,7 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
             max_reflections=args.get("max_reflections") if "max_reflections" in args else None,
             adequacy_threshold=args.get("adequacy_threshold") if "adequacy_threshold" in args else None,
             explain=explain,
+            query_timestamp=query_timestamp,
         )
         max_reflections = int(payload.get("max_reflections", max_reflections))
         adequacy_threshold = float(payload.get("adequacy_threshold", adequacy_threshold))
@@ -1725,6 +1731,7 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
             adequacy_threshold=adequacy_threshold,
             memory_types=memory_types or None,
             explain=explain,
+            query_timestamp=query_timestamp,
         )
     if hasattr(plane, "_record_eval_capture"):
         await plane._record_eval_capture(
@@ -1740,6 +1747,7 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
                 "adequacy": payload.get("adequacy"),
                 "queries_tried": payload.get("queries_tried", []),
                 "profile": payload.get("profile"),
+                "query_timestamp": query_timestamp,
             },
         )
     payload["tool"] = "bilinc_recall_smart"

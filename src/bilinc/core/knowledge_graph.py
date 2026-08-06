@@ -1,7 +1,7 @@
 """
 Knowledge Graph Layer
 
-Lightweight, NetworkX-backed knowledge graph for semantic memory integration.
+Lightweight, NetworkX-backed knowledge graph for semantic and episodic memory integration.
 No external DB required — runs in-memory and serializes to JSON.
 
 Node types: Entity, Fact, Event, Skill
@@ -22,6 +22,7 @@ try:
 except ImportError:
     nx = None
 
+from bilinc.core.entities import extract_entities_from_entry
 from bilinc.core.models import MemoryEntry, MemoryType
 
 
@@ -108,12 +109,24 @@ class KnowledgeGraph:
     - Contradiction-aware: flags conflicting edges
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        max_cross_memory_links_per_entity: int = 64,
+        max_cross_memory_links_per_entry: int = 128,
+    ):
         self.graph = nx.MultiDiGraph()
         self._nodes: Dict[str, KGNode] = {}
         self._edges: List[KGEdge] = []
+        self._relation_index: Dict[Tuple[str, str, EdgeType], List[KGEdge]] = defaultdict(list)
         self._entity_to_memories: Dict[str, Set[str]] = defaultdict(set)
+        self._normalized_entity_to_memories: Dict[str, Set[str]] = defaultdict(set)
         self._memory_to_entities: Dict[str, Set[str]] = defaultdict(set)
+        # Cross-memory edges are useful for graph traversal, but an unbounded
+        # co-occurrence fan-out turns a common participant into O(n^2) ingest.
+        # Keep the durable entity-memory index complete; only the optional
+        # materialized edge surface is bounded.
+        self.max_cross_memory_links_per_entity = max(0, int(max_cross_memory_links_per_entity))
+        self.max_cross_memory_links_per_entry = max(0, int(max_cross_memory_links_per_entry))
         self._created_at = time.time()
         self._updated_at = time.time()
 
@@ -153,6 +166,11 @@ class KnowledgeGraph:
         self._nodes.pop(name)
         self.graph.remove_node(name)
         self._edges = [e for e in self._edges if e.source != name and e.target != name]
+        linked_memories = self._entity_to_memories.pop(name, set())
+        for memory_key in linked_memories:
+            self._memory_to_entities.get(memory_key, set()).discard(name)
+        self._rebuild_normalized_entity_index()
+        self._rebuild_relation_index()
         self._updated_at = time.time()
         return True
 
@@ -181,9 +199,15 @@ class KnowledgeGraph:
             metadata=metadata or {},
         )
         self._edges.append(edge)
+        self._relation_index[(source, target, relation_type)].append(edge)
         self.graph.add_edge(source, target, **edge.to_dict())
         self._updated_at = time.time()
         return edge
+
+    def _rebuild_relation_index(self) -> None:
+        self._relation_index = defaultdict(list)
+        for edge in self._edges:
+            self._relation_index[(edge.source, edge.target, edge.relation_type)].append(edge)
 
     def _has_relation(
         self,
@@ -192,9 +216,7 @@ class KnowledgeGraph:
         relation_type: EdgeType,
         metadata_filter: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        for edge in self._edges:
-            if edge.source != source or edge.target != target or edge.relation_type != relation_type:
-                continue
+        for edge in self._relation_index.get((source, target, relation_type), []):
             if not metadata_filter:
                 return True
             if all(edge.metadata.get(k) == v for k, v in metadata_filter.items()):
@@ -218,13 +240,27 @@ class KnowledgeGraph:
         self._memory_to_entities[memory_key].update(entities)
         for entity in entities:
             self._entity_to_memories[entity].add(memory_key)
+            self._normalized_entity_to_memories[str(entity).casefold()].add(memory_key)
+
+    def _rebuild_normalized_entity_index(self) -> None:
+        """Rebuild the case-insensitive lookup after removal/import operations."""
+        self._normalized_entity_to_memories = defaultdict(set)
+        for entity, memory_keys in self._entity_to_memories.items():
+            self._normalized_entity_to_memories[str(entity).casefold()].update(memory_keys)
 
     def query_memories_by_entity(self, entity: str, limit: int = 20) -> List[str]:
         """Return memory keys linked to an entity."""
         if not entity:
             return []
-        keys = sorted(self._entity_to_memories.get(entity, set()))
-        return keys[: max(limit, 0)]
+        normalized = str(entity).casefold()
+        return sorted(self._normalized_entity_to_memories.get(normalized, set()))[: max(limit, 0)]
+
+    def entity_memory_count(self, entity: str) -> int:
+        """Return the complete number of memories linked to an entity."""
+        if not entity:
+            return 0
+        normalized = str(entity).casefold()
+        return len(self._normalized_entity_to_memories.get(normalized, set()))
 
     def memory_entities(self, memory_key: str) -> List[str]:
         """Return entities linked to a memory key."""
@@ -261,6 +297,7 @@ class KnowledgeGraph:
                 e for e in self._edges
                 if not (e.source == source and e.target == target and (relation_type is None or e.relation_type == relation_type))
             ]
+            self._rebuild_relation_index()
             removed = True
             self._updated_at = time.time()
         return removed
@@ -390,9 +427,9 @@ class KnowledgeGraph:
         entities_created = 0
         relations_created = 0
 
-        if entry.memory_type == MemoryType.SEMANTIC:
+        if entry.memory_type in {MemoryType.SEMANTIC, MemoryType.EPISODIC}:
             text = str(entry.value)
-            candidates = self._extract_entities_from_text(text)
+            candidates = {mention.mention_text for mention in extract_entities_from_entry(entry)}
             kv_pairs = self._extract_kv_pairs(text)
             shared_entities = set(candidates)
 
@@ -429,11 +466,17 @@ class KnowledgeGraph:
             if entry.key:
                 # Cross-memory links: connect memories sharing any extracted entity.
                 linked_memories: Set[str] = set()
-                for entity_name in shared_entities:
-                    linked_memories.update(self._entity_to_memories.get(entity_name, set()))
+                for entity_name in sorted(shared_entities):
+                    linked_memories.update(
+                        sorted(self._entity_to_memories.get(entity_name, set()))[
+                            : self.max_cross_memory_links_per_entity
+                        ]
+                    )
+                    if len(linked_memories) >= self.max_cross_memory_links_per_entry:
+                        break
                 linked_memories.discard(entry.key)
 
-                for other_memory_key in linked_memories:
+                for other_memory_key in sorted(linked_memories)[: self.max_cross_memory_links_per_entry]:
                     metadata = {"cross_memory": True}
                     if not self._has_relation(entry.key, other_memory_key, EdgeType.RELATED_TO, metadata):
                         self.add_relation(
@@ -470,7 +513,9 @@ class KnowledgeGraph:
         self.graph = nx.MultiDiGraph()
         self._nodes = {}
         self._edges = []
+        self._relation_index = defaultdict(list)
         self._entity_to_memories = defaultdict(set)
+        self._normalized_entity_to_memories = defaultdict(set)
         self._memory_to_entities = defaultdict(set)
 
         # Rebuild nodes
@@ -483,6 +528,7 @@ class KnowledgeGraph:
         for edge_data in data.get("edges", []):
             edge = KGEdge.from_dict(edge_data)
             self._edges.append(edge)
+            self._relation_index[(edge.source, edge.target, edge.relation_type)].append(edge)
             self.graph.add_edge(edge.source, edge.target, **edge.to_dict())
 
         # Rebuild entity-memory index from explicit cross references and node metadata.
@@ -496,6 +542,8 @@ class KnowledgeGraph:
                 if target and target in self._nodes and self._nodes[target].node_type == NodeType.ENTITY:
                     self._memory_to_entities[source_key].add(target)
                     self._entity_to_memories[target].add(source_key)
+
+        self._rebuild_normalized_entity_index()
 
         self._created_at = data.get("stats", {}).get("created_at", time.time())
         self._updated_at = time.time()
