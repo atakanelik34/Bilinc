@@ -41,6 +41,7 @@ class RecallRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=MAX_RECALL_LIMIT)
     memory_types: list[str] | None = None
     explain: bool = False
+    query_timestamp: str | None = Field(default=None, max_length=64)
 
 
 class ReviseRequest(BaseModel):

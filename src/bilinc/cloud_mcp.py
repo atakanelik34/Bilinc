@@ -97,6 +97,7 @@ def build_server():
         limit: int = 10,
         memory_types: list[str] | None = None,
         explain: bool = False,
+        query_timestamp: str | None = None,
     ) -> dict[str, Any]:
         """Retrieve memories from hosted Bilinc Cloud.
 
@@ -113,6 +114,7 @@ def build_server():
             limit=limit,
             memory_types=memory_types,
             explain=explain,
+            query_timestamp=query_timestamp,
         )
 
     @mcp.tool()

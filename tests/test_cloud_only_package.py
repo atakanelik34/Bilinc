@@ -144,6 +144,35 @@ def test_cloud_client_recall_posts_to_hosted_api():
     assert json.loads(call["body"].decode("utf-8")) == {"query": "trial status", "profile": "balanced", "limit": 5}
 
 
+def test_cloud_client_recall_forwards_point_in_time_timestamp():
+    from bilinc import CloudClient
+
+    transport = RecordingTransport({"results": []})
+    client = CloudClient(api_key="bil_live_test", transport=transport)
+
+    client.recall(
+        "deployment target",
+        profile="verified",
+        query_timestamp="2024-01-31T12:00:00Z",
+    )
+
+    assert json.loads(transport.calls[0]["body"].decode("utf-8")) == {
+        "query": "deployment target",
+        "profile": "verified",
+        "limit": 10,
+        "queryTimestamp": "2024-01-31T12:00:00Z",
+    }
+
+
+def test_cloud_client_rejects_an_unbounded_point_in_time_timestamp():
+    from bilinc import BilincValidationError, CloudClient
+
+    client = CloudClient(api_key="bil_live_test", transport=RecordingTransport({}))
+
+    with pytest.raises(BilincValidationError, match="query_timestamp"):
+        client.recall("q", query_timestamp="x" * 65)
+
+
 def test_cloud_client_status_reads_the_authenticated_status_endpoint():
     from bilinc import CloudClient
 

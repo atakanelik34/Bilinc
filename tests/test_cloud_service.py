@@ -68,6 +68,31 @@ def test_cloud_sidecar_accepts_the_same_recall_limit_as_the_public_route(tmp_pat
     assert rejected.status_code == 422
 
 
+def test_cloud_sidecar_forwards_a_bounded_point_in_time_timestamp(tmp_path):
+    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+    headers = {"X-Bilinc-Sidecar-Token": "secret"}
+    project_id = str(uuid4())
+
+    response = client.post(
+        f"/v1/projects/{project_id}/recall",
+        headers=headers,
+        json={
+            "query": "anything",
+            "profile": "balanced",
+            "query_timestamp": "2024-01-31T12:00:00Z",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json().get("query_timestamp_supported") is not False
+
+    rejected = client.post(
+        f"/v1/projects/{project_id}/recall",
+        headers=headers,
+        json={"query": "anything", "query_timestamp": "x" * 65},
+    )
+    assert rejected.status_code == 422
+
+
 def test_cloud_sidecar_commit_returns_versions_and_carries_provenance(tmp_path):
     client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
     headers = {"X-Bilinc-Sidecar-Token": "secret"}

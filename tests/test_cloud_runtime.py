@@ -88,6 +88,40 @@ async def test_project_runtime_recall_defaults_to_current_valid_state(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_project_runtime_recall_supports_point_in_time_state(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project_id = str(uuid4())
+    plane = await manager.get_plane(project_id)
+
+    await plane.backend.restore(
+        MemoryEntry(
+            key="memory:before",
+            value="deployment target is stable-cluster",
+            memory_type=MemoryType.SEMANTIC,
+            metadata={"source_timestamp": "2024-01-10T12:00:00Z"},
+        )
+    )
+    await plane.backend.restore(
+        MemoryEntry(
+            key="memory:after",
+            value="deployment target is experimental-cluster",
+            memory_type=MemoryType.SEMANTIC,
+            metadata={"source_timestamp": "2024-02-10T12:00:00Z"},
+        )
+    )
+
+    result = await manager.recall(
+        project_id,
+        query="deployment target",
+        profile="verified",
+        query_timestamp="2024-01-31T12:00:00Z",
+    )
+
+    assert [item["key"] for item in result["results"]] == ["memory:before"]
+    await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_project_runtime_persists_snapshots_per_project(tmp_path):
     manager = ProjectRuntimeManager(tmp_path)
     project_id = str(uuid4())

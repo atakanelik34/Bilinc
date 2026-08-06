@@ -176,6 +176,7 @@ REVISION_STRATEGIES = ("entrenchment", "recency", "verification", "importance")
 
 MAX_KEY_LENGTH = 512
 MAX_QUERY_LENGTH = 4096
+MAX_QUERY_TIMESTAMP_LENGTH = 64
 MAX_REASON_LENGTH = 512
 MAX_RECALL_LIMIT = 100
 MAX_SNAPSHOT_LIST_LIMIT = 100
@@ -276,6 +277,23 @@ def _optional_text(value: Any, field: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise _invalid(field, "must be a non-empty string when provided")
     return value.strip()
+
+
+def _optional_query_timestamp(value: Any) -> str | None:
+    """Validate the bounded public representation of a point-in-time query.
+
+    The hosted runtime owns temporal parsing so it can remain compatible with
+    the local StatePlane parser. The public SDK only enforces type, presence,
+    and a transport-safe length bound here.
+    """
+
+    parsed = _optional_text(value, "query_timestamp")
+    if parsed is not None and len(parsed) > MAX_QUERY_TIMESTAMP_LENGTH:
+        raise _invalid(
+            "query_timestamp",
+            f"must be at most {MAX_QUERY_TIMESTAMP_LENGTH} characters",
+        )
+    return parsed
 
 
 def _optional_bool(value: Any, field: str) -> bool | None:
@@ -491,6 +509,7 @@ class CloudClient:
         limit: int = 10,
         memory_types: list[str] | None = None,
         explain: bool = False,
+        query_timestamp: str | None = None,
     ) -> dict[str, Any]:
         """Recall memories from Bilinc Cloud.
 
@@ -508,6 +527,7 @@ class CloudClient:
             payload["memoryTypes"] = [_require_memory_type(name) for name in memory_types]
         if explain:
             payload["explain"] = True
+        _put_optional(payload, "queryTimestamp", _optional_query_timestamp(query_timestamp))
 
         return self._read("/api/cloud/memory/recall", payload)
 
