@@ -622,14 +622,39 @@
       "raw_result_hashes": ["9dce9aec3c2b377e9afea30c4ec111f99504b8c7ba27355c7ff2ed746409dff4"],
       "evidence_path": "benchmarks/evidence/2026-08-06/amb-legacy-v3-semantic-current-modal/manifest.json",
       "limitations": ["No AMB gain; retained as a rejected experiment and not part of the accepted score.", "No leaderboard or SOTA claim."]
+    },
+    {
+      "benchmark_id": "longmemeval-s-cleaned-frozen-current-source-modal",
+      "lane": "component",
+      "status": "valid-final-regression-guard-pass",
+      "comparability_group": "longmemeval-s-cleaned-frozen-component-guard",
+      "dataset_hash": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+      "source_commit": "4c2d721ae1aa5f4c123390c3a84a13ff329dade4",
+      "adapter_hash": "none; unchanged isolated benchmark runner",
+      "metrics": {
+        "questions": 500,
+        "exact_hit_count": 490,
+        "hit_at_5": 0.98,
+        "ndcg_at_5": 0.913316,
+        "hit_at_5_floor": 0.98,
+        "ndcg_at_5_floor": 0.913,
+        "guardrail_pass": true
+      },
+      "protocol_hash": "c4c07e60e1e708ae0d144103e458406a83f38c24d413b66c0454b1d61fc5f43d",
+      "hardware": "Modal eight-shard run; 8 requested CPU cores and 16 GiB memory per shard",
+      "latency_seconds": 925.782,
+      "cost_usd": 0.891196,
+      "raw_result_hashes": ["b7897249ff1dfdf722673c4598ba1c644b53c1f41ad2d65407b0c1887869ba35"],
+      "evidence_path": "benchmarks/evidence/2026-08-06/longmemeval-frozen-current-modal/manifest.json",
+      "limitations": ["Frozen isolated retrieval guardrail, not end-to-end StatePlane.", "The wrapper's rounded weighted average was 0.97994 and exited 1; exact shard counts uniquely verified 490/500 = 0.980.", "No leaderboard or SOTA claim."]
     }
   ],
   "modal": {
     "authorized_ceiling_usd": 30.0,
-    "cumulative_metered_usd": 7.00900328,
-    "cumulative_conservative_estimate_usd": 28.18637240,
-    "remaining_metered_budget_usd": 22.99099672,
-    "remaining_conservative_budget_usd": 1.81362760,
+    "cumulative_metered_usd": 7.90019928,
+    "cumulative_conservative_estimate_usd": 29.07756840,
+    "remaining_metered_budget_usd": 22.09980072,
+    "remaining_conservative_budget_usd": 0.92243160,
     "all_goal_apps_stopped": true,
     "persistent_resources_created": false
   },

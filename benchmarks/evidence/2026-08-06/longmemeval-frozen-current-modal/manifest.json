@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "benchmark": "longmemeval-s-cleaned-frozen-current-source-modal",
+  "lane": "component",
+  "evidence_status": "reproducible",
+  "decision": "accepted-frozen-guard-pass",
+  "git": {
+    "commit": "e4ff34a77fe9a3870a3d9c3ff48524e1bbfced8e",
+    "product_source_commit": "4c2d721ae1aa5f4c123390c3a84a13ff329dade4",
+    "worktree": "main",
+    "dirty_at_run": false,
+    "product_code_changed": false,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "c99254b31141b53d98fc816cbb2820c74aa87e07293cd86cfac642ae281d21ff",
+      "src/bilinc/core/vector_search.py": "a6e4b5ff8657abc539b67cb398ef03309125a33bcf083ba33a731c5bfa4e0aa6"
+    },
+    "longmemeval_runner_unchanged": true,
+    "metric_implementation_unchanged": true,
+    "import_boundary": "benchmarks/longmemeval_bench.py imports benchmarks.metrics and chromadb only; it does not import bilinc.core or StatePlane"
+  },
+  "dataset": {
+    "source": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned",
+    "release": "longmemeval_s_cleaned",
+    "url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json",
+    "sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "questions": 500
+  },
+  "runner": {
+    "runner_sha256": "76b198059d119e5d3c35ee0bb8725230f6d1f83b59d7d98858b8d1f179617b14",
+    "metric_sha256": "b207338e307c5a8dc6b1493f31cf6d8a1e70b836c0f6574ea339502e452914ba",
+    "modal_sharded_runner_sha256": "43756276c64364ad3e7e496ae9b4a556c53a8a4ec07e7aa41f5d7f10ddfd5e37",
+    "protocol": "unchanged hybrid retrieval, top-k=5, 500 frozen questions, eight independent Modal shards",
+    "protocol_hash": "c4c07e60e1e708ae0d144103e458406a83f38c24d413b66c0454b1d61fc5f43d",
+    "python": "3.11.15",
+    "chromadb": "1.5.9",
+    "command": "PYTHONPATH=. python3 /private/tmp/bilinc-longmemeval-current-modal-runner.py --shards 8 --receipt-path benchmarks/runs/2026-08-06/longmemeval-frozen-current-modal/receipt.json",
+    "scope": "isolated ChromaDB retrieval component; not end-to-end StatePlane"
+  },
+  "environment": {
+    "platform": "Modal Linux single-use containers",
+    "hardware": "8 requested CPU cores, 16 GiB requested memory per shard; containers reported 24 CPUs",
+    "modal_app_id": "ap-Pk4GhMUOi7YtE2JjJHl0Vx",
+    "modal_cost_usd": 0.891196,
+    "persistent_resources": false,
+    "resources_active_after_run": false,
+    "wrapper_exit_code": 1,
+    "wrapper_exit_reason": "The wrapper compared a weighted average of one-decimal shard percentages (0.97994) against the floor. The raw shard percentages uniquely reconstruct 490/500 exact hits, which is exactly 0.980000."
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-06/longmemeval-frozen-current-modal/receipt.json",
+      "sha256": "b7897249ff1dfdf722673c4598ba1c644b53c1f41ad2d65407b0c1887869ba35"
+    }
+  ],
+  "metrics": {
+    "questions": 500,
+    "exact_hit_count": 490,
+    "hit_at_5": 0.98,
+    "ndcg_at_5": 0.913316,
+    "hit_at_5_floor": 0.98,
+    "ndcg_at_5_floor": 0.913,
+    "guardrail_pass": true,
+    "shard_exact_hit_counts": [62, 62, 60, 63, 57, 63, 62, 61],
+    "category_metrics": {
+      "single-session-user": {"questions": 70, "accuracy": 1.0},
+      "multi-session": {"questions": 133, "accuracy": 0.9925563909774435},
+      "single-session-preference": {"questions": 30, "accuracy": 0.9329999999999999},
+      "temporal-reasoning": {"questions": 133, "accuracy": 0.9622406015037595},
+      "knowledge-update": {"questions": 78, "accuracy": 1.0},
+      "single-session-assistant": {"questions": 56, "accuracy": 0.9640000000000001}
+    }
+  },
+  "limitations": [
+    "This is the frozen isolated retrieval guardrail, not end-to-end StatePlane performance.",
+    "The Modal wrapper returned exit code 1 because its aggregate used rounded shard percentages; exact integer hit counts were uniquely verified from each unchanged runner's one-decimal output.",
+    "The result does not establish a public leaderboard position.",
+    "The benchmark runner does not exercise the changed StatePlane/vector_search import path; this is a non-regression receipt, not a product-core delta."
+  ],
+  "disallowed_claims": [
+    "Do not call this an end-to-end StatePlane score.",
+    "Do not use this component result as an official general memory benchmark leaderboard claim.",
+    "Do not report the wrapper's rounded weighted average 0.97994 as the benchmark Hit@5; the exact count is 490/500 = 0.980."
+  ]
+}
