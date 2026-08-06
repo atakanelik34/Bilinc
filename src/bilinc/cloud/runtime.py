@@ -302,6 +302,7 @@ class ProjectRuntimeManager:
         limit: int = 10,
         memory_types: list[str] | None = None,
         explain: bool = False,
+        query_timestamp: str | None = None,
     ) -> dict[str, Any]:
         plane = await self.get_plane(project_id)
 
@@ -315,6 +316,8 @@ class ProjectRuntimeManager:
             kwargs["memory_types"] = coerced_types
         if explain and "explain" in supported:
             kwargs["explain"] = True
+        if query_timestamp is not None and "query_timestamp" in supported:
+            kwargs["query_timestamp"] = query_timestamp
 
         payload = await plane.recall_profiled(**kwargs)
         payload["state_version"] = state_version(plane)
@@ -322,6 +325,8 @@ class ProjectRuntimeManager:
         # Never let a caller believe it received evidence it did not get.
         if explain and "explain" not in supported:
             payload["explain_supported"] = False
+        if query_timestamp is not None and "query_timestamp" not in supported:
+            payload["query_timestamp_supported"] = False
         return payload
 
     @_serialized_project_mutation
