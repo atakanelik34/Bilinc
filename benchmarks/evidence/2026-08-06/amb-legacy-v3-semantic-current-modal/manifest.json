@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "benchmark": "amb-legacy-v3-semantic-current-modal",
+  "lane": "product-core",
+  "evidence_status": "reproducible",
+  "decision": "rejected-no-amb-gain",
+  "git": {
+    "commit": "4c2d721ae1aa5f4c123390c3a84a13ff329dade4",
+    "worktree": "main",
+    "dirty_at_run": false,
+    "product_code_changed": true,
+    "product_files": {
+      "src/bilinc/core/stateplane.py": "c99254b31141b53d98fc816cbb2820c74aa87e07293cd86cfac642ae281d21ff",
+      "src/bilinc/core/vector_search.py": "a6e4b5ff8657abc539b67cb398ef03309125a33bcf083ba33a731c5bfa4e0aa6"
+    },
+    "adapter_sha256": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+    "modal_runner_sha256": "974f318d6d897795894779f6cc3ddb73ac0c3323a311c9b70103408800365774"
+  },
+  "dataset": {
+    "source": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+    "release": "v3.0.0",
+    "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+    "package_tarball_sha256": "038345777409ff4097cceae44cc2337eed534e88ef946e5adb70da5309b082ae",
+    "license": "Apache-2.0"
+  },
+  "runner": {
+    "protocol": "pinned upstream v3.0.0 CLI; matched disabled-vs-opt-in MiniLM pair",
+    "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+    "store_delay_seconds": 3.0,
+    "scope": "isolated SQLite per layer; generic adapter; no benchmark-specific query behavior"
+  },
+  "model": {
+    "id": "sentence-transformers/all-MiniLM-L6-v2",
+    "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "manifest_sha256": "2db4942727d159bcf555eead73a5e1384c197f72bfae286b7994267f8620b92a"
+  },
+  "environment": {
+    "platform": "Modal Linux single-use container",
+    "hardware": "8 requested CPU, 16 GiB requested memory; container reported 24 CPUs",
+    "package_versions": {"bilinc": "2.1.8", "mcp": "1.29.0", "numpy": "2.4.2", "sentence-transformers": "3.4.1", "torch": "2.12.1", "transformers": "4.57.6"},
+    "modal_app_id": "ap-mpeaq5vA7h5xQBiXWE0ZKF",
+    "modal_cost_usd": 0.07757609,
+    "persistent_resources": false,
+    "resources_active_after_run": false
+  },
+  "raw_results": [
+    {"path": "runs/2026-08-06/amb-legacy-v3-semantic-current-modal/pair-receipt.json", "sha256": "9dce9aec3c2b377e9afea30c4ec111f99504b8c7ba27355c7ff2ed746409dff4"}
+  ],
+  "metrics": {
+    "layer1": {"baseline_disabled": 75.0, "candidate_semantic": 75.0, "delta": 0.0, "semantic_search_baseline": 62.5, "semantic_search_candidate": 62.5},
+    "layer2": {"baseline_disabled": 40.0, "candidate_semantic": 40.0, "delta": 0.0, "scenarios": 5, "passed": 2},
+    "latency_seconds": {"layer1_baseline": 233.894, "layer1_candidate": 233.559, "layer2_baseline": 25.142, "layer2_candidate": 25.188}
+  },
+  "limitations": [
+    "Historical v3 binary harness, not current Vectorize AMB RAG/judge.",
+    "Opt-in semantic model is retained for LoCoMo component gains but rejected for AMB because it produced no AMB gain.",
+    "No leaderboard, #1 or SOTA claim."
+  ],
+  "disallowed_claims": [
+    "Do not call this an AMB leaderboard, #1 or SOTA result.",
+    "Do not treat the opt-in semantic model as an AMB improvement when the matched A/B delta is zero.",
+    "Do not infer end-to-end QA accuracy from this binary retrieval harness."
+  ]
+}
