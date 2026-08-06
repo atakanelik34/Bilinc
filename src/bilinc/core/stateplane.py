@@ -85,6 +85,11 @@ class StatePlane:
     GRAPH_ENTITY_MAX_BRIDGE_ENTITIES = 8
     GRAPH_ENTITY_MAX_NEIGHBORS_PER_BRIDGE = 32
     GRAPH_ENTITY_BRIDGE_WEIGHT = 0.06
+    # A bounded surface-overlap escape hatch keeps small, sparse stores
+    # searchable when FTS/vector channels have no candidate. It is deliberately
+    # low priority and disabled for dense corpora so weak fragments cannot
+    # displace stronger evidence.
+    SURFACE_FALLBACK_MAX_CANDIDATES = 128
     # Function words are useful for query intent, but they are weak lexical
     # evidence for memory relevance. Keep this filter scoped to lexical
     # ranking so temporal/current-state intent and entity extraction retain
@@ -699,6 +704,13 @@ class StatePlane:
                 top_k=max(limit * 10, 50),
                 candidate_keys=candidate_keys,
             )
+            if (
+                len(candidates) <= self.SURFACE_FALLBACK_MAX_CANDIDATES
+                and not lexical_ranked
+                and not hybrid_ranked
+                and not semantic_ranked
+            ):
+                lexical_ranked = self._rank_surface_fallback_keys(query, candidates)
             semantic_weight = self._semantic_recall_weight(
                 query,
                 candidates,
@@ -1553,6 +1565,20 @@ class StatePlane:
             scored.append((key, score))
         scored.sort(key=lambda kv: kv[1], reverse=True)
         return [k for k, _ in scored]
+
+    def _rank_surface_fallback_keys(self, query: str, candidates: Dict[str, MemoryEntry]) -> List[str]:
+        """Recover bounded surface overlap when every primary channel is empty."""
+        tokens = set(self._tokenize_query(query))
+        if not tokens:
+            return []
+        scored: List[tuple[str, float]] = []
+        for key, entry in candidates.items():
+            text = f"{entry.key} {entry.value}".casefold()
+            matching_tokens = [token for token in tokens if token in text]
+            if matching_tokens:
+                scored.append((key, len(matching_tokens) + (entry.importance * 0.1)))
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return [key for key, _ in scored]
 
     def _semantic_recall_weight(
         self,
