@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "benchmark": "locomo-official-retrieval-component-stateplane-current-modal",
+  "lane": "component",
+  "evidence_status": "reproducible",
+  "decision": "current-source-validation",
+  "git": {
+    "commit": "392a5ee470584fc736c735e38035a747b47b9ccd",
+    "worktree": "main",
+    "dirty_at_run": false,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "f405f4fbd479bdc95a0371ec8ec22e5ee4ff365969d50d68742f90e33c25ad49",
+      "src/bilinc/core/vector_search.py": "a6e4b5ff8657abc539b67cb398ef03309125a33bcf083ba33a731c5bfa4e0aa6"
+    },
+    "adapter": "none; direct public StatePlane API"
+  },
+  "dataset": {
+    "source": "https://github.com/snap-research/locomo",
+    "release": "main at frozen protocol",
+    "release_commit": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+    "url": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
+    "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "license": "CC BY-NC 4.0",
+    "conversations": 10,
+    "qa_total": 1986,
+    "qa_scored": 1977,
+    "memories": 5882
+  },
+  "runner": {
+    "component_runner_sha256": "c4d0966c2b57d51dd305899a31aefca14dce27612410a406bbd1f8d3ab68b879",
+    "modal_runner_sha256": "c3f40d02745143294c917e29f1e0416a51b5db1ab670f8e935123305f64238eb",
+    "protocol_sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+    "python": "3.11.5",
+    "command": "python3 benchmarks/modal/locomo_runner.py --top-k 5 --receipt-path benchmarks/runs/2026-08-06/locomo-stateplane-current-modal/receipt.json",
+    "scope": "one isolated SQLite-backed StatePlane per conversation",
+    "ingestion": "official raw conversation turns only",
+    "retrieval": "StatePlane.recall_intelligent public API",
+    "qa_or_observation_projection": false,
+    "benchmark_specific_query_expansion": false,
+    "metrics": "Hit@5, evidence recall@5, normalized binary NDCG@5"
+  },
+  "environment": {
+    "platform": "Modal Linux single-use container",
+    "hardware": "8 requested CPU, 16 GiB requested memory; container reported 24 CPUs",
+    "modal_app_id": "ap-9KIVOlfNPXnvhvMNpwJKgo",
+    "modal_cost_usd": 0.00832985,
+    "wall_seconds": 53.215,
+    "persistent_resources": false,
+    "resources_active_after_run": false
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-06/locomo-stateplane-current-modal/receipt.json",
+      "sha256": "67707fa247a10d9d5621c31a16c61c1fceb45d2ac5664f2770d8fdb4ff8201fc"
+    }
+  ],
+  "metrics": {
+    "questions": 1977,
+    "hit_at_5": 0.5655032878098128,
+    "evidence_recall_at_5": 0.5195393704453779,
+    "ndcg_at_5": 0.43659001197514796,
+    "by_category": {
+      "adversarial": {"n": 446, "hit_at_5": 0.5852017937219731, "evidence_recall_at_5": 0.5795964125560538, "ndcg_at_5": 0.47053467389933445},
+      "multi-hop": {"n": 320, "hit_at_5": 0.653125, "evidence_recall_at_5": 0.6247395833333333, "ndcg_at_5": 0.5405226596748955},
+      "open-domain": {"n": 841, "hit_at_5": 0.5933412604042806, "evidence_recall_at_5": 0.5788743559254855, "ndcg_at_5": 0.4840841976024514},
+      "single-hop": {"n": 281, "hit_at_5": 0.4306049822064057, "evidence_recall_at_5": 0.22246152424088372, "ndcg_at_5": 0.20422501386007713},
+      "temporal": {"n": 89, "hit_at_5": 0.3146067415730337, "evidence_recall_at_5": 0.21761401189689356, "ndcg_at_5": 0.17764830271299314}
+    }
+  },
+  "limitations": [
+    "Retrieval component only; not official end-to-end LoCoMo QA/F1.",
+    "Conversation-isolated scope; not global cross-conversation retrieval.",
+    "The result is not directly comparable with Gemini/provider-generated QA scores.",
+    "No LongMemEval score is inferred from this lane; its frozen guard remains separate."
+  ],
+  "disallowed_claims": [
+    "Do not call this an end-to-end LoCoMo QA score.",
+    "Do not call this #1, SOTA or a public leaderboard improvement.",
+    "Do not compare this component metric directly with answer accuracy."
+  ]
+}

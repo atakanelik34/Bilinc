@@ -5,7 +5,7 @@
     "path": "benchmarks/protocols/2026-08-04/freeze.json",
     "sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822"
   },
-  "source_commit": "c9baad03d6691c0baafa754de1254a8889a026ce",
+  "source_commit": "392a5ee470584fc736c735e38035a747b47b9ccd",
   "rows": [
     {
       "benchmark_id": "longmemeval-s-cleaned-component",
@@ -517,14 +517,55 @@
       "raw_result_hashes": ["6c2e6201713848041a0435c339cc4f8854d8d76fca36eb3c28b38f28e1abbacf", "e559bde065303039b4ddef8392c503c6ec11d95827f1f177086b2b9f9a243850", "6d2acf72b6f568b31db4e3a5705aa4365d25e6f30400db72916c92ebe7b2d86d", "7d458720ea3825f38597fde079dcb487af0489453aecb833051ce2e017ed13a2"],
       "evidence_path": "benchmarks/evidence/2026-08-04/amb-legacy-v3-current-valid-filter/manifest.json",
       "limitations": ["Historical AMB v3 harness, not current Vectorize AMB RAG/judge.", "Layer 2 is intentionally invoked separately and reports process exit 1 while its 2/5 result is valid."]
+    },
+    {
+      "benchmark_id": "amb-legacy-v3-layer1-layer2-current-product-core-modal",
+      "lane": "product-core",
+      "status": "valid-current-source-validation",
+      "comparability_group": "amb-legacy-v3-frozen-generic-adapter",
+      "dataset_hash": "038345777409ff4097cceae44cc2337eed534e88ef946e5adb70da5309b082ae",
+      "source_commit": "392a5ee470584fc736c735e38035a747b47b9ccd",
+      "adapter_hash": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+      "metrics": {
+        "layer1_overall": 67.0,
+        "layer2_overall": 40.0,
+        "layer2_passed": 2,
+        "layer2_total": 5,
+        "layer1_categories": {"factual-recall": 100.0, "semantic-search": 25.0, "temporal-reasoning": 42.857142857142854, "conflict-resolution": 85.71428571428571, "selective-forgetting": 83.33333333333334, "cross-session": 71.42857142857143, "multi-agent": null, "cost-efficiency": 100.0}
+      },
+      "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+      "hardware": "Modal 8 requested CPU, 16 GiB memory",
+      "latency_seconds": {"layer1": 234.941, "layer2": 25.813},
+      "cost_usd": 0.03782861,
+      "raw_result_hashes": ["d2d850b0730715ec5fcd681d9edbe1dc6f8fa843b7fdffcef452a72f24548dc0", "22e62a80f55ce5d5650b6542d2df2d8902db072bf7399646b9197e5002a1005c"],
+      "evidence_path": "benchmarks/evidence/2026-08-06/amb-legacy-v3-current-modal/manifest.json",
+      "limitations": ["Historical v3 binary harness; not current Vectorize AMB RAG/judge.", "Current-source validation, not an improvement claim; multi-agent category skipped."]
+    },
+    {
+      "benchmark_id": "locomo-official-retrieval-component-stateplane-current-modal",
+      "lane": "component",
+      "status": "valid-current-source-validation",
+      "comparability_group": "locomo-official-raw-turn-stateplane-component",
+      "dataset_hash": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+      "source_commit": "392a5ee470584fc736c735e38035a747b47b9ccd",
+      "adapter_hash": "none; direct public StatePlane API",
+      "metrics": {"questions": 1977, "memories": 5882, "hit_at_5": 0.5655032878098128, "evidence_recall_at_5": 0.5195393704453779, "ndcg_at_5": 0.43659001197514796},
+      "category_metrics": {"adversarial": {"n": 446, "hit_at_5": 0.5852017937219731, "evidence_recall_at_5": 0.5795964125560538, "ndcg_at_5": 0.47053467389933445}, "multi-hop": {"n": 320, "hit_at_5": 0.653125, "evidence_recall_at_5": 0.6247395833333333, "ndcg_at_5": 0.5405226596748955}, "open-domain": {"n": 841, "hit_at_5": 0.5933412604042806, "evidence_recall_at_5": 0.5788743559254855, "ndcg_at_5": 0.4840841976024514}, "single-hop": {"n": 281, "hit_at_5": 0.4306049822064057, "evidence_recall_at_5": 0.22246152424088372, "ndcg_at_5": 0.20422501386007713}, "temporal": {"n": 89, "hit_at_5": 0.3146067415730337, "evidence_recall_at_5": 0.21761401189689356, "ndcg_at_5": 0.17764830271299314}},
+      "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+      "hardware": "Modal 8 requested CPU, 16 GiB memory",
+      "latency_seconds": 53.215,
+      "cost_usd": 0.00832985,
+      "raw_result_hashes": ["67707fa247a10d9d5621c31a16c61c1fceb45d2ac5664f2770d8fdb4ff8201fc"],
+      "evidence_path": "benchmarks/evidence/2026-08-06/locomo-stateplane-current-modal/manifest.json",
+      "limitations": ["Retrieval component only; not official end-to-end LoCoMo QA/F1.", "Conversation-isolated scope; not a global cross-conversation score."]
     }
   ],
   "modal": {
     "authorized_ceiling_usd": 30.0,
-    "cumulative_metered_usd": 0.65896785,
-    "cumulative_conservative_estimate_usd": 28.005,
-    "remaining_metered_budget_usd": 29.34103215,
-    "remaining_conservative_budget_usd": 1.995,
+    "cumulative_metered_usd": 6.87378934,
+    "cumulative_conservative_estimate_usd": 28.05115846,
+    "remaining_metered_budget_usd": 23.12621066,
+    "remaining_conservative_budget_usd": 1.94884154,
     "all_goal_apps_stopped": true,
     "persistent_resources_created": false
   },
