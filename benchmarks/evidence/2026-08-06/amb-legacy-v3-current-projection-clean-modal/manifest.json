@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "benchmark": "amb-legacy-v3-layer2-current-state-projection-clean-modal",
+  "lane": "product-core",
+  "evidence_status": "reproducible",
+  "decision": "accepted-layer2-general-current-state-gain",
+  "git": {
+    "commit": "9629fe6e7d47318c427a83705b0f82c5bfd251c8",
+    "worktree": "main",
+    "dirty_at_run": false,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "a46fbf659dc9328d18c2ba55c560b7ebb88201d4f006bbf6f888f9145741b33a"
+    },
+    "adapter": "benchmarks/adapters/amb_generic_mcp.py",
+    "adapter_sha256": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+    "modal_runner": "benchmarks/modal/amb_runner.py",
+    "modal_runner_sha256": "f2c7fc53e7f0b599565a6c46ad1cdc527333fccc23377fde5b17d421a1970781"
+  },
+  "dataset": {
+    "source": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+    "release": "v3.0.0",
+    "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+    "package_tarball_sha256": "038345777409ff4097cceae44cc2337eed534e88ef946e5adb70da5309b082ae",
+    "license": "Apache-2.0",
+    "layer1_tests": 56,
+    "layer2_scenarios": 5
+  },
+  "runner": {
+    "package": "agent-memory-benchmark@3.0.0",
+    "protocol": "pinned upstream v3.0.0 CLI through frozen generic public Bilinc MCP adapter",
+    "store_delay_seconds": 3.0,
+    "layer2_command": "python3 benchmarks/modal/amb_runner.py --layer 2 --store-delay 3.0 --receipt-path benchmarks/runs/2026-08-06/amb-legacy-v3-current-projection-clean-modal/layer2-receipt.json",
+    "scope": "isolated SQLite per layer; no aliases, fixture terms, answer cache or query-specific behavior",
+    "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822"
+  },
+  "environment": {
+    "platform": "Modal Linux single-use container",
+    "hardware": "8 requested CPU, 16 GiB requested memory; container reported 24 CPUs",
+    "python": "3.11.5",
+    "node": "v22.23.2",
+    "modal_app_ids": ["ap-4ARKSLXuZlygg8T3ol66NT"],
+    "modal_cost_usd": 0.00421017,
+    "persistent_resources": false,
+    "resources_active_after_run": false
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-06/amb-legacy-v3-current-projection-clean-modal/layer2-receipt.json",
+      "sha256": "1caff86731a0a310aaee947871100dec00abb2ed6ea63210b2f8ad93d2cb6535"
+    }
+  ],
+  "metrics": {
+    "layer1_status": "not_run; layer2-only validation",
+    "layer2_overall": 100.0,
+    "layer2_passed": 5,
+    "layer2_total": 5,
+    "comparison": {
+      "previous_generic_product_core_layer2": 40.0,
+      "delta": 60.0,
+      "scenarios_fixed": ["l2-02 context continuity", "l2-01 preference application", "l2-03 conflict resolution", "l2-04 cross-agent handoff", "l2-05 redundancy check"]
+    },
+    "official_exit_code_note": "The upstream CLI exits 1 for a layer2-only run because its aggregate overallScore remains 0 when Layer 1 is skipped; layer2.score=100 and all five scenario results are valid."
+  },
+  "limitations": [
+    "Historical AlekseiMarchenko v3 binary harness, not the current Vectorize AMB RAG/judge harness.",
+    "Layer 1 was intentionally not rerun in this clean-source receipt; the accepted historical/current Layer 1 reference remains separately recorded.",
+    "The generic adapter skips the multi-agent category.",
+    "This is a matched product-core Layer 2 result, not an official leaderboard, SOTA or universal #1 claim."
+  ],
+  "disallowed_claims": [
+    "Do not call this Layer 2 result #1, SOTA or an official current leaderboard position.",
+    "Do not merge it with historical calibrated AMB scores or the separate Layer 1 evidence as if they were one clean run.",
+    "Do not infer end-to-end QA accuracy from this binary retrieval harness."
+  ]
+}

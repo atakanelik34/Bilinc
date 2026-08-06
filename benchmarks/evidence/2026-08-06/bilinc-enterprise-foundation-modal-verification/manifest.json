@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "benchmark": "bilinc-enterprise-foundation-modal-verification",
+  "lane": "product-core",
+  "evidence_status": "reproducible",
+  "decision": "accepted-modal-foundation-verification",
+  "git": {
+    "repository": "/Users/busecimen/Downloads/Projeler/Agent/bilinc-enterprise",
+    "commit": "a8089be5f567a347c9521c5e4ffd3df2c43bf342",
+    "worktree": "codex/bilinc-enterprise-foundation",
+    "dirty_at_run": false,
+    "product_code_changed": false,
+    "source_scope": "private Bilinc Enterprise foundation; no Cloud source mutation"
+  },
+  "dataset": {
+    "source": "private Bilinc Enterprise repository source",
+    "split": "repository foundation verification; no customer data",
+    "license": "private repository; no redistribution"
+  },
+  "runner": {
+    "protocol": "disposable Modal Linux container; repository source copied without .git, dependencies, build output or secret-like files; backend, web, traceability and policy checks run in a clean image",
+    "verification_script": "runs/2026-08-06/bilinc-enterprise-foundation-modal-verification/verify_script.py",
+    "verification_script_sha256": "1a9e23a10d418ae15958b4d4ae1163fbcce2fa67bb89ccf0481c904f728eb6ba",
+    "protocol_hash": "1a9e23a10d418ae15958b4d4ae1163fbcce2fa67bb89ccf0481c904f728eb6ba",
+    "commands": [
+      "PYTHONPATH=src python3 -m pytest tests",
+      "PYTHONPATH=src python3 -m ruff check src tests",
+      "oxlint --deny-warnings web/src",
+      "cd web && tsc --noEmit",
+      "cd web && vitest run",
+      "cd web && tsc --noEmit && vite build",
+      "PYTHONPATH=src python3 scripts/verify_web_bundle.py --root web/dist",
+      "PYTHONPATH=src python3 scripts/check_traceability.py",
+      "PYTHONPATH=. python3 scripts/validate_core_extraction_approval.py",
+      "PYTHONPATH=. python3 scripts/scan_sensitive_artifacts.py",
+      "PYTHONPATH=src python3 -m pytest tests/test_repository_policy.py -q"
+    ]
+  },
+  "environment": {
+    "platform": "Modal Linux single-use container",
+    "hardware": "8 requested CPU, 16 GiB requested memory; container reported 24 CPUs",
+    "python": "3.11.5",
+    "node": "v22.23.2",
+    "modal_app_ids": ["ap-ckdLpYM31CJgP4XMS2NfZC"],
+    "modal_cost_usd": 0.00281324,
+    "modal_cost_basis": "metered Modal billing report after completion",
+    "persistent_resources": false,
+    "resources_active_after_run": false
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-06/bilinc-enterprise-foundation-modal-verification/receipt.json",
+      "sha256": "582c23e883865f3a3d2f10924f9a4686ba5e09945ad39aa0b865a4f5a4fbe646"
+    }
+  ],
+  "metrics": {
+    "backend_tests": "604 passed",
+    "backend_ruff": "pass",
+    "web_lint": "0 warnings, 0 errors; 27 files; 205 rules",
+    "web_typecheck": "pass",
+    "web_tests": "28 passed in 4 files",
+    "web_build": "pass",
+    "web_bundle_verification": "pass; external_runtime_urls=[]",
+    "traceability": "35 requirements structurally valid",
+    "sensitive_artifact_scan": "210 files clean",
+    "repository_policy": "pass",
+    "all_commands_passed": true
+  },
+  "limitations": [
+    "This is a Modal foundation verification, not a full Docker/PostgreSQL/customer-data appliance acceptance run.",
+    "npm install used an image-only lockfile workaround because the remote environment could not resolve optional npm lock entries; no repository lockfile was changed.",
+    "The core-extraction checker exited successfully but reported decision_record_validated=false; owner approval remains a separate gate.",
+    "This does not establish SELLABLE_RC, commercial release, offline HSM signature, OCI/Trivy or owner-signing completion."
+  ],
+  "disallowed_claims": [
+    "Do not call this Enterprise commercially released or SELLABLE_RC.",
+    "Do not treat the foundation verification as a full production appliance acceptance.",
+    "Do not infer public Bilinc Cloud deployment or customer-data readiness from this private-repository test."
+  ]
+}
