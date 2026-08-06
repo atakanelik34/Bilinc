@@ -14,6 +14,7 @@ Integrates:
 from __future__ import annotations
 
 import asyncio
+from copy import copy
 import logging
 import math
 import os
@@ -90,6 +91,12 @@ class StatePlane:
     # low priority and disabled for dense corpora so weak fragments cannot
     # displace stronger evidence.
     SURFACE_FALLBACK_MAX_CANDIDATES = 128
+    # Small stores often represent a complete context packet rather than a
+    # search corpus. When a broad query produces fewer than ``limit`` primary
+    # candidates, fill the remaining bounded surface with a very low-weight
+    # salience signal. Dense corpora never enter this path.
+    SPARSE_COMPLETION_MAX_CANDIDATES = 32
+    INTELLIGENT_RECALL_SPARSE_COMPLETION_WEIGHT = 0.01
     # Function words are useful for query intent, but they are weak lexical
     # evidence for memory relevance. Keep this filter scoped to lexical
     # ranking so temporal/current-state intent and entity extraction retain
@@ -689,6 +696,11 @@ class StatePlane:
                 include_stale=include_stale or valid_as_of is not None,
             )
             candidates = self._filter_candidates_as_of(candidates, query_timestamp)
+            candidates = self._project_current_state_candidates(
+                candidates,
+                include_stale=include_stale,
+                query_timestamp=query_timestamp,
+            )
             if not candidates:
                 return []
 
@@ -711,6 +723,15 @@ class StatePlane:
                 and not semantic_ranked
             ):
                 lexical_ranked = self._rank_surface_fallback_keys(query, candidates)
+            sparse_completion_ranked = self._rank_sparse_completion_keys(
+                candidates,
+                limit=limit,
+                primary_ranked=(
+                    lexical_ranked[: max(limit * 10, 50)]
+                    + hybrid_ranked[: max(limit * 10, 50)]
+                    + semantic_ranked[: max(limit * 10, 50)]
+                ),
+            )
             semantic_weight = self._semantic_recall_weight(
                 query,
                 candidates,
@@ -762,6 +783,13 @@ class StatePlane:
             self._apply_rrf_signal(
                 fused_scores,
                 signals,
+                sparse_completion_ranked,
+                weight=self.INTELLIGENT_RECALL_SPARSE_COMPLETION_WEIGHT,
+                signal_name="sparse",
+            )
+            self._apply_rrf_signal(
+                fused_scores,
+                signals,
                 temporal_ranked,
                 weight=self.INTELLIGENT_RECALL_TEMPORAL_WEIGHT,
                 signal_name="temporal",
@@ -785,6 +813,7 @@ class StatePlane:
                         "lexical": 0.0,
                         "hybrid": 0.0,
                         "semantic": 0.0,
+                        "sparse": 0.0,
                         "temporal": 0.0,
                         "entity": 0.0,
                         "entity_rrf": 0.0,
@@ -806,6 +835,7 @@ class StatePlane:
                         "lexical": 0.0,
                         "hybrid": 0.0,
                         "semantic": 0.0,
+                        "sparse": 0.0,
                         "temporal": 0.0,
                         "entity": 0.0,
                         "entity_rrf": 0.0,
@@ -821,6 +851,7 @@ class StatePlane:
                         "lexical": round(entry_signals.get("lexical", 0.0), 6),
                         "hybrid": round(entry_signals.get("hybrid", 0.0), 6),
                         "semantic": round(entry_signals.get("semantic", 0.0), 6),
+                        "sparse": round(entry_signals.get("sparse", 0.0), 6),
                         "temporal": round(entry_signals.get("temporal", 0.0), 6),
                         "entity": round(entry_signals.get("entity", 0.0), 6),
                     },
@@ -986,6 +1017,10 @@ class StatePlane:
             reasons.append("hybrid/vector rerank match")
         if signals.get("semantic", 0.0) > 0:
             reasons.append("semantic embedding match")
+        if signals.get("sparse", 0.0) > 0:
+            reasons.append("bounded sparse-context completion")
+        if isinstance(entry.metadata, dict) and entry.metadata.get("projection_kind") == "current_state":
+            reasons.append("source-linked current-state projection")
         if signals.get("temporal", 0.0) > 0:
             reasons.append("directional temporal evidence")
         if signals.get("entity", 0.0) > 0:
@@ -1016,7 +1051,14 @@ class StatePlane:
             "current_strength": entry.current_strength,
             "access_count": entry.access_count,
         }
-        for field in ("source_hash", "provenance_id", "authority", "sensitivity"):
+        for field in (
+            "source_hash",
+            "provenance_id",
+            "authority",
+            "sensitivity",
+            "derived_from",
+            "projection_kind",
+        ):
             if field in metadata:
                 provenance[field] = self._redact_recall_explain_value(metadata[field], key_hint=field)
         return provenance
@@ -1466,6 +1508,74 @@ class StatePlane:
             filtered[key] = entry
         return filtered
 
+    def _project_current_state_candidates(
+        self,
+        candidates: Dict[str, MemoryEntry],
+        *,
+        include_stale: bool,
+        query_timestamp: Optional[str],
+    ) -> Dict[str, MemoryEntry]:
+        """Expose source-linked current views without mutating stored evidence.
+
+        Explicit historical requests must receive the original evidence.  The
+        default view may use a derived projection for generic state-transition
+        sentences so obsolete values do not outrank their current replacement.
+        """
+        if include_stale or query_timestamp is not None:
+            return candidates
+
+        projected: Dict[str, MemoryEntry] = {}
+        for key, entry in candidates.items():
+            projected[key] = self._current_state_projection(entry) or entry
+        return projected
+
+    def _current_state_projection(self, entry: MemoryEntry) -> Optional[MemoryEntry]:
+        """Derive a current value from a generic transition sentence."""
+        if not isinstance(entry.value, str):
+            return None
+
+        text = " ".join(entry.value.split()).strip()
+        if not text:
+            return None
+
+        patterns = (
+            re.compile(
+                r"\b(?:migrated|moving|moved|switched|switching|transitioned|transitioning)\s+"
+                r"(?P<subject>[^.!?]*?)\s+from\s+(?P<old>[^,.!?]+?)\s+to\s+(?P<new>[^.!?]+)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\breplaced\s+(?P<old>[^,.!?]+?)\s+with\s+(?P<new>[^.!?]+)",
+                re.IGNORECASE,
+            ),
+        )
+        match = None
+        for pattern in patterns:
+            match = pattern.search(text)
+            if match:
+                break
+        if match is None:
+            return None
+
+        old_value = " ".join(match.group("old").split()).strip(" ,;:")
+        new_value = " ".join(match.group("new").split()).strip(" ,;:")
+        subject = " ".join((match.groupdict().get("subject") or "").split()).strip(" ,;:")
+        if not old_value or not new_value or old_value.casefold() == new_value.casefold():
+            return None
+
+        metadata = dict(entry.metadata or {})
+        metadata.update(
+            {
+                "derived_from": entry.key,
+                "projection_kind": "current_state",
+                "superseded_terms": [old_value],
+            }
+        )
+        projection = copy(entry)
+        projection.value = f"Current {subject or 'state'}: {new_value.rstrip('.')}."
+        projection.metadata = metadata
+        return projection
+
     def _is_recallable_entry(self, entry: MemoryEntry, now: Optional[float] = None) -> bool:
         """Return whether an entry belongs in the default current-state view."""
         now = time.time() if now is None else float(now)
@@ -1579,6 +1689,41 @@ class StatePlane:
                 scored.append((key, len(matching_tokens) + (entry.importance * 0.1)))
         scored.sort(key=lambda item: item[1], reverse=True)
         return [key for key, _ in scored]
+
+    def _rank_sparse_completion_keys(
+        self,
+        candidates: Dict[str, MemoryEntry],
+        limit: int,
+        primary_ranked: List[str],
+    ) -> List[str]:
+        """Return low-confidence remaining context for a small memory packet.
+
+        This deliberately does not inspect benchmark names or query text. It
+        only completes a bounded sparse candidate set when the primary
+        retrieval channels have not filled the caller's requested limit.
+        Primary-ranked keys are excluded and retain their stronger signals.
+        """
+        if (
+            limit <= 0
+            or len(candidates) > self.SPARSE_COMPLETION_MAX_CANDIDATES
+            or len(set(primary_ranked)) >= min(limit, len(candidates))
+        ):
+            return []
+
+        primary_keys = set(primary_ranked)
+        remaining = [
+            entry
+            for key, entry in candidates.items()
+            if key not in primary_keys
+        ]
+        remaining.sort(
+            key=lambda entry: (
+                -float(entry.importance or 0.0),
+                -max(float(entry.updated_at or 0.0), float(entry.created_at or 0.0)),
+                entry.key,
+            )
+        )
+        return [entry.key for entry in remaining]
 
     def _semantic_recall_weight(
         self,
@@ -2020,6 +2165,7 @@ class StatePlane:
                     "lexical": 0.0,
                     "hybrid": 0.0,
                     "semantic": 0.0,
+                    "sparse": 0.0,
                     "temporal": 0.0,
                     "entity": 0.0,
                     "entity_rrf": 0.0,

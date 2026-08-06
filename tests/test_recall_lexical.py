@@ -49,6 +49,52 @@ def test_surface_fallback_is_bounded_and_available_for_sparse_stores():
     assert plane.SURFACE_FALLBACK_MAX_CANDIDATES == 128
 
 
+@pytest.mark.asyncio
+async def test_sparse_completion_fills_broad_queries_without_displacing_primary_hits(tmp_path):
+    backend = SQLiteBackend(str(tmp_path / "sparse-completion.sqlite"))
+    plane = StatePlane(backend=backend, enable_verification=False, enable_audit=False)
+    await plane.init()
+    entries = [
+        ("language", "The primary language is Rust."),
+        ("database", "The database is PostgreSQL."),
+        ("deployment", "The deployment target is a managed container."),
+        ("testing", "Tests use a fast unit test runner."),
+        ("style", "Code style uses two-space indentation."),
+    ]
+    for key, value in entries:
+        await backend.restore(MemoryEntry(key=key, value=value, memory_type=MemoryType.SEMANTIC))
+
+    broad = await plane.recall_intelligent("what are the project settings", limit=5)
+    assert {result["key"] for result in broad} == {key for key, _ in entries}
+
+    narrow = await plane.recall_intelligent("which database do we use", limit=2)
+    assert narrow[0]["key"] == "database"
+    assert plane.SPARSE_COMPLETION_MAX_CANDIDATES == 32
+
+
+@pytest.mark.asyncio
+async def test_default_recall_projects_generic_migration_to_current_state(tmp_path):
+    backend = SQLiteBackend(str(tmp_path / "current-projection.sqlite"))
+    plane = StatePlane(backend=backend, enable_verification=False, enable_audit=False)
+    await plane.init()
+    raw = "Migrated database from local SQLite to hosted Postgres for edge deployment."
+    await backend.restore(
+        MemoryEntry(key="architecture", value=raw, memory_type=MemoryType.SEMANTIC)
+    )
+
+    current = await plane.recall_intelligent("what is the current database", limit=3)
+    assert current[0]["key"] == "architecture"
+    assert "SQLite" not in current[0]["value"]
+    assert "Postgres" in current[0]["value"]
+
+    historical = await plane.recall_intelligent(
+        "what is the database history",
+        limit=3,
+        include_stale=True,
+    )
+    assert historical[0]["value"] == raw
+
+
 def test_adaptive_semantic_weight_is_opt_in_and_gated_by_lexical_coverage(monkeypatch):
     plane = StatePlane()
     candidates = {
