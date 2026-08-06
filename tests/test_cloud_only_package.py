@@ -12,9 +12,9 @@ import pytest
 def test_public_api_is_cloud_only():
     import bilinc
 
-    assert bilinc.__version__ == "2.1.8"
-    assert bilinc.version == "2.1.8"
-    assert "utm_campaign=activation_2_1_8" in bilinc.ACTIVATION_SIGNUP_URL
+    assert bilinc.__version__ == "2.1.9"
+    assert bilinc.version == "2.1.9"
+    assert "utm_campaign=activation_2_1_9" in bilinc.ACTIVATION_SIGNUP_URL
     assert hasattr(bilinc, "Bilinc")
     assert hasattr(bilinc, "CloudClient")
     assert not hasattr(bilinc, "StatePlane")
@@ -110,9 +110,9 @@ def test_cloud_client_commit_posts_to_hosted_api():
             "headers": {
                 "Authorization": "Bearer bil_live_test",
                 "Content-Type": "application/json",
-                "User-Agent": "bilinc-python/2.1.8",
+                "User-Agent": "bilinc-python/2.1.9",
                 "X-Bilinc-Client": "python-sdk",
-                "X-Bilinc-Client-Version": "2.1.8",
+                "X-Bilinc-Client-Version": "2.1.9",
             },
             "body": json.dumps(
                 {
@@ -188,7 +188,7 @@ def test_cloud_client_status_reads_the_authenticated_status_endpoint():
             "url": "https://bilinc.space/api/cloud/status",
             "headers": {
                 "Authorization": "Bearer bil_live_test",
-                "User-Agent": "bilinc-python/2.1.8",
+                "User-Agent": "bilinc-python/2.1.9",
             },
             "body": None,
             "timeout": 30.0,
@@ -261,7 +261,7 @@ def test_cli_signup_and_missing_key_failure(monkeypatch, capsys):
     assert main(["signup"]) == 0
     signup_out = capsys.readouterr()
     assert "https://bilinc.space/signup" in signup_out.out
-    assert "activation_2_1_8" in signup_out.out
+    assert "activation_2_1_9" in signup_out.out
     assert "quicktest" in signup_out.out
 
     assert main(["commit", "--key", "smoke_key", "--value", "hello"]) == 1
@@ -305,7 +305,7 @@ def test_cli_start_login_doctor_quicktest_and_mcp_config(monkeypatch, capsys, tm
     assert "bilinc login --api-key <key>" in start_out.out
     assert "bilinc quicktest" in start_out.out
     assert "install_guide" in start_out.out
-    assert "activation_2_1_8" in start_out.out
+    assert "activation_2_1_9" in start_out.out
 
     assert cli_main.main(["login", "--api-key", "bil_live_cli_test"]) == 0
     login_out = capsys.readouterr()
