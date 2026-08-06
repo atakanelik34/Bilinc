@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "benchmark": "amb-legacy-v3-layer1-layer2-bounded-surface-fallback-modal",
+  "lane": "product-core",
+  "evidence_status": "reproducible",
+  "decision": "accepted-regression-restored",
+  "git": {
+    "commit": "4c2d721ae1aa5f4c123390c3a84a13ff329dade4",
+    "worktree": "main",
+    "dirty_at_run": false,
+    "product_code_changed": true,
+    "changed_product_files": {
+      "src/bilinc/core/stateplane.py": "c99254b31141b53d98fc816cbb2820c74aa87e07293cd86cfac642ae281d21ff"
+    },
+    "adapter": "benchmarks/adapters/amb_generic_mcp.py",
+    "adapter_sha256": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+    "modal_runner": "benchmarks/modal/amb_runner.py",
+    "modal_runner_sha256": "f2c7fc53e7f0b599565a6c46ad1cdc527333fccc23377fde5b17d421a1970781"
+  },
+  "dataset": {
+    "source": "https://github.com/AlekseiMarchenko/agent-memory-benchmark",
+    "release": "v3.0.0",
+    "release_commit": "510d57b448f0c86d740fc8c3737a3de9b742f0ba",
+    "package_tarball_sha256": "038345777409ff4097cceae44cc2337eed534e88ef946e5adb70da5309b082ae",
+    "license": "Apache-2.0",
+    "layer1_tests": 56,
+    "layer2_scenarios": 5
+  },
+  "runner": {
+    "package": "agent-memory-benchmark@3.0.0",
+    "protocol": "pinned upstream v3.0.0 CLI through frozen generic public Bilinc MCP adapter",
+    "store_delay_seconds": 3.0,
+    "layer1_command": "python3 benchmarks/modal/amb_runner.py --layer 1 --receipt-path benchmarks/runs/2026-08-06/amb-legacy-v3-fallback-modal/layer1-receipt.json",
+    "layer2_command": "python3 benchmarks/modal/amb_runner.py --layer 2 --receipt-path benchmarks/runs/2026-08-06/amb-legacy-v3-fallback-modal/layer2-receipt.json",
+    "scope": "isolated SQLite per layer; no aliases, fixture terms, answer cache or query-specific behavior",
+    "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822"
+  },
+  "environment": {
+    "platform": "Modal Linux single-use containers",
+    "hardware": "8 requested CPU, 16 GiB requested memory; container reported 24 CPUs",
+    "python": "3.11.5",
+    "node": "v22.23.2",
+    "modal_app_ids": ["ap-6yaL50Di5FKncyOCZEdGkT", "ap-TyibcGXXy43eXq9gnzYxEZ"],
+    "modal_cost_usd": 0.03765623,
+    "persistent_resources": false,
+    "resources_active_after_run": false
+  },
+  "raw_results": [
+    {
+      "path": "runs/2026-08-06/amb-legacy-v3-fallback-modal/layer1-receipt.json",
+      "sha256": "e7ab10cde2baf51c5bec47bbd14bf8fda645435e903dfb8d30094b5ea109ef9d"
+    },
+    {
+      "path": "runs/2026-08-06/amb-legacy-v3-fallback-modal/layer2-receipt.json",
+      "sha256": "a246b8d829a6b26803699c9842ddad6b96647192eef6c7b1eb4d2e1e003c2464"
+    }
+  ],
+  "metrics": {
+    "layer1_overall": 75.0,
+    "layer1_categories": {
+      "factual-recall": 100.0,
+      "semantic-search": 62.5,
+      "temporal-reasoning": 42.857142857142854,
+      "conflict-resolution": 85.71428571428571,
+      "selective-forgetting": 83.33333333333334,
+      "cross-session": 71.42857142857143,
+      "multi-agent": null,
+      "cost-efficiency": 100.0
+    },
+    "layer2_overall": 40.0,
+    "layer2_passed": 2,
+    "layer2_total": 5,
+    "current_source_comparison": {
+      "source_commit": "392a5ee470584fc736c735e38035a747b47b9ccd",
+      "layer1_overall": 67.0,
+      "layer1_delta": 8.0,
+      "layer2_overall": 40.0,
+      "layer2_delta": 0.0
+    },
+    "historical_clean_reference": {
+      "layer1_overall": 75.0,
+      "layer2_overall": 40.0,
+      "comparison_note": "Restores the previously verified generic product-core result; not a new leaderboard claim."
+    },
+    "official_exit_code_note": "Layer 2 exits 1 because the upstream CLI skips Layer 1 and leaves aggregate overallScore at 0; layer2.score=40 and its 2/5 scenarios are valid."
+  },
+  "limitations": [
+    "Historical AlekseiMarchenko v3 binary harness, not the current Vectorize AMB RAG/judge harness.",
+    "The bounded fallback is a generic low-confidence sparse-store path and is disabled for dense corpora.",
+    "The generic adapter skips the multi-agent category.",
+    "This restores a current-source regression; it does not establish #1, SOTA or an official leaderboard position."
+  ],
+  "disallowed_claims": [
+    "Do not call 75/100 or 40/100 #1, SOTA or an official current leaderboard position.",
+    "Do not compare this result with calibrated historical AMB scores as if protocols matched.",
+    "Do not infer end-to-end QA accuracy from this binary retrieval harness."
+  ]
+}

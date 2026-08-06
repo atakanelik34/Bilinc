@@ -5,7 +5,7 @@
     "path": "benchmarks/protocols/2026-08-04/freeze.json",
     "sha256": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822"
   },
-  "source_commit": "392a5ee470584fc736c735e38035a747b47b9ccd",
+  "source_commit": "4c2d721ae1aa5f4c123390c3a84a13ff329dade4",
   "rows": [
     {
       "benchmark_id": "longmemeval-s-cleaned-component",
@@ -558,14 +558,38 @@
       "raw_result_hashes": ["67707fa247a10d9d5621c31a16c61c1fceb45d2ac5664f2770d8fdb4ff8201fc"],
       "evidence_path": "benchmarks/evidence/2026-08-06/locomo-stateplane-current-modal/manifest.json",
       "limitations": ["Retrieval component only; not official end-to-end LoCoMo QA/F1.", "Conversation-isolated scope; not a global cross-conversation score."]
+    },
+    {
+      "benchmark_id": "amb-legacy-v3-layer1-layer2-bounded-surface-fallback-modal",
+      "lane": "product-core",
+      "status": "valid-candidate-accepted-regression-restored",
+      "comparability_group": "amb-legacy-v3-frozen-generic-adapter",
+      "dataset_hash": "038345777409ff4097cceae44cc2337eed534e88ef946e5adb70da5309b082ae",
+      "source_commit": "4c2d721ae1aa5f4c123390c3a84a13ff329dade4",
+      "adapter_hash": "d32f3a065bc6bcb326cf607db9bc496ec0967248fe4b1246c0df3e8115f6a761",
+      "metrics": {
+        "layer1_overall": 75.0,
+        "layer2_overall": 40.0,
+        "layer2_passed": 2,
+        "layer2_total": 5,
+        "current_source_reference": {"commit": "392a5ee470584fc736c735e38035a747b47b9ccd", "layer1_overall": 67.0, "delta": 8.0},
+        "historical_clean_reference": {"layer1_overall": 75.0, "layer2_overall": 40.0}
+      },
+      "protocol_hash": "6eead899513d2361f61476303445f7d07c193ed4907a8e49301e333ffcbf7822",
+      "hardware": "Modal 8 requested CPU, 16 GiB memory; container reported 24 CPUs",
+      "latency_seconds": {"layer1": 233.726, "layer2": 25.472},
+      "cost_usd": 0.03765623,
+      "raw_result_hashes": ["e7ab10cde2baf51c5bec47bbd14bf8fda645435e903dfb8d30094b5ea109ef9d", "a246b8d829a6b26803699c9842ddad6b96647192eef6c7b1eb4d2e1e003c2464"],
+      "evidence_path": "benchmarks/evidence/2026-08-06/amb-legacy-v3-fallback-modal/manifest.json",
+      "limitations": ["Historical v3 binary harness; not current Vectorize AMB RAG/judge.", "Bounded sparse fallback is generic and disabled for dense corpora.", "Multi-agent category skipped; result is not a leaderboard or SOTA claim."]
     }
   ],
   "modal": {
     "authorized_ceiling_usd": 30.0,
-    "cumulative_metered_usd": 6.87378934,
-    "cumulative_conservative_estimate_usd": 28.05115846,
-    "remaining_metered_budget_usd": 23.12621066,
-    "remaining_conservative_budget_usd": 1.94884154,
+    "cumulative_metered_usd": 6.91144557,
+    "cumulative_conservative_estimate_usd": 28.08881469,
+    "remaining_metered_budget_usd": 23.08855443,
+    "remaining_conservative_budget_usd": 1.91118531,
     "all_goal_apps_stopped": true,
     "persistent_resources_created": false
   },
