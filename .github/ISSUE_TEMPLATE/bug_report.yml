@@ -1,0 +1,37 @@
+name: Bug report
+description: Report a reproducible problem in Bilinc
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, private memory values, customer data, or production logs.
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should Bilinc have done?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Give the smallest safe reproduction, including version and backend.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification output
+      description: Paste redacted test output or a minimal error message.

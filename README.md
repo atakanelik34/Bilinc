@@ -6,6 +6,8 @@
 [![Python](https://img.shields.io/pypi/pyversions/bilinc.svg)](https://pypi.org/project/bilinc/)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-server-purple.svg)](https://bilinc.space/for/mcp)
+[![Release](https://img.shields.io/github/v/release/atakanelik34/Bilinc?display_name=tag&sort=semver)](https://github.com/atakanelik34/Bilinc/releases)
+[![CI](https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml)
 <a href="https://pepy.tech/project/bilinc"><img src="https://static.pepy.tech/badge/bilinc" alt="Downloads"></a>
 
 **Hosted memory infrastructure for coding agents: commit, recall, and inspect agent state through one API key, with verification, provenance, and recovery around every write.**
@@ -15,6 +17,20 @@ Retrieval answers *"what is similar to this?"*. Long-running agents also need to
 Bilinc 2.1.9 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
 
 > **Frozen regression receipt** — LongMemEval-s cleaned retrieval fixture, 500 questions: **Hit@5 98.0%**, **NDCG@5 0.913**, no LLM reranker, no paid API. This is an isolated retrieval guardrail, not a current hosted SLA, end-to-end agent score, or competitor ranking — see [Benchmark receipt](#benchmark-receipt) for the full scope and qualification.
+
+## The short version
+
+Bilinc is the state layer between an agent and the things it must remember. It keeps memory writes attributable,
+correctable, and recoverable instead of treating retrieval as a bag of similar text.
+
+| If your agent needs to... | Bilinc gives it... |
+| --- | --- |
+| Recall a decision before acting | Key-scoped recall with explicit profiles and evidence metadata |
+| Correct a bad memory | `revise`, contradiction-aware state, and provenance-preserving updates |
+| Recover from an unsafe run | Snapshots, diffs, and confirmed rollback |
+| Work across coding tools | A Python SDK, CLI, and stdio MCP adapter |
+
+The fastest path is `pip install -U bilinc`, `bilinc login`, then `bilinc quicktest` against Bilinc Cloud.
 
 ## Use Bilinc when
 
@@ -28,6 +44,17 @@ Bilinc 2.1.9 on PyPI is the public cloud-only package: a thin Python SDK, CLI, a
 - You only need semantic search over documents — a vector database is the simpler primitive.
 - You require an Apache-2.0 licensed, fully self-hosted runtime. The public package is cloud-only and licensed BUSL-1.1.
 - You want the memory layer to also be your agent framework. Bilinc is the state layer your runtime calls; it does not orchestrate agents.
+
+## Choose your surface
+
+| You want... | Use... |
+| --- | --- |
+| A hosted memory API for an agent or MCP client | The public cloud-only package from PyPI |
+| Local StatePlane, SQLite/PostgreSQL, benchmarks, or internals | This repository and the [architecture guide](docs/architecture.md) |
+| A hosted MCP connection | The [MCP setup guide](https://bilinc.space/docs/mcp) |
+
+The public package is intentionally smaller than this repository. It does not bundle the internal StatePlane or local
+storage runtime.
 
 ## Start in 60 Seconds
 
@@ -48,6 +75,12 @@ and one Cloud status check.
 ```bash
 bilinc login --api-key bil_live_...
 bilinc quicktest
+```
+
+To reproduce this release exactly:
+
+```bash
+pip install -U bilinc==2.1.9
 ```
 
 If you prefer a browser guide, open https://bilinc.space/install and follow the
@@ -191,6 +224,20 @@ end-to-end agent score, and not a competitor ranking. Published memory-system
 scores use different metrics, datasets, and levels of LLM assistance, so they are
 not directly comparable. Present this receipt only with this isolated scope attached.
 
+### Evidence map
+
+The repository keeps dated manifests with source state, dataset provenance, runner and metric semantics. These are
+traceability artifacts, not claims that Bilinc is universally first place.
+
+| Lane | Publicly stored evidence | Scope |
+| --- | --- | --- |
+| LongMemEval-s | [frozen manifest](benchmarks/evidence/2026-08-04/longmemeval-frozen-final/manifest.json) | Isolated retrieval guardrail |
+| AMB legacy v3 | [current Modal manifests](benchmarks/evidence/2026-08-06/) | Historical generic harness; not Vectorize AMB RAG/judge |
+| Official LoCoMo | [retrieval manifests](benchmarks/evidence/2026-08-06/) | Retrieval component; not end-to-end QA/F1 |
+| Evidence contract | [validation rules](benchmarks/evidence/README.md) | Hashes, limitations, and reproducibility boundaries |
+
+For the engineering rationale, read [Why vector search is not enough for agent memory](docs/launch/why-vector-search-is-not-enough.md).
+
 ## Compare
 
 - [Bilinc vs vector memory](https://bilinc.space/compare/vector-memory)
@@ -205,6 +252,14 @@ not directly comparable. Present this receipt only with this isolated scope atta
 - [What is an MCP memory server?](https://bilinc.space/answers/mcp-memory-server)
 - [How do you audit what an agent remembered?](https://bilinc.space/answers/audit-agent-memory)
 
+## Contributing
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md). Use [Discussions](https://github.com/atakanelik34/Bilinc/discussions)
+for design questions and roadmap feedback; use an issue for a reproducible bug or a scoped implementation task.
+
+Security reports should follow [SECURITY.md](SECURITY.md). Please do not include private memory values, API keys, or
+production logs in issues, pull requests, benchmark fixtures, or screenshots.
+
 ## Links
 
 - Website: https://bilinc.space
@@ -216,6 +271,7 @@ not directly comparable. Present this receipt only with this isolated scope atta
 - MCP setup: https://bilinc.space/docs/mcp
 - PyPI: https://pypi.org/project/bilinc/
 - Machine-readable index: https://bilinc.space/llms.txt · https://bilinc.space/ai-index.json
+- Technical article: [Why vector search is not enough for agent memory](docs/launch/why-vector-search-is-not-enough.md)
 
 ## License
 
