@@ -41,7 +41,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
           pytest -q tests/test_benchmark_metrics.py tests/test_benchmark_evidence.py
-          python -m benchmarks.validate_evidence
+          python -m benchmarks.validate_evidence --allow-missing-raw
 
   release-truth:
     runs-on: ubuntu-latest

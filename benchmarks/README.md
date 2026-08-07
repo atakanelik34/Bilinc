@@ -24,8 +24,20 @@ Local scratch outputs belong in `benchmarks/runs/` and must not be committed.
 
 The files under `benchmarks/results/` predate this contract. Their archived
 classification and checksums live in `benchmarks/evidence/2026-07-11/historical/`.
-They are retained for audit only and cannot support a current product claim. Run
-`python3 -m benchmarks.validate_evidence` to verify committed manifests.
+They are retained for audit only and cannot support a current product claim. A
+clean source checkout validates manifest metadata and any locally available
+artifact checksums with:
+
+```bash
+python3 -m benchmarks.validate_evidence --allow-missing-raw
+```
+
+When the ignored `benchmarks/runs/` artifacts are present, strict validation
+also requires every referenced file and verifies every checksum:
+
+```bash
+python3 -m benchmarks.validate_evidence
+```
 
 ## Filesystem layout
 
