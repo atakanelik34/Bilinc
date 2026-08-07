@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import sys
@@ -26,8 +27,13 @@ VALID_LANES = {"product-core", "component", "calibrated", "historical", "invalid
 VALID_STATUSES = {"reproducible", "archived-unverifiable", "invalid"}
 
 
-def validate_manifest(path: Path) -> list[str]:
-    """Return human-readable contract violations for one manifest."""
+def validate_manifest(path: Path, *, require_raw_results: bool = True) -> list[str]:
+    """Return human-readable contract violations for one manifest.
+
+    Raw benchmark outputs live in ignored local scratch storage. A clean source
+    checkout can therefore validate manifest metadata without those artifacts,
+    while strict local validation still checks their presence and checksums.
+    """
     try:
         payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
@@ -50,6 +56,8 @@ def validate_manifest(path: Path) -> list[str]:
     for result in payload["raw_results"]:
         result_path = path.parents[3] / result["path"]
         if not result_path.is_file():
+            if not require_raw_results:
+                continue
             errors.append(f"{path}: missing raw result {result['path']}")
             continue
         actual = hashlib.sha256(result_path.read_bytes()).hexdigest()
@@ -59,12 +67,24 @@ def validate_manifest(path: Path) -> list[str]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--allow-missing-raw",
+        action="store_true",
+        help="validate metadata and available checksums without requiring ignored raw outputs",
+    )
+    args = parser.parse_args()
+
     root = Path(__file__).resolve().parent / "evidence"
     manifests = sorted(root.glob("**/manifest.json"))
     if not manifests:
         print("No benchmark evidence manifests found.", file=sys.stderr)
         return 1
-    errors = [error for manifest in manifests for error in validate_manifest(manifest)]
+    errors = [
+        error
+        for manifest in manifests
+        for error in validate_manifest(manifest, require_raw_results=not args.allow_missing_raw)
+    ]
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1

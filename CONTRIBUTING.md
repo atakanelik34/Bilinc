@@ -17,11 +17,14 @@ memory capability, its safety boundary, its developer experience, or its reprodu
 python3 -m pytest tests/ -q
 python3 -m ruff check src tests benchmarks
 python3 -m build
-python3 -m benchmarks.validate_evidence
+python3 -m benchmarks.validate_evidence --allow-missing-raw
 ```
 
 Run the smallest relevant focused test first. If a retrieval or state change could affect a frozen benchmark guardrail,
 record the protocol and dataset hashes and explain the scope of the result.
+
+For a full local evidence check, keep the ignored `benchmarks/runs/` artifacts
+present and run the validator without `--allow-missing-raw`.
 
 ## Pull requests
 
