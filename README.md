@@ -10,7 +10,7 @@
 [![CI](https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml)
 <a href="https://pepy.tech/project/bilinc"><img src="https://static.pepy.tech/badge/bilinc" alt="Downloads"></a>
 
-**Hosted memory infrastructure for coding agents: commit, recall, and inspect agent state through one API key, with verification, provenance, and recovery around every write.**
+**Hosted memory infrastructure for AI agents: commit, recall, and inspect agent state through one API key, with verification, provenance, and recovery around every write.**
 
 Retrieval answers *"what is similar to this?"*. Long-running agents also need to answer *"who wrote this state, was it verified, did it contradict what we already knew, and can we undo it?"* — that is the layer Bilinc provides.
 
@@ -28,13 +28,13 @@ correctable, and recoverable instead of treating retrieval as a bag of similar t
 | Recall a decision before acting | Key-scoped recall with explicit profiles and evidence metadata |
 | Correct a bad memory | `revise`, contradiction-aware state, and provenance-preserving updates |
 | Recover from an unsafe run | Snapshots, diffs, and confirmed rollback |
-| Work across coding tools | A Python SDK, CLI, and stdio MCP adapter |
+| Work across any MCP-compatible agent | A Python SDK, CLI, and stdio MCP adapter |
 
 The fastest path is `pip install -U bilinc`, `bilinc login`, then `bilinc quicktest` against Bilinc Cloud.
 
 ## Use Bilinc when
 
-- A long-running coding agent needs to recall prior decisions before a risky edit.
+- A long-running agent — coding, support, research, or a personal assistant — needs to recall prior decisions before a risky action.
 - You need to know which run, tool, or operator produced a piece of agent state.
 - A bad agent run wrote incorrect state and you need a recovery path, not a manual cleanup.
 - Several agents or teammates share one memory surface and you need key-scoped access and usage visibility.
