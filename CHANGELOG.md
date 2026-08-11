@@ -2,6 +2,19 @@
 
 All notable changes to Bilinc.
 
+## [2.2.0] — 2026-08-11
+
+### Added
+
+- Added a deterministic, provenance-first, read-only Graph Doctor and projection preview for the internal StatePlane runtime.
+- Added preview evidence for duplicate, stale, secret-like, and provenance integrity checks without graph backfill or mutation.
+
+### Fixed
+
+- Kept source-only runtime modules out of the public wheel while preserving the internal runtime source tree.
+- Redacted password-less PostgreSQL database paths from health and stats output as well as credential-bearing DSNs.
+- Verified the full release suite with package artifacts and PostgreSQL/pgvector integration enabled.
+
 ## [2.1.9] — 2026-08-06
 
 ### Changed

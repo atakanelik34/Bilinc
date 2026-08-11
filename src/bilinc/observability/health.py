@@ -27,7 +27,10 @@ def _redact_dsn(dsn: str | None) -> str | None:
         user = parsed.username
         auth = f"{user}:***@" if user else ""
         netloc = f"{auth}{host}{port}"
-        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+        # Keep the useful connection target while never echoing a complete
+        # database DSN, including password-less local/test DSNs.
+        path = parsed.path if user or parsed.password else "/<redacted>"
+        return urlunsplit((parsed.scheme, netloc, path, "", ""))
     except Exception:
         return "<redacted>"
 
