@@ -67,6 +67,10 @@ async def test_recall_intelligent_explain_adds_safe_envelope_and_claim_support(t
     assert result["provenance"]["provenance_id"] == "[REDACTED]"
     assert "private" not in result["provenance"]
     assert "sensitive_metadata" in result["risk_flags"]
+    assert "graph_effect" in result
+    assert result["graph_effect"]["bounded_secondary_signal"] is True
+    assert result["evidence"]["supporting_claim_count"] == 1
+    assert result["evidence"]["provenance_reference_present"] is True
     assert result["supporting_claims"][0]["claim"] == "Bilinc has explainable recall"
     assert result["supporting_claims"][0]["source"] == "[REDACTED]"
     assert result["supporting_claims"][0]["provenance_id"] == "[REDACTED]"

@@ -677,18 +677,25 @@ class StatePlane:
         self,
         memory_types: Optional[List[MemoryType]] = None,
         limit: int = 1000,
+        include_stale: bool = False,
     ) -> Dict[str, Any]:
-        """Read-only graph projection preview over backend or working memory entries."""
+        """Read-only graph projection preview over backend or working memory entries.
+
+        ``include_stale`` is only for doctor inspection. The default path
+        filters stale, future, and superseded records before returning graph
+        candidates and never writes to the backend or in-memory graph.
+        """
         from bilinc.core.graph_doctor import preview_projection
 
         limit = max(0, int(limit))
+        evaluation_now = time.time()
         source = "backend" if self.backend else "working_memory"
         if self.backend:
             candidates = await self._collect_recall_candidates(
                 memory_types=memory_types,
                 include_stale=True,
             )
-            entries = list(candidates.values())[:limit]
+            entries = [candidates[key] for key in sorted(candidates)[:limit]]
         else:
             allowed_types = None
             if memory_types:
@@ -696,17 +703,26 @@ class StatePlane:
                     mt.value if hasattr(mt, "value") else str(mt)
                     for mt in memory_types
                 }
-            entries = []
-            for entry in self.working_memory.get_all():
-                if allowed_types and entry.memory_type.value not in allowed_types:
-                    continue
-                entries.append(entry)
-                if len(entries) >= limit:
-                    break
+            entries = [
+                entry
+                for entry in self.working_memory.get_all()
+                if not allowed_types or entry.memory_type.value in allowed_types
+            ]
+            entries = sorted(entries, key=lambda entry: (entry.key, entry.id))[:limit]
 
-        preview = preview_projection(entries)
+        preview = preview_projection(
+            entries,
+            now=evaluation_now,
+            include_stale=include_stale,
+        )
         preview["read_only"] = True
         preview["source"] = source
+        preview["projection_policy"] = {
+            "default_filters_stale": True,
+            "default_filters_superseded": True,
+            "secret_like_values_allowed": False,
+            "apply_or_backfill": False,
+        }
         return preview
 
     async def recall_intelligent(
@@ -1041,6 +1057,41 @@ class StatePlane:
             "provenance": self._recall_provenance(entry),
             "risk_flags": self._recall_risk_flags(entry),
             "supporting_claims": [self._safe_claim_dict(claim) for claim in supporting_claims],
+            "graph_effect": self._recall_graph_effect(signals),
+            "evidence": self._recall_evidence_effect(entry, supporting_claims),
+        }
+
+    def _recall_graph_effect(self, signals: Dict[str, float]) -> Dict[str, Any]:
+        """Expose the bounded graph/entity contribution without raw graph data."""
+        entity_overlap = round(float(signals.get("entity", 0.0)), 6)
+        entity_rrf = round(float(signals.get("entity_rrf", 0.0)), 6)
+        return {
+            "applied": entity_overlap > 0.0 or entity_rrf > 0.0,
+            "entity_overlap_score": entity_overlap,
+            "entity_rrf_score": entity_rrf,
+            "bounded_secondary_signal": True,
+        }
+
+    def _recall_evidence_effect(
+        self,
+        entry: MemoryEntry,
+        supporting_claims: List[Any],
+    ) -> Dict[str, Any]:
+        metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+        explicit_provenance = any(
+            metadata.get(field)
+            for field in ("provenance_id", "source_hash", "source_ref", "derived_from")
+        ) or bool(entry.source)
+        return {
+            "supporting_claim_count": len(supporting_claims),
+            "active_claims_only": True,
+            "provenance_reference_present": explicit_provenance,
+            "memory_key_fallback": not explicit_provenance,
+            "verified_memory": bool(entry.is_verified),
+            "authority_present": bool(metadata.get("authority")),
+            "temporal_validity_present": any(
+                value is not None for value in (entry.valid_at, entry.invalid_at, entry.ttl)
+            ),
         }
 
     def _why_retrieved(
@@ -1067,8 +1118,8 @@ class StatePlane:
             reasons.append("source-linked current-state projection")
         if signals.get("temporal", 0.0) > 0:
             reasons.append("directional temporal evidence")
-        if signals.get("entity", 0.0) > 0:
-            reasons.append("entity overlap match")
+        if signals.get("entity", 0.0) > 0 or signals.get("entity_rrf", 0.0) > 0:
+            reasons.append("graph/entity projection overlap match")
         if entry.importance >= 0.8:
             reasons.append(f"high importance {entry.importance:.2f}")
         if isinstance(entry.metadata, dict) and entry.metadata.get("canonical"):

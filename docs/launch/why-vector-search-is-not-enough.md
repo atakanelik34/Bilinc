@@ -1,7 +1,7 @@
 # Why vector search is not enough for AI agent memory
 
 Bilinc is a state layer for coding agents. This note explains the problem it is designed to solve and the evidence
-boundaries behind the current `2.1.9` release.
+boundaries behind the current `2.2.0` release.
 
 ## The gap
 
@@ -32,7 +32,7 @@ and [public artifact boundary](../adr/0001-public-artifact-and-internal-runtime-
 ## A minimal hosted flow
 
 ```bash
-pip install -U bilinc==2.1.9
+pip install -U bilinc==2.2.0
 bilinc start
 bilinc login --api-key bil_live_...
 bilinc quicktest

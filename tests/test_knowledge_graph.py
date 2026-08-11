@@ -456,7 +456,10 @@ class TestKGProjectionPreview:
         preview = preview_projection([entry], now=10.0)
 
         assert any(issue["type"] == "expired_claim" for issue in preview["issues"])
-        expired_edges = [edge for edge in preview["candidate_edges"] if edge["metadata"].get("claim") == "stale claim"]
+        assert not any(edge["metadata"].get("claim") == "stale claim" for edge in preview["candidate_edges"])
+
+        audit_preview = preview_projection([entry], now=10.0, include_stale=True)
+        expired_edges = [edge for edge in audit_preview["candidate_edges"] if edge["metadata"].get("claim") == "stale claim"]
         assert expired_edges
         assert expired_edges[0]["metadata"]["active"] is False
 
@@ -470,11 +473,12 @@ class TestKGProjectionPreview:
             metadata={"claims": [{"holder": "hermes", "subject": "Bilinc", "claim": "timeless by default", "invalid_at": 1.0}]},
         )
 
-        first = preview_projection([entry])
-        second = preview_projection([entry])
+        first = preview_projection([entry], now=10.0)
+        second = preview_projection([entry], now=10.0)
 
         assert first == second
-        assert not any(issue["type"] == "expired_claim" for issue in first["issues"])
+        assert any(issue["type"] == "expired_claim" for issue in first["issues"])
+        assert not first["candidate_edges"]
 
     def test_projection_preview_suppresses_secret_like_value_entities(self):
         from bilinc.core.graph_doctor import preview_projection
@@ -490,6 +494,90 @@ class TestKGProjectionPreview:
         node_names = {node["name"] for node in preview["candidate_nodes"]}
         assert "AKIAABCDEFGHIJKLMNOP" not in node_names
         assert "SECRET_TOKEN_VALUE" not in node_names
+        serialized = json.dumps(preview)
+        assert "AKIAABCDEFGHIJKLMNOP" not in serialized
+        assert "SECRET_TOKEN_VALUE" not in serialized
+
+    def test_projection_preview_filters_stale_future_and_superseded_memories(self):
+        from bilinc.core.graph_doctor import preview_projection
+
+        entries = [
+            MemoryEntry(
+                key="mem:active",
+                value="active source",
+                memory_type=MemoryType.SEMANTIC,
+                metadata={"product": "Bilinc"},
+            ),
+            MemoryEntry(
+                key="mem:expired",
+                value="expired source",
+                memory_type=MemoryType.SEMANTIC,
+                invalid_at=10.0,
+                metadata={"product": "OldProduct"},
+            ),
+            MemoryEntry(
+                key="mem:future",
+                value="future source",
+                memory_type=MemoryType.SEMANTIC,
+                valid_at=200.0,
+                metadata={"product": "FutureProduct"},
+            ),
+            MemoryEntry(
+                key="mem:superseded",
+                value="superseded source",
+                memory_type=MemoryType.SEMANTIC,
+                superseded_by="mem:active",
+                metadata={"product": "SupersededProduct"},
+            ),
+        ]
+
+        preview = preview_projection(entries, now=100.0)
+        node_names = {node["name"] for node in preview["candidate_nodes"]}
+
+        assert "mem:active" in node_names
+        assert {"mem:expired", "mem:future", "mem:superseded"}.isdisjoint(node_names)
+        assert preview["stats"]["filtered_stale_count"] == 1
+        assert preview["stats"]["filtered_future_count"] == 1
+        assert preview["stats"]["filtered_superseded_count"] == 1
+        assert preview["checks"]["stale"]["status"] == "attention"
+
+    def test_projection_preview_is_deterministic_and_provenance_first(self):
+        from bilinc.core.graph_doctor import preview_projection
+
+        entry = MemoryEntry(
+            key="mem:provenance",
+            value={
+                "claim": "Bilinc is evidence-first",
+                "holder": "Hermes",
+                "subject": "Bilinc",
+                "confidence": 0.9,
+                "authority": "vault-owner",
+                "sensitivity": "internal",
+                "provenance_id": "receipt:kg-v1",
+            },
+            memory_type=MemoryType.SEMANTIC,
+            metadata={
+                "entities": {"Bilinc", "ReARC"},
+                "authority": "vault-owner",
+                "sensitivity": "internal",
+            },
+        )
+
+        first = preview_projection([entry], now=100.0)
+        second = preview_projection([entry], now=100.0)
+
+        assert first == second
+        assert any(edge["relation_type"] == "supports" for edge in first["candidate_edges"])
+        assert all(
+            node["metadata"].get("provenance_id") or node["metadata"].get("memory_key")
+            for node in first["candidate_nodes"]
+        )
+        assert all(
+            edge["metadata"].get("provenance_id") or edge["metadata"].get("memory_key")
+            for edge in first["candidate_edges"]
+        )
+        assert first["stats"]["provenance_missing_count"] == 0
+        assert first["checks"]["provenance"]["status"] == "pass"
 
     @pytest.mark.asyncio
     async def test_stateplane_preview_graph_projection_is_read_only(self, tmp_path):
@@ -510,8 +598,12 @@ class TestKGProjectionPreview:
         before_entries = len(await backend.list_all())
 
         preview = await plane.preview_graph_projection(memory_types=[MemoryType.SEMANTIC])
+        repeat_preview = await plane.preview_graph_projection(memory_types=[MemoryType.SEMANTIC])
 
         assert preview["read_only"] is True
         assert preview["source"] == "backend"
+        assert preview == repeat_preview
+        assert preview["apply_allowed"] is False
+        assert preview["backfill_allowed"] is False
         assert preview["stats"]["candidate_node_count"] >= 2
         assert len(await backend.list_all()) == before_entries
