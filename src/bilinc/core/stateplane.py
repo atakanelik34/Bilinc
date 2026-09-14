@@ -2928,9 +2928,22 @@ class StatePlane:
                 entry.invalid_at = time.time() + float(ttl)
 
             if hasattr(self, "agm_engine") and self.agm_engine:
+                previous_entry = await self.backend.load(key) if self.backend else None
+
+                # Reconcile the in-process AGM cache with the backend before
+                # revising. Multiple agent processes (Claude/Codex/Hermes)
+                # share one SQLite file but each keeps its own in-memory
+                # belief_state loaded once at startup; without this, a
+                # process with a stale cache treats another agent's
+                # already-persisted write as if no prior belief existed and
+                # silently overwrites it with no conflict detected.
+                if previous_entry is not None:
+                    cached = self.agm_engine.belief_state.get_belief(key)
+                    if cached is None or previous_entry.created_at > cached.created_at:
+                        self.agm_engine.belief_state.add_belief(previous_entry)
+
                 result = self.agm_engine.revise(entry)
 
-                previous_entry = await self.backend.load(key) if self.backend else None
                 if self.backend and result.success:
                     saved = await self.backend.save(entry)
                     if not saved:

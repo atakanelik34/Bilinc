@@ -1169,7 +1169,10 @@ async def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
                 continue
             entries_by_key[entry.key] = entry
 
-    # Overlay AGM beliefs as the freshest truth when initialized.
+    # Overlay AGM beliefs, but only when they are actually newer than what
+    # the backend already returned — the in-process AGM cache is loaded once
+    # at server startup and can go stale relative to writes made by other
+    # agent processes (Claude/Codex/Hermes) sharing the same backend.
     if hasattr(plane, "agm_engine") and plane.agm_engine:
         beliefs = plane.agm_engine.belief_state.get_all_beliefs()
         for entry in beliefs:
@@ -1178,6 +1181,9 @@ async def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
             if memory_type and entry.memory_type.value != memory_type:
                 continue
             if entry.current_strength < min_strength:
+                continue
+            existing = entries_by_key.get(entry.key)
+            if existing is not None and existing.created_at > entry.created_at:
                 continue
             entries_by_key[entry.key] = entry
 
