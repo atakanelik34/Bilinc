@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-from bilinc.cli import login as cli_login
 from bilinc.cli.login import LoginError, device_login, loopback_login, pkce_pair
 from bilinc.cli.main import main
 from bilinc.client import BilincCloudError, CloudClient, BilincApiKeyRequired
@@ -170,7 +169,13 @@ def test_cli_login_saves_the_key_owner_only_and_never_prints_it(
 ) -> None:
     config_dir = tmp_path / "bilinc-config"
     monkeypatch.setenv("BILINC_CONFIG_DIR", str(config_dir))
-    monkeypatch.setattr(cli_login, "is_headless", lambda: False)
+    # main.py imports is_headless by name, so patch it where it is looked up.
+    # A headless CI runner would otherwise take the device flow against the network.
+    monkeypatch.setattr("bilinc.cli.main.is_headless", lambda: False)
+    monkeypatch.setattr(
+        "bilinc.cli.main.device_login",
+        lambda *a, **k: pytest.fail("an interactive login must not fall back to the device flow"),
+    )
     monkeypatch.setattr(
         "bilinc.cli.main.loopback_login",
         lambda base_url, **kwargs: {"api_key": "bil_live_secret_value", "key_name": "CLI · box · 2026-09-25"},
