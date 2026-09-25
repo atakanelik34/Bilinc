@@ -1,6 +1,6 @@
 """Bilinc Cloud client.
 
-Bilinc 2.2.0 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
+Bilinc 2.3.0 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
 https://bilinc.space. Local self-hosted StatePlane internals are no longer
 shipped in the public package.
 """
@@ -18,10 +18,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 DEFAULT_BASE_URL = "https://bilinc.space"
 SIGNUP_URL = "https://bilinc.space/signup"
-ACTIVATION_CAMPAIGN = "activation_2_2_0"
+ACTIVATION_CAMPAIGN = "activation_2_3_0"
 ACTIVATION_SIGNUP_URL = (
     f"{SIGNUP_URL}?utm_source=pypi&utm_medium=cli&utm_campaign={ACTIVATION_CAMPAIGN}"
 )
@@ -381,15 +381,20 @@ def save_config_api_key(api_key: str, *, base_url: str = DEFAULT_BASE_URL) -> Pa
     key = api_key.strip()
     if not key:
         raise BilincApiKeyRequired(
-            "Bilinc requires a Bilinc Cloud API key. "
-            f"Start a 7-day trial at {ACTIVATION_SIGNUP_URL}, "
-            "then run bilinc login --api-key <key> and bilinc quicktest."
+            "No Bilinc Cloud API key is configured. "
+            "Run bilinc login to sign in from your browser (free, no card required; "
+            f"new here? {ACTIVATION_SIGNUP_URL}), "
+            "or set BILINC_API_KEY. Then run bilinc quicktest."
         )
 
     path = config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     payload = {"api_key": key, "base_url": base_url.rstrip("/") or DEFAULT_BASE_URL}
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    # Create the file owner-only from the start, so the key is never briefly
+    # readable by other users between the write and a later chmod.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, indent=2))
     try:
         path.chmod(0o600)
     except OSError:
@@ -452,9 +457,10 @@ class CloudClient:
             self.api_key = os.environ.get("BILINC_API_KEY") or load_config_api_key()
         if not self.api_key:
             raise BilincApiKeyRequired(
-                "Bilinc requires a Bilinc Cloud API key. "
-                f"Start a 7-day trial at {ACTIVATION_SIGNUP_URL}, "
-                "then run bilinc login --api-key <key> and bilinc quicktest."
+                "No Bilinc Cloud API key is configured. "
+                "Run bilinc login to sign in from your browser (free, no card required; "
+                f"new here? {ACTIVATION_SIGNUP_URL}), "
+                "or set BILINC_API_KEY. Then run bilinc quicktest."
             )
         if self.base_url == DEFAULT_BASE_URL:
             self.base_url = os.environ.get("BILINC_BASE_URL", self.base_url)

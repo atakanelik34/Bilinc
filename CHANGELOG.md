@@ -2,6 +2,24 @@
 
 All notable changes to Bilinc.
 
+## [2.3.0] — 2026-09-25
+
+### Added
+
+- One-click `bilinc login`: opens the browser, signs in with Google, GitHub, or email on bilinc.space, and saves an API key for this computer. It uses a loopback redirect to `127.0.0.1` with PKCE (RFC 8252, RFC 7636); the key travels only in an HTTPS response body, never in a URL.
+- `bilinc login --device` for machines without a browser: approve a short code from any browser (RFC 8628).
+- `--no-browser` prints the sign-in URL instead of opening a browser. `bilinc login --api-key` still saves a key directly for CI.
+
+### Changed
+
+- First-run guidance, `bilinc signup`, and the missing-key error point to `bilinc login` and the permanent free tier (free, no card required). The retired 7-day trial wording is gone.
+- The saved CLI config is created owner-only (`0600`, directory `0700`) from the first write, instead of being chmod-ed after it.
+- The activation campaign moves to `activation_2_3_0`.
+
+### Internal runtime (source tree only, not in the wheel)
+
+- Fixed cross-process belief staleness when several agents share one Bilinc database.
+
 ## [2.2.0] — 2026-08-11
 
 ### Added

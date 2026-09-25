@@ -23,6 +23,7 @@ from bilinc.client import (
     load_config_api_key,
     save_config_api_key,
 )
+from bilinc.cli.login import LoginError, device_login, is_headless, loopback_login
 
 
 def _parse_value(value: str) -> Any:
@@ -47,14 +48,15 @@ def _has_key(args: argparse.Namespace) -> bool:
 def _print_start_guide(*, opened: bool = False) -> None:
     _print(
         {
-            "next": "Run the 60-second Bilinc Cloud activation path",
-            "goal": "Connect one hosted API key and finish with bilinc quicktest.",
+            "next": "Connect this computer to Bilinc Cloud",
+            "goal": "Sign in once from the terminal and finish with bilinc quicktest.",
             "steps": [
-                "1. Start the 7-day Cloud trial and confirm email",
-                "2. After confirmation, copy the first hosted API key from onboarding",
-                "3. Run: bilinc login --api-key <key>",
-                "4. Run: bilinc quicktest",
+                "1. Run: bilinc login  (opens your browser; sign in with Google, GitHub, or email)",
+                "2. Run: bilinc quicktest",
             ],
+            "no_browser_on_this_machine": "bilinc login --device",
+            "ci": "bilinc login --api-key <key>, or set BILINC_API_KEY",
+            "pricing": "Free, no card required",
             "signup": ACTIVATION_SIGNUP_URL,
             "install_guide": INSTALL_URL,
             "opened_browser": opened,
@@ -89,9 +91,22 @@ def build_parser() -> argparse.ArgumentParser:
     start = sub.add_parser("start", help="Open the simplest path from install to first memory")
     start.add_argument("--open", action="store_true", help="Open the Bilinc signup page in a browser")
 
-    login = sub.add_parser("login", help="Save a Bilinc Cloud API key for local CLI use")
-    login.add_argument("--api-key", help="Bilinc Cloud API key to save locally")
-    login.add_argument("--open", action="store_true", help="Open the Bilinc signup page in a browser")
+    login = sub.add_parser(
+        "login",
+        help="Sign in from your browser and save an API key for this computer",
+    )
+    login.add_argument("--api-key", help="Save this API key instead of signing in (for CI)")
+    login.add_argument(
+        "--device",
+        action="store_true",
+        help="Sign in with a code approved in any browser (for SSH sessions and servers)",
+    )
+    login.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Print the sign-in URL instead of opening a browser",
+    )
+    login.add_argument("--open", action="store_true", help=argparse.SUPPRESS)
 
     commit = sub.add_parser("commit", help="Commit a memory entry to Bilinc Cloud")
     commit.add_argument("--key", required=True)
@@ -161,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_sub = mcp.add_subparsers(dest="mcp_command")
     mcp_sub.add_parser("install", help="Print MCP config for agent runtimes")
 
-    sub.add_parser("signup", help="Print signup URL for a 7-day trial")
+    sub.add_parser("signup", help="Print the signup URL (free, no card required)")
 
     return parser
 
@@ -193,18 +208,37 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "login":
-        opened = False
-        if args.open:
-            opened = webbrowser.open(ACTIVATION_SIGNUP_URL)
-        if not args.api_key:
-            _print_start_guide(opened=opened)
+        if args.api_key:
+            try:
+                path = save_config_api_key(args.api_key, base_url=args.base_url)
+            except BilincApiKeyRequired as exc:
+                print(f"bilinc: error: {exc}", file=sys.stderr)
+                return 1
+            _print({"saved": True, "config": str(path), "next": "Run bilinc quicktest"})
             return 0
         try:
-            path = save_config_api_key(args.api_key, base_url=args.base_url)
-        except BilincApiKeyRequired as exc:
+            if args.device or is_headless():
+                result = device_login(args.base_url, timeout=args.timeout)
+            else:
+                result = loopback_login(args.base_url, timeout=args.timeout, open_browser=not args.no_browser)
+            api_key = result.get("api_key")
+            if not isinstance(api_key, str) or not api_key:
+                raise LoginError("Bilinc Cloud did not return an API key. Run bilinc login again.")
+            path = save_config_api_key(api_key, base_url=args.base_url)
+        except (LoginError, BilincApiKeyRequired, BilincCloudError) as exc:
             print(f"bilinc: error: {exc}", file=sys.stderr)
             return 1
-        _print({"saved": True, "config": str(path), "next": "Run bilinc quicktest"})
+        except KeyboardInterrupt:
+            print("bilinc: login cancelled", file=sys.stderr)
+            return 130
+        _print(
+            {
+                "saved": True,
+                "config": str(path),
+                "api_key_name": result.get("key_name"),
+                "next": "Run bilinc quicktest",
+            }
+        )
         return 0
 
     if args.command == "signup":
@@ -212,8 +246,8 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "signup": ACTIVATION_SIGNUP_URL,
                 "base_signup": SIGNUP_URL,
-                "trial": "7 days",
-                "next": "Confirm email, copy the first API key, run bilinc login, then bilinc quicktest",
+                "pricing": "Free, no card required",
+                "next": "Run bilinc login to sign in from your browser, then bilinc quicktest",
             }
         )
         return 0

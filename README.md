@@ -14,7 +14,7 @@
 
 Retrieval answers *"what is similar to this?"*. Long-running agents also need to answer *"who wrote this state, was it verified, did it contradict what we already knew, and can we undo it?"* — that is the layer Bilinc provides.
 
-Bilinc 2.2.0 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
+Bilinc 2.3.0 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
 
 > **Frozen regression receipt** — LongMemEval-s cleaned retrieval fixture, 500 questions: **Hit@5 98.0%**, **NDCG@5 0.913**, no LLM reranker, no paid API. This is an isolated retrieval guardrail, not a current hosted SLA, end-to-end agent score, or competitor ranking — see [Benchmark receipt](#benchmark-receipt) for the full scope and qualification.
 
@@ -60,31 +60,28 @@ storage runtime.
 
 ```bash
 pip install -U bilinc
-bilinc start
-```
-
-`bilinc start` is the first-run guide. The activation target is simple: reach a
-passing `bilinc quicktest`, which performs one hosted commit, one hosted recall,
-and one Cloud status check.
-
-1. Start the 7-day Bilinc Cloud trial at https://bilinc.space/signup.
-2. Confirm email.
-3. Create one hosted API key in the Cloud dashboard.
-4. Connect the CLI:
-
-```bash
-bilinc login --api-key bil_live_...
+bilinc login
 bilinc quicktest
 ```
+
+`bilinc login` opens your browser. Sign in with Google, GitHub, or email (free,
+no card required) and approve this computer; the CLI saves its own API key with
+owner-only permissions. The key never appears in a URL or your terminal.
+`bilinc quicktest` then performs one hosted commit, one hosted recall, and one
+Cloud status check.
+
+- **No browser on this machine** (SSH, servers, containers): `bilinc login --device`
+  prints a short code to approve from any browser.
+- **CI and scripts:** `bilinc login --api-key bil_live_...`, or set `BILINC_API_KEY`.
 
 To reproduce this release exactly:
 
 ```bash
-pip install -U bilinc==2.2.0
+pip install -U bilinc==2.3.0
 ```
 
 If you prefer a browser guide, open https://bilinc.space/install and follow the
-same four-step path.
+same three-step path.
 
 ## MCP Adapter
 
@@ -185,10 +182,10 @@ bilinc rollback execute --snapshot snap_... --reason "undo bad agent run" \
 Useful first-run commands:
 
 ```bash
-bilinc start
-bilinc login --api-key bil_live_...
+bilinc login              # browser sign-in; --device without a browser
 bilinc quicktest
 bilinc mcp install
+bilinc start              # prints the first-run guide
 ```
 
 ## Hosted Endpoints
