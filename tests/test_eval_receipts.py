@@ -30,7 +30,7 @@ async def test_eval_receipt_requires_existing_event_ids_and_is_public_safe(tmp_p
             dataset_hash="hash-toy",
             event_ids=["missing-event"],
             metrics={"recall@5": 1.0},
-            run_config={"api_key": "sk-not-allowed-123456789012345"},
+            run_config={"api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
             result_artifact={"rows": [{"answer": "ok", "token": "secret-token"}]},
         )
 
@@ -41,7 +41,7 @@ async def test_eval_receipt_requires_existing_event_ids_and_is_public_safe(tmp_p
         event_ids=[events[0].id],
         metrics={"recall@5": 1.0, "latency_ms": 12},
         metric_definitions={"recall@5": "hit in top five"},
-        run_config={"profile": "balanced", "api_key": "sk-not-allowed-123456789012345"},
+        run_config={"profile": "balanced", "api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
         result_artifact={"rows": [{"answer": "ok", "token": "secret-token"}]},
         notes="local temp-db test",
     )

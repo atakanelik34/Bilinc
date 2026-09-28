@@ -485,17 +485,17 @@ class TestKGProjectionPreview:
 
         entry = MemoryEntry(
             key="mem:sensitive",
-            value="Do not project AKIAABCDEFGHIJKLMNOP or SECRET_TOKEN_VALUE from this text",
+            value="Do not project AKIAIOSFODNN7EXAMPLE or SECRET_TOKEN_VALUE from this text",
             memory_type=MemoryType.SEMANTIC,
         )
 
         preview = preview_projection([entry])
 
         node_names = {node["name"] for node in preview["candidate_nodes"]}
-        assert "AKIAABCDEFGHIJKLMNOP" not in node_names
+        assert "AKIAIOSFODNN7EXAMPLE" not in node_names
         assert "SECRET_TOKEN_VALUE" not in node_names
         serialized = json.dumps(preview)
-        assert "AKIAABCDEFGHIJKLMNOP" not in serialized
+        assert "AKIAIOSFODNN7EXAMPLE" not in serialized
         assert "SECRET_TOKEN_VALUE" not in serialized
 
     def test_projection_preview_filters_stale_future_and_superseded_memories(self):

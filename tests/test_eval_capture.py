@@ -40,7 +40,7 @@ def test_eval_capture_enabled_by_env(monkeypatch):
 
 
 def test_eval_capture_scrubs_secret_like_values():
-    query = "use sk-live-secret tp-provider-token ghp_abcd1234abcd1234abcd1234abcd1234abcd1234 bearer abcdef0123456789abcdef0123456789"
+    query = "use sk-live-secret tp-provider-token ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx bearer abcdef0123456789abcdef0123456789"
 
     scrubbed = scrub_query(query)
 
