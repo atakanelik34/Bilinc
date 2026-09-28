@@ -1,0 +1,23 @@
+name: Plugin Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashgraph-online/ai-plugin-scanner-action@5d1ac3109609fa0a25fbf5d3363b72b0db8d6930 # v1.2.717 (plugin-scanner 3.8.0)
+        with:
+          plugin_dir: "."
+          min_score: 80
+          fail_on_severity: high
