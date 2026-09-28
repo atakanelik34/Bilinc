@@ -12,8 +12,8 @@ import pytest
 def test_public_api_is_cloud_only():
     import bilinc
 
-    assert bilinc.__version__ == "2.3.0"
-    assert bilinc.version == "2.3.0"
+    assert bilinc.__version__ == "2.3.1"
+    assert bilinc.version == "2.3.1"
     assert "utm_campaign=activation_2_3_0" in bilinc.ACTIVATION_SIGNUP_URL
     assert hasattr(bilinc, "Bilinc")
     assert hasattr(bilinc, "CloudClient")
@@ -110,9 +110,9 @@ def test_cloud_client_commit_posts_to_hosted_api():
             "headers": {
                 "Authorization": "Bearer bil_live_test",
                 "Content-Type": "application/json",
-                "User-Agent": "bilinc-python/2.3.0",
+                "User-Agent": "bilinc-python/2.3.1",
                 "X-Bilinc-Client": "python-sdk",
-                "X-Bilinc-Client-Version": "2.3.0",
+                "X-Bilinc-Client-Version": "2.3.1",
             },
             "body": json.dumps(
                 {
@@ -188,7 +188,7 @@ def test_cloud_client_status_reads_the_authenticated_status_endpoint():
             "url": "https://bilinc.space/api/cloud/status",
             "headers": {
                 "Authorization": "Bearer bil_live_test",
-                "User-Agent": "bilinc-python/2.3.0",
+                "User-Agent": "bilinc-python/2.3.1",
             },
             "body": None,
             "timeout": 30.0,
@@ -325,6 +325,56 @@ def test_cli_start_login_doctor_quicktest_and_mcp_config(monkeypatch, capsys, tm
     mcp_out = capsys.readouterr()
     assert "bilinc.cloud_mcp" in mcp_out.out
     assert "bil_live_cli_test" not in mcp_out.out
+
+
+def test_mcp_install_uses_the_login_key_and_a_real_interpreter(monkeypatch, capsys, tmp_path):
+    import sys
+
+    from bilinc.cli import main as cli_main
+
+    monkeypatch.delenv("BILINC_API_KEY", raising=False)
+    monkeypatch.setenv("BILINC_CONFIG_DIR", str(tmp_path))
+    assert cli_main.main(["login", "--api-key", "bil_live_saved_key"]) == 0
+    capsys.readouterr()
+
+    # Default JSON: absolute interpreter, and no env block — the adapter reads the saved key.
+    assert cli_main.main(["mcp", "install"]) == 0
+    out = capsys.readouterr()
+    server = json.loads(out.out)["mcpServers"]["bilinc"]
+    assert server == {"command": sys.executable, "args": ["-m", "bilinc.cloud_mcp"]}
+    assert "bil_live_saved_key" not in out.out + out.err
+    assert "${BILINC_API_KEY}" not in out.out
+
+    # Claude Code: one runnable command, user scope, no key on the command line.
+    assert cli_main.main(["mcp", "install", "--client", "claude-code"]) == 0
+    out = capsys.readouterr()
+    assert out.out.startswith("claude mcp add --scope user bilinc -- ")
+    assert out.out.rstrip().endswith("-m bilinc.cloud_mcp")
+    assert "BILINC_API_KEY" not in out.out
+    assert "bil_live_saved_key" not in out.out + out.err
+
+    # Claude Desktop: clean JSON on stdout, the config location on stderr.
+    assert cli_main.main(["mcp", "install", "--client", "claude-desktop"]) == 0
+    out = capsys.readouterr()
+    assert json.loads(out.out)["mcpServers"]["bilinc"]["command"] == sys.executable
+    assert "claude_desktop_config.json" in out.err
+    assert "bil_live_saved_key" not in out.out + out.err
+
+
+def test_mcp_install_without_a_saved_key_asks_for_one(monkeypatch, capsys, tmp_path):
+    from bilinc.cli import main as cli_main
+
+    monkeypatch.delenv("BILINC_API_KEY", raising=False)
+    monkeypatch.setenv("BILINC_CONFIG_DIR", str(tmp_path))
+
+    assert cli_main.main(["mcp", "install"]) == 0
+    out = capsys.readouterr()
+    assert json.loads(out.out)["mcpServers"]["bilinc"]["env"] == {"BILINC_API_KEY": "bil_live_..."}
+    assert "bilinc login" in out.err
+
+    assert cli_main.main(["mcp", "install", "--client", "claude-code"]) == 0
+    out = capsys.readouterr()
+    assert "-e BILINC_API_KEY=bil_live_..." in out.out
 
 
 def _forbidden_package_prefixes(root: str = "") -> tuple[str, ...]:

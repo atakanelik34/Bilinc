@@ -14,7 +14,7 @@
 
 Retrieval answers *"what is similar to this?"*. Long-running agents also need to answer *"who wrote this state, was it verified, did it contradict what we already knew, and can we undo it?"* — that is the layer Bilinc provides.
 
-Bilinc 2.3.0 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
+Bilinc 2.3.1 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
 
 > **Frozen regression receipt** — LongMemEval-s cleaned retrieval fixture, 500 questions: **Hit@5 98.0%**, **NDCG@5 0.913**, no LLM reranker, no paid API. This is an isolated retrieval guardrail, not a current hosted SLA, end-to-end agent score, or competitor ranking — see [Benchmark receipt](#benchmark-receipt) for the full scope and qualification.
 
@@ -77,7 +77,7 @@ Cloud status check.
 To reproduce this release exactly:
 
 ```bash
-pip install -U bilinc==2.3.0
+pip install -U bilinc==2.3.1
 ```
 
 If you prefer a browser guide, open https://bilinc.space/install and follow the
@@ -89,17 +89,27 @@ Bilinc exposes a standard Model Context Protocol server over **stdio**, so any
 MCP-compatible client can connect — Claude Code, Codex, Cursor, Hermes-Agent,
 opencode, and others.
 
+After `bilinc login`, let the CLI write the setup for your client:
+
+```bash
+bilinc mcp install --client claude-code     # prints a ready `claude mcp add ...` command
+bilinc mcp install --client claude-desktop  # prints the config and where Claude Desktop keeps it
+bilinc mcp install                          # plain mcpServers JSON for any other client
+```
+
 ```json
 {
   "mcpServers": {
     "bilinc": {
-      "command": "python",
-      "args": ["-m", "bilinc.cloud_mcp"],
-      "env": { "BILINC_API_KEY": "bil_live_..." }
+      "command": "/path/to/python3",
+      "args": ["-m", "bilinc.cloud_mcp"]
     }
   }
 }
 ```
+
+`command` is the interpreter that has Bilinc installed, and the adapter reads the key saved by `bilinc login`, so
+the config carries no key. On a machine without a saved key, add `"env": { "BILINC_API_KEY": "bil_live_..." }`.
 
 Eight tools — the core memory lifecycle, and nothing else:
 

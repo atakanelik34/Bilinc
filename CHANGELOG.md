@@ -2,6 +2,16 @@
 
 All notable changes to Bilinc.
 
+## [2.3.1] — 2026-09-28
+
+### Fixed
+
+- `bilinc mcp install` now prints a config that works right after `bilinc login`. `command` is the absolute interpreter that has Bilinc installed — a bare `python` is missing on macOS and from Claude Desktop's PATH — and there is no `env` block when a key is saved, because the adapter reads the saved key itself. It used to write `"BILINC_API_KEY": "${BILINC_API_KEY}"`, which clients that do not expand variables passed through literally.
+
+### Added
+
+- `bilinc mcp install --client claude-code` prints a ready `claude mcp add --scope user bilinc -- ...` command. `--client claude-desktop` prints the config and where Claude Desktop keeps it.
+
 ## [2.3.0] — 2026-09-25
 
 ### Added

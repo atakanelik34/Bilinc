@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
+import subprocess
 import sys
 import time
 import webbrowser
@@ -64,16 +66,38 @@ def _print_start_guide(*, opened: bool = False) -> None:
     )
 
 
+MCP_KEY_PLACEHOLDER = "bil_live_..."
+
+
+def _mcp_server_entry() -> dict[str, Any]:
+    # The absolute interpreter works where a bare `python` does not: macOS ships
+    # only python3, and Claude Desktop launches servers without the shell PATH.
+    entry: dict[str, Any] = {"command": sys.executable, "args": ["-m", "bilinc.cloud_mcp"]}
+    if not load_config_api_key():
+        # With a key saved by `bilinc login` the adapter reads it itself, so the
+        # client config carries no key at all. Without one, the client must pass it.
+        entry["env"] = {"BILINC_API_KEY": MCP_KEY_PLACEHOLDER}
+    return entry
+
+
 def _mcp_config() -> dict[str, Any]:
-    return {
-        "mcpServers": {
-            "bilinc": {
-                "command": "python",
-                "args": ["-m", "bilinc.cloud_mcp"],
-                "env": {"BILINC_API_KEY": "${BILINC_API_KEY}"},
-            }
-        }
-    }
+    return {"mcpServers": {"bilinc": _mcp_server_entry()}}
+
+
+def _claude_code_command() -> str:
+    argv = ["claude", "mcp", "add", "--scope", "user", "bilinc"]
+    if not load_config_api_key():
+        argv += ["-e", f"BILINC_API_KEY={MCP_KEY_PLACEHOLDER}"]
+    argv += ["--", sys.executable, "-m", "bilinc.cloud_mcp"]
+    return subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
+
+
+def _claude_desktop_config_path() -> str:
+    if sys.platform == "darwin":
+        return "~/Library/Application Support/Claude/claude_desktop_config.json"
+    if os.name == "nt":
+        return r"%APPDATA%\Claude\claude_desktop_config.json"
+    return "~/.config/Claude/claude_desktop_config.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -174,7 +198,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     mcp = sub.add_parser("mcp", help="Print hosted Cloud MCP adapter configuration")
     mcp_sub = mcp.add_subparsers(dest="mcp_command")
-    mcp_sub.add_parser("install", help="Print MCP config for agent runtimes")
+    mcp_install = mcp_sub.add_parser("install", help="Print MCP config for agent runtimes")
+    mcp_install.add_argument(
+        "--client",
+        choices=["json", "claude-code", "claude-desktop"],
+        default="json",
+        help="json: mcpServers config (default); claude-code: a `claude mcp add` command; "
+        "claude-desktop: the config plus where Claude Desktop keeps it",
+    )
 
     sub.add_parser("signup", help="Print the signup URL (free, no card required)")
 
@@ -252,7 +283,22 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "mcp" and args.mcp_command == "install":
-        _print(_mcp_config())
+        # stdout stays copy-paste clean; guidance goes to stderr.
+        if args.client == "claude-code":
+            print(_claude_code_command())
+        else:
+            _print(_mcp_config())
+        if args.client == "claude-desktop":
+            print(
+                f'Merge the "bilinc" entry into mcpServers in {_claude_desktop_config_path()}, '
+                "then restart Claude Desktop.",
+                file=sys.stderr,
+            )
+        if not load_config_api_key():
+            print(
+                f"No saved key yet: run `bilinc login` first, or replace {MCP_KEY_PLACEHOLDER} with your API key.",
+                file=sys.stderr,
+            )
         return 0
     if args.command is None:
         parser.print_help()
