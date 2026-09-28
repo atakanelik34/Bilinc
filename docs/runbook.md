@@ -38,7 +38,7 @@ plane = StatePlane(enable_verification=False, enable_audit=False)
 plane.init_agm()
 plane.init_knowledge_graph()
 
-app = create_mcp_http_app(plane=plane, auth_token="super-secret")
+app = create_mcp_http_app(plane=plane, auth_token="your-auth-token")
 ```
 
 Run with:

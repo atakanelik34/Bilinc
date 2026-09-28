@@ -41,7 +41,7 @@ plane.init_knowledge_graph()
 
 app = create_mcp_http_app(
     plane=plane,
-    auth_token="super-secret",
+    auth_token="your-auth-token",
     route_prefix="/mcp",
 )
 

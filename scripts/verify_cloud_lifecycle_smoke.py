@@ -18,13 +18,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
-API_KEY = "bil_live_smoke_key"
+# Throwaway key for the local stub server, generated per run.
+API_KEY = f"bil_live_{secrets.token_hex(8)}"
 
 # Canned responses shaped exactly like the public routes' payloads.
 RESPONSES: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {

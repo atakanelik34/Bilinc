@@ -61,7 +61,7 @@ HTTP app factory:
 ```python
 from bilinc.mcp_server.server_v2 import create_mcp_http_app
 
-app = create_mcp_http_app(auth_token="super-secret")
+app = create_mcp_http_app(auth_token="your-auth-token")
 ```
 
 ```python
@@ -90,7 +90,7 @@ server = create_mcp_server_v2(plane, max_tokens=20, refill_rate=2.0)
 For HTTP:
 
 ```python
-app = create_mcp_http_app(auth_token="super-secret", max_tokens=20, refill_rate=2.0)
+app = create_mcp_http_app(auth_token="your-auth-token", max_tokens=20, refill_rate=2.0)
 ```
 
 HTTP error codes:

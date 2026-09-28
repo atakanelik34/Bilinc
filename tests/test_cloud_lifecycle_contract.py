@@ -74,7 +74,7 @@ class RecordingTransport:
 def _client(transport):
     from bilinc import CloudClient
 
-    return CloudClient(api_key="bil_live_contract", transport=transport)
+    return CloudClient(api_key="bil_live_example", transport=transport)
 
 
 def _tools():

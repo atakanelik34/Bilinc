@@ -75,7 +75,7 @@ def test_cloud_client_normalizes_base_url():
     from bilinc import CloudClient
 
     transport = RecordingTransport({"status": "ok"})
-    client = CloudClient(api_key="bil_live_test", base_url="https://bilinc.space///", transport=transport)
+    client = CloudClient(api_key="bil_live_example", base_url="https://bilinc.space///", transport=transport)
 
     client.status()
 
@@ -87,7 +87,7 @@ def test_cloud_client_base_url_can_come_from_env(monkeypatch):
 
     monkeypatch.setenv("BILINC_BASE_URL", "http://127.0.0.1:9999/")
     transport = RecordingTransport({"status": "ok"})
-    client = CloudClient(api_key="bil_live_test", transport=transport)
+    client = CloudClient(api_key="bil_live_example", transport=transport)
 
     client.status()
 
@@ -98,7 +98,7 @@ def test_cloud_client_commit_posts_to_hosted_api():
     from bilinc import CloudClient
 
     transport = RecordingTransport({"success": True, "id": "mem_123"})
-    client = CloudClient(api_key="bil_live_test", base_url="https://bilinc.space", transport=transport)
+    client = CloudClient(api_key="bil_live_example", base_url="https://bilinc.space", transport=transport)
 
     result = client.commit("project.status", {"phase": "trial"}, memory_type="semantic", importance=0.8)
 
@@ -108,7 +108,7 @@ def test_cloud_client_commit_posts_to_hosted_api():
             "method": "POST",
             "url": "https://bilinc.space/api/cloud/memory/commit",
             "headers": {
-                "Authorization": "Bearer bil_live_test",
+                "Authorization": "Bearer bil_live_example",
                 "Content-Type": "application/json",
                 "User-Agent": "bilinc-python/2.3.1",
                 "X-Bilinc-Client": "python-sdk",
@@ -133,7 +133,7 @@ def test_cloud_client_recall_posts_to_hosted_api():
     from bilinc import CloudClient
 
     transport = RecordingTransport({"results": [{"key": "project.status"}]})
-    client = CloudClient(api_key="bil_live_test", transport=transport)
+    client = CloudClient(api_key="bil_live_example", transport=transport)
 
     result = client.recall("trial status", profile="balanced", limit=5)
 
@@ -148,7 +148,7 @@ def test_cloud_client_recall_forwards_point_in_time_timestamp():
     from bilinc import CloudClient
 
     transport = RecordingTransport({"results": []})
-    client = CloudClient(api_key="bil_live_test", transport=transport)
+    client = CloudClient(api_key="bil_live_example", transport=transport)
 
     client.recall(
         "deployment target",
@@ -167,7 +167,7 @@ def test_cloud_client_recall_forwards_point_in_time_timestamp():
 def test_cloud_client_rejects_an_unbounded_point_in_time_timestamp():
     from bilinc import BilincValidationError, CloudClient
 
-    client = CloudClient(api_key="bil_live_test", transport=RecordingTransport({}))
+    client = CloudClient(api_key="bil_live_example", transport=RecordingTransport({}))
 
     with pytest.raises(BilincValidationError, match="query_timestamp"):
         client.recall("q", query_timestamp="x" * 65)
@@ -177,7 +177,7 @@ def test_cloud_client_status_reads_the_authenticated_status_endpoint():
     from bilinc import CloudClient
 
     transport = RecordingTransport({"status": "ok", "plan": {"key": "pro"}})
-    client = CloudClient(api_key="bil_live_test", transport=transport)
+    client = CloudClient(api_key="bil_live_example", transport=transport)
 
     result = client.status()
 
@@ -187,7 +187,7 @@ def test_cloud_client_status_reads_the_authenticated_status_endpoint():
             "method": "GET",
             "url": "https://bilinc.space/api/cloud/status",
             "headers": {
-                "Authorization": "Bearer bil_live_test",
+                "Authorization": "Bearer bil_live_example",
                 "User-Agent": "bilinc-python/2.3.1",
             },
             "body": None,
@@ -200,7 +200,7 @@ def test_cloud_client_health_stays_on_the_public_service_endpoint():
     from bilinc import CloudClient
 
     transport = RecordingTransport({"status": "ok", "mode": "live_cloud"})
-    client = CloudClient(api_key="bil_live_test", transport=transport)
+    client = CloudClient(api_key="bil_live_example", transport=transport)
 
     result = client.health()
 
