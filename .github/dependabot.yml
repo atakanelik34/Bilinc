@@ -5,6 +5,13 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # pyproject pins upper bounds on purpose; majors (and ruff 0.x minors,
+    # which add lint rules) need a deliberate upgrade, not a range bump.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "ruff"
+        update-types: ["version-update:semver-minor"]
     groups:
       python-deps:
         patterns:
