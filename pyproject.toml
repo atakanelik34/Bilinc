@@ -33,7 +33,7 @@ classifiers = [
 
 dependencies = [
     "certifi>=2024.2.2",
-    "mcp>=1.0.0,<2.0",
+    "mcp>=1.0.0,<3.0",
 ]
 
 [project.urls]
@@ -46,22 +46,22 @@ Issues = "https://github.com/atakanelik34/Bilinc/issues"
 [project.optional-dependencies]
 dev = [
     "build>=1.2,<2.0",
-    "pytest>=7.0,<9.0",
-    "pytest-cov>=4.0,<6.0",
-    "pytest-asyncio>=0.23,<1.0",
-    "mypy>=1.0,<2.0",
-    "ruff>=0.15.4,<0.16",
+    "pytest>=7.0,<10.0",
+    "pytest-cov>=4.0,<8.0",
+    "pytest-asyncio>=0.23,<2.0",
+    "mypy>=1.0,<3.0",
+    "ruff>=0.15.4,<0.17",
     "tomli>=2,<3; python_version < '3.11'",
 ]
 internal = [
     "fastapi>=0.110,<2.0",
     "networkx>=3.0,<4.0",
     "starlette>=0.36,<2.0",
-    "z3-solver>=4.12,<5.0",
+    "z3-solver>=4.12,<6.0",
 ]
 semantic = [
     "numpy>=1.24,<3.0",
-    "sentence-transformers>=3.4,<4.0",
+    "sentence-transformers>=3.4,<7.0",
 ]
 [project.scripts]
 bilinc = "bilinc.cli.main:main"
