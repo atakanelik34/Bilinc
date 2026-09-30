@@ -256,8 +256,21 @@ class ProjectRuntimeManager:
         canonical: bool | None = None,
         priority: float | None = None,
         ttl: float | None = None,
+        if_absent: bool = False,
     ) -> dict[str, Any]:
+        """Write ``key``, revising it if it already exists.
+
+        With ``if_absent`` the write is create-only: an existing entry is left
+        untouched and ``memory_exists`` is raised instead. The check runs inside
+        the per-project mutation lock, so it cannot race another writer. It uses
+        the same existence test as ``revise``, so exactly one of the two succeeds.
+        """
         plane = await self.get_plane(project_id)
+        if if_absent:
+            if not plane.backend:
+                raise ValueError("invalid_request")
+            if await plane.backend.load(key) is not None:
+                raise ValueError("memory_exists")
         result = await plane.commit_with_agm_async(
             key=key,
             value=value,

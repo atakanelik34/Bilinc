@@ -116,6 +116,55 @@ def test_cloud_sidecar_commit_returns_versions_and_carries_provenance(tmp_path):
     assert result["state_version"]
 
 
+def test_cloud_sidecar_health_advertises_create_only_commit(tmp_path):
+    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+
+    health = client.get("/health", headers={"X-Bilinc-Sidecar-Token": "secret"}).json()
+
+    assert "commit_if_absent" in health["capabilities"]
+
+
+def test_cloud_sidecar_create_only_commit_never_overwrites(tmp_path):
+    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+    headers = {"X-Bilinc-Sidecar-Token": "secret"}
+    project_id = str(uuid4())
+    commit_url = f"/v1/projects/{project_id}/commit"
+
+    created = client.post(
+        commit_url,
+        headers=headers,
+        json={"key": "decision.db", "value": "postgres", "if_absent": True},
+    )
+    assert created.status_code == 200
+    first_version = created.json()["entry_version"]
+
+    refused = client.post(
+        commit_url,
+        headers=headers,
+        json={"key": "decision.db", "value": "sqlite", "if_absent": True},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "memory_exists"
+
+    # The refused write left the entry exactly as it was: revising against the
+    # original version still succeeds, which proves nothing was replaced.
+    revised = client.post(
+        f"/v1/projects/{project_id}/revise",
+        headers=headers,
+        json={"key": "decision.db", "value": "postgres 16", "expected_version": first_version},
+    )
+    assert revised.status_code == 200
+
+
+def test_cloud_sidecar_plain_commit_still_revises_existing_keys(tmp_path):
+    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+    headers = {"X-Bilinc-Sidecar-Token": "secret"}
+    commit_url = f"/v1/projects/{uuid4()}/commit"
+
+    assert client.post(commit_url, headers=headers, json={"key": "k", "value": 1}).status_code == 200
+    assert client.post(commit_url, headers=headers, json={"key": "k", "value": 2}).status_code == 200
+
+
 def test_cloud_sidecar_rejects_an_unknown_memory_type_with_a_stable_code(tmp_path):
     client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
     headers = {"X-Bilinc-Sidecar-Token": "secret"}

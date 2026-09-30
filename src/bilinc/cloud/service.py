@@ -33,6 +33,7 @@ class CommitRequest(BaseModel):
     canonical: bool | None = None
     priority: float | None = Field(default=None, ge=0.0, le=1.0)
     ttl: float | None = Field(default=None, gt=0.0)
+    if_absent: bool = False
 
 
 class RecallRequest(BaseModel):
@@ -92,6 +93,7 @@ _PUBLIC_RUNTIME_ERRORS = frozenset(
         "invalid_memory_type",
         "invalid_request",
         "memory_not_found",
+        "memory_exists",
         "snapshot_not_found",
         "snapshot_unreadable",
         "version_conflict",
@@ -102,6 +104,7 @@ _PUBLIC_RUNTIME_ERRORS = frozenset(
 
 _ERROR_STATUS = {
     "memory_not_found": 404,
+    "memory_exists": 409,
     "snapshot_not_found": 404,
     "snapshot_unreadable": 404,
     "version_conflict": 409,
@@ -150,7 +153,14 @@ def create_app(
 
     @app.get("/health")
     async def health(_: None = Depends(require_sidecar_token)):
-        return {"status": "ok", "runtimeIsolation": "project_filesystem"}
+        # The control plane reads `capabilities` and fails closed when a feature
+        # is missing: an older sidecar would silently ignore `if_absent` and
+        # overwrite, so create-only writes must never reach one.
+        return {
+            "status": "ok",
+            "runtimeIsolation": "project_filesystem",
+            "capabilities": ["commit_if_absent"],
+        }
 
     @app.post("/v1/projects/{project_id}/commit")
     async def commit(
