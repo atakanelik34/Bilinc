@@ -249,7 +249,12 @@ class StatePlane:
         self.health = HealthCheck(state_plane=self)
 
     def _build_audit_trail(self) -> AuditTrail:
-        """Bind the audit trail to the persistence layer when possible."""
+        """Bind the audit trail to the selected persistence layer."""
+        if self.backend and self.backend.__class__.__name__ == "PostgresBackend":
+            from bilinc.core.postgres_audit_sync import SyncPostgresAuditTrail
+            dsn = getattr(self.backend, "dsn", None)
+            if dsn:
+                return SyncPostgresAuditTrail(dsn, schema=getattr(self.backend, "schema", None))
         if self.backend and hasattr(self.backend, "audit_db_path"):
             return AuditTrail(db_path=self.backend.audit_db_path)
         return AuditTrail()

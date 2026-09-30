@@ -27,25 +27,55 @@ try:
 except ImportError:
     register_vector = None
 from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core.event_ledger import MemoryEvent, create_memory_event, event_from_dict
 from bilinc.observability.health import _redact_dsn
 from bilinc.storage.backend import StorageBackend
+from bilinc.storage.postgres_tenancy import TENANT_TABLES, quoted, search_path_setting, validate_schema_name
 logger = logging.getLogger(__name__)
 
 
 class PostgresBackend(StorageBackend):
     SCHEMA_VERSION = 1
 
-    def __init__(self, dsn: str = "postgresql://localhost/bilinc", vector_dim: int = 384):
+    def __init__(
+        self,
+        dsn: str = "postgresql://localhost/bilinc",
+        vector_dim: int = 384,
+        schema: Optional[str] = None,
+    ):
         self.dsn = dsn
         self.vector_dim = vector_dim
+        # With a schema, this backend serves exactly one tenant: every pooled
+        # connection pins search_path to it (see postgres_tenancy).
+        self.schema = validate_schema_name(schema) if schema is not None else None
         self.pool = None
         self._initialized = False
 
     async def init(self) -> None:
         if asyncpg is None:
             raise ImportError("asyncpg is required for PostgreSQL backend: pip install asyncpg")
-        self.pool = await asyncpg.create_pool(dsn=self.dsn, max_size=10)
+        if self.schema:
+            # The schema must exist before any pooled connection pins its
+            # search_path to it; otherwise tables would silently land in public.
+            bootstrap = await asyncpg.connect(dsn=self.dsn)
+            try:
+                await bootstrap.execute("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public")
+                await bootstrap.execute(f"CREATE SCHEMA IF NOT EXISTS {quoted(self.schema)}")
+            finally:
+                await bootstrap.close()
+            # Small, self-draining pool: one per active project, not ten.
+            self.pool = await asyncpg.create_pool(
+                dsn=self.dsn,
+                min_size=0,
+                max_size=4,
+                max_inactive_connection_lifetime=60.0,
+                server_settings={"search_path": search_path_setting(self.schema)},
+            )
+        else:
+            self.pool = await asyncpg.create_pool(dsn=self.dsn, max_size=10)
         async with self.pool.acquire() as conn:
+            if self.schema and await conn.fetchval("SELECT current_schema()") != self.schema:
+                raise RuntimeError("tenant_schema_not_active")
             await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             if register_vector:
                 try:
@@ -131,6 +161,88 @@ class PostgresBackend(StorageBackend):
                 CREATE INDEX IF NOT EXISTS idx_bilinc_claims_subject_active ON bilinc_claims(subject, active);
                 CREATE INDEX IF NOT EXISTS idx_bilinc_claims_kind_active ON bilinc_claims(kind, active);
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS entities (
+                    id TEXT PRIMARY KEY,
+                    canonical_name TEXT NOT NULL,
+                    entity_type TEXT NOT NULL DEFAULT 'unknown',
+                    aliases JSONB NOT NULL DEFAULT '[]',
+                    metadata JSONB NOT NULL DEFAULT '{}',
+                    created_at DOUBLE PRECISION NOT NULL,
+                    updated_at DOUBLE PRECISION NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_entities_canonical_name ON entities(canonical_name);
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS entity_mentions (
+                    id TEXT PRIMARY KEY,
+                    entity_id TEXT NOT NULL,
+                    memory_key TEXT NOT NULL,
+                    mention_text TEXT NOT NULL,
+                    source TEXT DEFAULT '',
+                    confidence DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+                    created_at DOUBLE PRECISION NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_entity_mentions_entity_id ON entity_mentions(entity_id);
+                CREATE INDEX IF NOT EXISTS idx_entity_mentions_memory_key ON entity_mentions(memory_key);
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS memory_events (
+                    id TEXT PRIMARY KEY,
+                    schema_version INTEGER NOT NULL,
+                    specversion TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    time DOUBLE PRECISION NOT NULL,
+                    operation TEXT NOT NULL,
+                    memory_key TEXT,
+                    memory_type TEXT,
+                    project_id TEXT,
+                    org_id TEXT,
+                    actor_type TEXT NOT NULL DEFAULT 'unknown',
+                    actor_id_hash TEXT,
+                    request_id TEXT,
+                    before_hash TEXT,
+                    after_hash TEXT,
+                    payload_ref TEXT,
+                    payload_json JSONB NOT NULL DEFAULT '{}',
+                    audit_log_id BIGINT,
+                    prev_event_hash TEXT,
+                    event_hash TEXT NOT NULL,
+                    checkpoint_root TEXT,
+                    datacontenttype TEXT NOT NULL DEFAULT 'application/json'
+                );
+                CREATE INDEX IF NOT EXISTS idx_memory_events_operation ON memory_events(operation);
+                CREATE INDEX IF NOT EXISTS idx_memory_events_memory_key ON memory_events(memory_key);
+                CREATE INDEX IF NOT EXISTS idx_memory_events_time ON memory_events(time);
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id BIGSERIAL PRIMARY KEY,
+                    timestamp DOUBLE PRECISION NOT NULL,
+                    op_type TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    before_value TEXT,
+                    after_value TEXT,
+                    data_hash TEXT NOT NULL,
+                    prev_root TEXT NOT NULL,
+                    root_hash TEXT NOT NULL,
+                    metadata JSONB NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_audit_log_key ON audit_log(key);
+                CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
+                CREATE INDEX IF NOT EXISTS idx_audit_log_op ON audit_log(op_type);
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_bilinc_entries_fts
+                ON bilinc_entries
+                USING GIN (to_tsvector('simple',
+                    COALESCE(key, '') || ' ' ||
+                    COALESCE(value::text, '') || ' ' ||
+                    COALESCE(metadata::text, '')
+                ))
+            """)
             current = await conn.fetchrow("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
             if current is None or current["version"] < self.SCHEMA_VERSION:
                 await conn.execute(
@@ -138,8 +250,327 @@ class PostgresBackend(StorageBackend):
                     self.SCHEMA_VERSION,
                     time.time(),
                 )
+            if self.schema:
+                # Fail closed: every table must resolve inside the tenant schema,
+                # so no query can fall through to a shared table in public.
+                present = {
+                    row["table_name"]
+                    for row in await conn.fetch(
+                        "SELECT table_name FROM information_schema.tables WHERE table_schema = $1",
+                        self.schema,
+                    )
+                }
+                missing = [table for table in TENANT_TABLES if table not in present]
+                if missing:
+                    raise RuntimeError("tenant_schema_incomplete:" + ",".join(missing))
         self._initialized = True
         logger.info("PostgreSQL backend initialized with pgvector")
+
+    async def append_memory_event(
+        self,
+        *,
+        operation: str,
+        subject: str,
+        source: str = "bilinc.core.stateplane",
+        memory_key: Optional[str] = None,
+        memory_type: Optional[str] = None,
+        payload_json: Optional[dict] = None,
+        before_value=None,
+        after_value=None,
+        project_id: Optional[str] = None,
+        org_id: Optional[str] = None,
+        actor_type: str = "unknown",
+        actor_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        payload_ref: Optional[str] = None,
+        audit_log_id: Optional[int] = None,
+        checkpoint_root: Optional[str] = None,
+    ) -> MemoryEvent:
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                previous = await conn.fetchrow(
+                    "SELECT event_hash FROM memory_events ORDER BY time DESC, id DESC LIMIT 1"
+                )
+                event = create_memory_event(
+                    operation=operation,
+                    subject=subject,
+                    source=source,
+                    memory_key=memory_key,
+                    memory_type=memory_type,
+                    payload_json=payload_json,
+                    before_value=before_value,
+                    after_value=after_value,
+                    project_id=project_id,
+                    org_id=org_id,
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                    request_id=request_id,
+                    payload_ref=payload_ref,
+                    audit_log_id=audit_log_id,
+                    prev_event_hash=previous["event_hash"] if previous else None,
+                    checkpoint_root=checkpoint_root,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO memory_events (
+                        id, schema_version, specversion, type, source, subject, time,
+                        operation, memory_key, memory_type, project_id, org_id,
+                        actor_type, actor_id_hash, request_id, before_hash, after_hash,
+                        payload_ref, payload_json, audit_log_id, prev_event_hash,
+                        event_hash, checkpoint_root, datacontenttype
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                              $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+                    """,
+                    event.id, event.schema_version, event.specversion, event.type,
+                    event.source, event.subject, event.time, event.operation,
+                    event.memory_key, event.memory_type, event.project_id, event.org_id,
+                    event.actor_type, event.actor_id_hash, event.request_id,
+                    event.before_hash, event.after_hash, event.payload_ref,
+                    json.dumps(event.payload_json or {}), event.audit_log_id,
+                    event.prev_event_hash, event.event_hash, event.checkpoint_root,
+                    event.datacontenttype,
+                )
+                return event
+
+    async def list_memory_events(
+        self,
+        *,
+        operation: Optional[str] = None,
+        memory_key: Optional[str] = None,
+        ids: Optional[List[str]] = None,
+        limit: Optional[int] = None,
+    ) -> List[MemoryEvent]:
+        if not self._initialized:
+            await self.init()
+        clauses: list[str] = []
+        params: list[Any] = []
+        if operation is not None:
+            params.append(operation)
+            clauses.append(f"operation = ${len(params)}")
+        if memory_key is not None:
+            params.append(memory_key)
+            clauses.append(f"memory_key = ${len(params)}")
+        if ids is not None:
+            values = [str(item) for item in ids]
+            if not values:
+                return []
+            params.append(values)
+            clauses.append(f"id = ANY(${len(params)}::text[])")
+        sql = "SELECT * FROM memory_events"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY time ASC, id ASC"
+        if limit is not None:
+            params.append(int(limit))
+            sql += f" LIMIT ${len(params)}"
+        rows = await self.pool.fetch(sql, *params)
+        events = []
+        for row in rows:
+            payload = row["payload_json"]
+            if isinstance(payload, str):
+                payload = json.loads(payload or "{}")
+            events.append(event_from_dict({
+                "id": row["id"], "schema_version": row["schema_version"],
+                "specversion": row["specversion"], "type": row["type"],
+                "source": row["source"], "subject": row["subject"],
+                "time": row["time"], "operation": row["operation"],
+                "memory_key": row["memory_key"], "memory_type": row["memory_type"],
+                "project_id": row["project_id"], "org_id": row["org_id"],
+                "actor_type": row["actor_type"], "actor_id_hash": row["actor_id_hash"],
+                "request_id": row["request_id"], "before_hash": row["before_hash"],
+                "after_hash": row["after_hash"], "payload_ref": row["payload_ref"],
+                "payload_json": payload or {}, "audit_log_id": row["audit_log_id"],
+                "prev_event_hash": row["prev_event_hash"], "event_hash": row["event_hash"],
+                "checkpoint_root": row["checkpoint_root"],
+                "datacontenttype": row["datacontenttype"],
+            }))
+        if ids is not None:
+            order = {str(event_id): index for index, event_id in enumerate(ids)}
+            events.sort(key=lambda event: order.get(event.id, len(order)))
+        return events
+
+    async def save_entity(self, entity) -> bool:
+        from bilinc.core.entities import Entity
+        if not isinstance(entity, Entity):
+            raise TypeError("entity must be Entity")
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO entities (
+                    id, canonical_name, entity_type, aliases, metadata, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT(id) DO UPDATE SET
+                    canonical_name=EXCLUDED.canonical_name,
+                    entity_type=EXCLUDED.entity_type,
+                    aliases=EXCLUDED.aliases,
+                    metadata=EXCLUDED.metadata,
+                    updated_at=EXCLUDED.updated_at
+                """,
+                entity.id,
+                entity.canonical_name,
+                entity.entity_type,
+                json.dumps(entity.aliases or []),
+                json.dumps(entity.metadata or {}),
+                entity.created_at,
+                entity.updated_at,
+            )
+        return True
+
+    async def add_entity_alias(self, entity_id: str, alias: str) -> bool:
+        entity = await self.find_entity_by_id(entity_id)
+        if entity is None:
+            return False
+        if alias not in entity.aliases:
+            entity.aliases.append(alias)
+        return await self.save_entity(entity)
+
+    async def save_entity_mention(self, mention) -> bool:
+        from bilinc.core.entities import EntityMention
+        if not isinstance(mention, EntityMention):
+            raise TypeError("mention must be EntityMention")
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO entity_mentions (
+                    id, entity_id, memory_key, mention_text, source, confidence, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT(id) DO UPDATE SET
+                    entity_id=EXCLUDED.entity_id,
+                    memory_key=EXCLUDED.memory_key,
+                    mention_text=EXCLUDED.mention_text,
+                    source=EXCLUDED.source,
+                    confidence=EXCLUDED.confidence
+                """,
+                mention.id,
+                mention.entity_id,
+                mention.memory_key,
+                mention.mention_text,
+                mention.source,
+                mention.confidence,
+                mention.created_at,
+            )
+        return True
+
+    async def find_entity_by_id(self, entity_id: str):
+        if not self._initialized:
+            await self.init()
+        row = await self.pool.fetchrow("SELECT * FROM entities WHERE id=$1", entity_id)
+        return self._row_to_entity(row) if row else None
+
+    async def find_entity(self, name: str):
+        if not self._initialized:
+            await self.init()
+        normalized = " ".join(str(name).strip().lower().split())
+        rows = await self.pool.fetch("SELECT * FROM entities ORDER BY created_at ASC")
+        for row in rows:
+            entity = self._row_to_entity(row)
+            names = [entity.canonical_name, *(entity.aliases or [])]
+            if any(" ".join(str(candidate).strip().lower().split()) == normalized for candidate in names):
+                return entity
+        return None
+
+    async def list_entity_mentions(
+        self,
+        entity_id: str | None = None,
+        memory_key: str | None = None,
+        limit: int = 100,
+    ):
+        if not self._initialized:
+            await self.init()
+        clauses = []
+        params: list[Any] = []
+        if entity_id is not None:
+            params.append(entity_id)
+            clauses.append("entity_id = " + chr(36) + str(len(params)))
+        if memory_key is not None:
+            params.append(memory_key)
+            clauses.append("memory_key = " + chr(36) + str(len(params)))
+        params.append(int(limit))
+        sql = "SELECT * FROM entity_mentions"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at DESC LIMIT " + chr(36) + str(len(params))
+        rows = await self.pool.fetch(sql, *params)
+        return [self._row_to_entity_mention(row) for row in rows]
+
+    async def list_memories_for_entity(self, name: str, limit: int = 100) -> list[str]:
+        entity = await self.find_entity(name)
+        if entity is None:
+            return []
+        rows = await self.pool.fetch(
+            "SELECT memory_key FROM entity_mentions WHERE entity_id=" + chr(36) + "1 GROUP BY memory_key ORDER BY MAX(created_at) DESC LIMIT " + chr(36) + "2",
+            entity.id,
+            int(limit),
+        )
+        return [row["memory_key"] for row in rows]
+
+    async def delete_entity_mentions_for_memory_key(self, memory_key: str) -> int:
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM entity_mentions WHERE memory_key=" + chr(36) + "1",
+                memory_key,
+            )
+        return int(result.split()[-1])
+
+    def _row_to_entity(self, row):
+        from bilinc.core.entities import Entity
+        if row is None:
+            return None
+        aliases = row["aliases"]
+        metadata = row["metadata"]
+        if isinstance(aliases, str):
+            aliases = json.loads(aliases or "[]")
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata or "{}")
+        return Entity.from_dict({
+            "id": row["id"],
+            "canonical_name": row["canonical_name"],
+            "entity_type": row["entity_type"],
+            "aliases": aliases or [],
+            "metadata": metadata or {},
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        })
+
+    def _row_to_entity_mention(self, row):
+        from bilinc.core.entities import EntityMention
+        return EntityMention.from_dict({
+            "id": row["id"],
+            "entity_id": row["entity_id"],
+            "memory_key": row["memory_key"],
+            "mention_text": row["mention_text"],
+            "source": row["source"],
+            "confidence": row["confidence"],
+            "created_at": row["created_at"],
+        })
+
+    def fts_rebuild(self):
+        """PostgreSQL uses a maintained expression index; rebuild is a no-op."""
+        return True
+
+    async def fts_search(self, query: str, limit: int = 10):
+        if not self._initialized:
+            await self.init()
+        vector = (
+            "to_tsvector('simple', COALESCE(key, '') || ' ' || "
+            "COALESCE(value::text, '') || ' ' || COALESCE(metadata::text, ''))"
+        )
+        sql = (
+            "SELECT id, key, ts_rank(" + vector + ", plainto_tsquery('simple', $1)) AS rank "
+            "FROM bilinc_entries WHERE " + vector + " @@ plainto_tsquery('simple', $1) "
+            "ORDER BY rank LIMIT $2"
+        )
+        rows = await self.pool.fetch(sql, str(query), int(limit))
+        return [(row["id"], row["key"], float(row["rank"])) for row in rows]
+
     async def save(self, entry: MemoryEntry) -> bool:
         if not self._initialized:
             await self.init()

@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import os
 import re
 import secrets
 import time
@@ -19,6 +20,8 @@ from bilinc.core.audit import OpType
 from bilinc.core.models import MemoryType
 from bilinc.core.stateplane import StatePlane
 from bilinc.storage.sqlite import SQLiteBackend
+from bilinc.storage.postgres import PostgresBackend
+from bilinc.storage.postgres_tenancy import project_schema
 
 #: Hermes-contract fields that ride along in entry metadata rather than as
 #: first-class MemoryEntry columns. Mirrors the local MCP server's behavior so
@@ -220,10 +223,22 @@ class ProjectRuntimeManager:
 
             db_path = self.db_path(normalized)
             db_path.parent.mkdir(parents=True, exist_ok=True)
+            backend_mode = os.getenv("BILINC_STORAGE_BACKEND", "sqlite").lower()
+            if backend_mode == "postgres":
+                dsn = os.getenv("BILINC_POSTGRES_DSN")
+                if not dsn:
+                    raise RuntimeError("BILINC_POSTGRES_DSN is required for postgres backend")
+                # One schema per project: the same isolation the SQLite runtime
+                # gets from one database file per project.
+                backend = PostgresBackend(dsn=dsn, schema=project_schema(normalized))
+                audit_enabled = True
+            else:
+                backend = SQLiteBackend(db_path=str(db_path))
+                audit_enabled = True
             plane = StatePlane(
-                backend=SQLiteBackend(db_path=str(db_path)),
+                backend=backend,
                 enable_verification=True,
-                enable_audit=True,
+                enable_audit=audit_enabled,
             )
             await plane.init()
             plane.init_agm()
