@@ -156,6 +156,35 @@ def test_cloud_sidecar_create_only_commit_never_overwrites(tmp_path):
     assert revised.status_code == 200
 
 
+def test_cloud_sidecar_recall_returns_a_version_revise_accepts(tmp_path):
+    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+    headers = {"X-Bilinc-Sidecar-Token": "secret"}
+    project_id = str(uuid4())
+
+    client.post(
+        f"/v1/projects/{project_id}/commit",
+        headers=headers,
+        json={"key": "decision.database", "value": "We chose Postgres", "source": "claude"},
+    )
+    results = client.post(
+        f"/v1/projects/{project_id}/recall",
+        headers=headers,
+        json={"query": "database decision"},
+    ).json()["results"]
+
+    hit = next(item for item in results if item["key"] == "decision.database")
+    assert hit["entry_version"].startswith("v1_")
+    assert hit["source"] == "claude"
+    assert hit["updated_at"]
+
+    revised = client.post(
+        f"/v1/projects/{project_id}/revise",
+        headers=headers,
+        json={"key": "decision.database", "value": "Postgres 16", "expected_version": hit["entry_version"]},
+    )
+    assert revised.status_code == 200
+
+
 def test_cloud_sidecar_plain_commit_still_revises_existing_keys(tmp_path):
     client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
     headers = {"X-Bilinc-Sidecar-Token": "secret"}

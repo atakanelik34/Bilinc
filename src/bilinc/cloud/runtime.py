@@ -299,6 +299,28 @@ class ProjectRuntimeManager:
         }
 
     @staticmethod
+    async def _attach_provenance(plane: StatePlane, results: Any) -> None:
+        """Add ``entry_version``, ``source`` and timestamps to each recalled entry.
+
+        The version is what ``revise`` and ``forget`` accept as
+        ``expected_version``, so a caller can act on exactly what it read.
+        Only public provenance is added, never internal scoring state.
+        """
+        if not plane.backend or not isinstance(results, list):
+            return
+        for item in results:
+            if not isinstance(item, dict) or not isinstance(item.get("key"), str):
+                continue
+            entry = await plane.backend.load(item["key"])
+            if entry is None:
+                continue
+            state = entry.to_dict()
+            item["entry_version"] = entry_version(state)
+            item["source"] = state.get("source") or (state.get("metadata") or {}).get("source")
+            item["created_at"] = state.get("created_at")
+            item["updated_at"] = state.get("updated_at")
+
+    @staticmethod
     async def _entry_version(plane: StatePlane, key: str) -> str | None:
         """Return the opaque version of the entry currently stored under ``key``."""
         if not plane.backend:
@@ -334,6 +356,7 @@ class ProjectRuntimeManager:
 
         payload = await plane.recall_profiled(**kwargs)
         payload["state_version"] = state_version(plane)
+        await self._attach_provenance(plane, payload.get("results"))
 
         # Never let a caller believe it received evidence it did not get.
         if explain and "explain" not in supported:
