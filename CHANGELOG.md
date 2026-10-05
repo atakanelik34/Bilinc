@@ -2,6 +2,11 @@
 
 All notable changes to Bilinc.
 
+## MCP Registry 2.3.2 — 2026-10-05 (registry metadata only; the PyPI package stays 2.3.1)
+
+- `server.json` adds the hosted remote MCP server, `https://mcp.bilinc.space/mcp` (Streamable HTTP, OAuth 2.1), next to the existing PyPI package, so registries list the no-install connector.
+- The registry version is `2.3.2` because a prerelease such as `2.3.1-1` would not become "latest". The next PyPI release must therefore be `2.3.3` or later, or the registry will refuse its `server.json`.
+
 ## [2.3.1] — 2026-09-28
 
 ### Fixed
