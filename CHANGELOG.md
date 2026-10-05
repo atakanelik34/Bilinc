@@ -2,6 +2,20 @@
 
 All notable changes to Bilinc.
 
+## [2.3.3] — 2026-10-06
+
+### Changed
+
+- Align the SDK, CLI, PyPI package, hosted website and MCP Registry release versions at 2.3.3.
+- Document the no-install Claude remote connector alongside the eight-tool Python stdio adapter, with user-wide Claude Code setup.
+- Refresh release instructions and current public documentation; SDK client/version attribution identifies 2.3.3.
+
+### Hosted website fixes
+
+- Keep safe campaign and external-referrer context on copy and setup interactions.
+- Respect measurement consent when old attribution cookies remain present.
+- Exclude owner/team testing from activation reporting without granting additional dashboard access or altering billing records.
+
 ## MCP Registry 2.3.2 — 2026-10-05 (registry metadata only; the PyPI package stays 2.3.1)
 
 - `server.json` adds the hosted remote MCP server, `https://mcp.bilinc.space/mcp` (Streamable HTTP, OAuth 2.1), next to the existing PyPI package, so registries list the no-install connector.

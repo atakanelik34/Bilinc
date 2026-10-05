@@ -9,6 +9,15 @@ import sys
 ROOT = Path(__file__).parents[1]
 
 
+def test_registry_and_pypi_package_share_one_release_version() -> None:
+    import bilinc
+
+    server = json.loads((ROOT / "server.json").read_text())
+    package = next(item for item in server["packages"] if item["identifier"] == "bilinc")
+    assert server["version"] == package["version"] == bilinc.__version__
+    assert {"type": "streamable-http", "url": "https://mcp.bilinc.space/mcp"} in server["remotes"]
+
+
 def test_public_product_truth_matches_the_shipped_cloud_surface() -> None:
     manifest = ROOT / "docs" / "public" / "product-truth.json"
 
@@ -16,7 +25,7 @@ def test_public_product_truth_matches_the_shipped_cloud_surface() -> None:
 
     payload = json.loads(manifest.read_text())
     assert payload["package"]["name"] == "bilinc"
-    assert payload["package"]["version"] == "2.3.1"
+    assert payload["package"]["version"] == "2.3.3"
     assert payload["cloud_mcp"]["tools"] == [
         "commit_mem",
         "recall",

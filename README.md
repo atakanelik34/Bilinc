@@ -14,7 +14,7 @@
 
 Retrieval answers *"what is similar to this?"*. Long-running agents also need to answer *"who wrote this state, was it verified, did it contradict what we already knew, and can we undo it?"* — that is the layer Bilinc provides.
 
-Bilinc 2.3.1 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
+Bilinc 2.3.3 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
 
 > **Frozen regression receipt** — LongMemEval-s cleaned retrieval fixture, 500 questions: **Hit@5 98.0%**, **NDCG@5 0.913**, no LLM reranker, no paid API. This is an isolated retrieval guardrail, not a current hosted SLA, end-to-end agent score, or competitor ranking — see [Benchmark receipt](#benchmark-receipt) for the full scope and qualification.
 
@@ -51,12 +51,29 @@ The fastest path is `pip install -U bilinc`, `bilinc login`, then `bilinc quickt
 | --- | --- |
 | A hosted memory API for an agent or MCP client | The public cloud-only package from PyPI |
 | Local StatePlane, SQLite/PostgreSQL, benchmarks, or internals | This repository and the [architecture guide](docs/architecture.md) |
-| A hosted MCP connection | The [MCP setup guide](https://bilinc.space/docs/mcp) |
+| A hosted MCP connection without a Python install | The [remote MCP setup guide](https://bilinc.space/docs/remote-mcp) |
 
 The public package is intentionally smaller than this repository. It does not bundle the internal StatePlane or local
 storage runtime.
 
 ## Start in 60 Seconds
+
+### Claude connector, without installing Python
+
+Open **Customize → Connectors → Add custom connector** in Claude, name it Bilinc,
+and paste `https://mcp.bilinc.space/mcp`. Sign in and choose read-only or read and
+write access. The setup guide is [bilinc.space/mcp](https://bilinc.space/mcp).
+
+For the remote connector in Claude Code:
+
+```bash
+claude mcp add --transport http --scope user bilinc https://mcp.bilinc.space/mcp
+```
+
+Then run `/mcp` and authenticate. The remote connector has ten tools; the Python
+stdio adapter below has eight. Both connect to hosted Bilinc memory.
+
+### SDK and CLI
 
 ```bash
 pip install -U bilinc
@@ -77,7 +94,7 @@ Cloud status check.
 To reproduce this release exactly:
 
 ```bash
-pip install -U bilinc==2.3.1
+pip install -U bilinc==2.3.3
 ```
 
 If you prefer a browser guide, open https://bilinc.space/install and follow the
