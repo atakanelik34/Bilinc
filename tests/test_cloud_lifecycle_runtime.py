@@ -6,6 +6,7 @@ control plane or a sidecar in the way.
 """
 
 import json
+import time
 from uuid import uuid4
 
 import pytest
@@ -96,6 +97,27 @@ async def test_revise_replaces_a_known_memory(manager, project_id):
     assert result["success"] is True
     assert result["entry_version"].startswith("v1_")
     assert [item["value"] for item in recalled["results"]] == [{"step": 2}]
+
+
+@pytest.mark.asyncio
+async def test_revise_with_the_same_value_refreshes_updated_at(manager, project_id):
+    """Reconfirming a memory (revise with the identical value) refreshes its date.
+
+    The Claude connector's freshness marker depends on this: a flagged entry must
+    stop being flagged once the user confirms it, even though the value is the same.
+    """
+    await manager.commit(project_id, key="stack.version", value="3")
+    before = (await manager.recall(project_id, query="stack.version", profile="fast"))["results"][0]
+    time.sleep(0.05)
+
+    result = await manager.revise(project_id, key="stack.version", value="3", reason="reconfirmed")
+
+    after = (await manager.recall(project_id, query="stack.version", profile="fast"))["results"][0]
+    assert result["success"] is True
+    assert after["value"] == before["value"] == "3"
+    assert after["updated_at"] > before["updated_at"]
+    assert after["created_at"] == before["created_at"]
+    assert after["entry_version"] != before["entry_version"]
 
 
 @pytest.mark.asyncio

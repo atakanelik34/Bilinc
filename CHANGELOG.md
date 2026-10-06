@@ -2,6 +2,17 @@
 
 All notable changes to Bilinc.
 
+## [2.3.4] — 2026-10-06
+
+### Added
+
+- Recall in the hosted Claude connector shows how long ago each memory was last written or confirmed, and marks entries past their review window as possibly outdated. The default window is 90 days for facts, decisions, how-tos and places, and 1 day for working notes; episodic memories (events) are never marked, and at most three entries are marked per recall. Nothing is hidden or deleted, and revising a memory with the same value confirms it. The structured recall result gains `age_days`, `freshness` and `review_window_days`.
+
+### Changed
+
+- Align the SDK, CLI, PyPI package, hosted website and MCP Registry release versions at 2.3.4. The SDK API, storage and protocol contracts are unchanged.
+- Add a runtime test that a same-value `revise` refreshes `updated_at` and keeps `created_at`, which is what the confirmation relies on.
+
 ## [2.3.3] — 2026-10-06
 
 ### Changed

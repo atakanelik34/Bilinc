@@ -5,7 +5,7 @@
   "verified_at": "2026-10-06",
   "package": {
     "name": "bilinc",
-    "version": "2.3.3",
+    "version": "2.3.4",
     "requires_python": ">=3.10",
     "license": "BUSL-1.1",
     "install": "pip install bilinc",

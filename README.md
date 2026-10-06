@@ -14,7 +14,7 @@
 
 Retrieval answers *"what is similar to this?"*. Long-running agents also need to answer *"who wrote this state, was it verified, did it contradict what we already knew, and can we undo it?"* — that is the layer Bilinc provides.
 
-Bilinc 2.3.3 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
+Bilinc 2.3.4 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
 
 > **Frozen regression receipt** — LongMemEval-s cleaned retrieval fixture, 500 questions: **Hit@5 98.0%**, **NDCG@5 0.913**, no LLM reranker, no paid API. This is an isolated retrieval guardrail, not a current hosted SLA, end-to-end agent score, or competitor ranking — see [Benchmark receipt](#benchmark-receipt) for the full scope and qualification.
 
@@ -73,6 +73,12 @@ claude mcp add --transport http --scope user bilinc https://mcp.bilinc.space/mcp
 Then run `/mcp` and authenticate. The remote connector has ten tools; the Python
 stdio adapter below has eight. Both connect to hosted Bilinc memory.
 
+Recall in the remote connector shows how long ago each memory was last confirmed
+and marks entries that are past their review window (90 days for facts, decisions,
+how-tos and places; 1 day for working notes; events are never marked) as possibly
+outdated. Nothing is hidden or deleted. Revising a memory with the same value
+confirms it.
+
 ### SDK and CLI
 
 ```bash
@@ -94,7 +100,7 @@ Cloud status check.
 To reproduce this release exactly:
 
 ```bash
-pip install -U bilinc==2.3.3
+pip install -U bilinc==2.3.4
 ```
 
 If you prefer a browser guide, open https://bilinc.space/install and follow the
