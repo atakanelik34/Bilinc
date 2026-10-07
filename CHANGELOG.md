@@ -2,6 +2,14 @@
 
 All notable changes to Bilinc.
 
+## [2.3.7] — 2026-10-08
+
+### Changed
+
+- Align the SDK, CLI, PyPI package, hosted website and MCP Registry release versions at 2.3.7. The SDK API, storage and protocol contracts are unchanged.
+- Hosted website server package security updates.
+- The PyPI project page lists the hosted connector's ten tools and links pricing.
+
 ## [2.3.6] — 2026-10-07
 
 ### Changed
