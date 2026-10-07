@@ -79,6 +79,21 @@ how-tos and places; 1 day for working notes; events are never marked) as possibl
 outdated. Nothing is hidden or deleted. Revising a memory with the same value
 confirms it.
 
+| Remote tool | Access | What it does |
+| --- | --- | --- |
+| `recall` | read | Look up memories before acting, with when each was last confirmed. |
+| `list_snapshots` | read | List saved checkpoints, newest first. |
+| `diff` | read | Compare current memory with a checkpoint, showing before → after values. |
+| `status` | read | Workspace, plan, credits, usage, and whether this connection can write. |
+| `remember` | read and write | Store a new memory. It never overwrites an existing key. |
+| `revise` | read and write | Change an existing memory; pass the version you read to refuse the change if it moved since. |
+| `forget` | read and write | Remove a memory from recall, with a reason. |
+| `create_snapshot` | read and write | Save a checkpoint before risky work. |
+| `preview_rollback` | read and write | Show what a rollback would change and issue its confirmation token. |
+| `rollback` | read and write | Restore a checkpoint with that token. |
+
+A read-only connection lists only the four read tools.
+
 ### SDK and CLI
 
 ```bash
@@ -295,6 +310,7 @@ production logs in issues, pull requests, benchmark fixtures, or screenshots.
 - Website: https://bilinc.space
 - Signup: https://bilinc.space/signup
 - Install guide: https://bilinc.space/install
+- Pricing (permanent free tier, no card): https://bilinc.space/pricing
 - Quickstart: https://bilinc.space/docs/quickstart
 - Cloud quickstart: https://bilinc.space/docs/cloud-quickstart
 - Migration guide: https://bilinc.space/docs/migration-v2
