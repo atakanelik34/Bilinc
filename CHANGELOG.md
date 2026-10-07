@@ -2,6 +2,14 @@
 
 All notable changes to Bilinc.
 
+## [2.3.5] — 2026-10-07
+
+### Changed
+
+- Align the SDK, CLI, PyPI package, hosted website and MCP Registry release versions at 2.3.5. The SDK API, storage and protocol contracts are unchanged.
+- The hosted connector's consent screen names an app that registered itself by the site it returns to and marks it as unverified, so a misleading app name cannot pass for Claude. Connected apps shows each app's site.
+- Hosted website dependency security updates.
+
 ## [2.3.4] — 2026-10-06
 
 ### Added
