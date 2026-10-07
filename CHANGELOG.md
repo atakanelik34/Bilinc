@@ -2,6 +2,14 @@
 
 All notable changes to Bilinc.
 
+## [2.3.6] — 2026-10-07
+
+### Changed
+
+- Align the SDK, CLI, PyPI package, hosted website and MCP Registry release versions at 2.3.6. The SDK API, storage and protocol contracts are unchanged.
+- Bilinc Cloud re-checks AWS Marketplace subscriptions every hour, so a renewal or cancellation made in AWS reaches the Bilinc plan even if a notification is missed.
+- Hosted website server package security updates.
+
 ## [2.3.5] — 2026-10-07
 
 ### Changed
