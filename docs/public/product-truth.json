@@ -40,7 +40,10 @@
       "status",
       "snapshot",
       "diff",
-      "rollback"
+      "rollback",
+      "list_memories",
+      "history",
+      "confirm"
     ]
   },
   "public_urls": {

@@ -149,7 +149,7 @@ bilinc mcp install                          # plain mcpServers JSON for any othe
 `command` is the interpreter that has Bilinc installed, and the adapter reads the key saved by `bilinc login`, so
 the config carries no key. On a machine without a saved key, add `"env": { "BILINC_API_KEY": "bil_live_..." }`.
 
-Eight tools — the core memory lifecycle, and nothing else:
+Eleven tools: the eight-step memory lifecycle plus three review tools.
 
 | Tool | What it does |
 | --- | --- |
@@ -161,8 +161,11 @@ Eight tools — the core memory lifecycle, and nothing else:
 | `snapshot` | Checkpoint a project before risky work, or list existing checkpoints. |
 | `diff` | Compare a checkpoint against another checkpoint or current state. Values are redacted by default. |
 | `rollback` | **Destructive in execute mode.** Restore a checkpoint through a free preview plus an explicitly confirmed execute. |
+| `list_memories` | Browse what is stored, ordered by key, with prefix, type and updated-time filters. Read-only and free. |
+| `history` | Show one memory's recorded changes, newest first, with the value before and after. Read-only and free. |
+| `confirm` | Record that a memory is still accurate without resending its value. Costs one write. |
 
-Operator and debug tooling — health probes, benchmarks, export/import, workspace replay — stays
+Operator and debug tooling — health probes, benchmarks, bulk import, workspace replay — stays
 local-only, as do the epistemic read tools for claims, contradictions, and graph queries. The hosted
 adapter does not bundle local runtime internals.
 
@@ -201,6 +204,24 @@ client.status()   # what can this key do?
 client.health()   # is the service reachable?
 ```
 
+### Review what Bilinc remembers
+
+Listing, history and export are reads and are not billed. Confirming costs one write.
+
+```python
+page = client.list_memories(prefix="agent.", limit=50)       # one page, ordered by key
+for entry in client.iter_memories(memory_type="semantic"):   # every page
+    print(entry["key"], entry["updatedAt"])
+
+client.history("agent.goal")   # every recorded change, newest first, before -> after
+client.confirm("agent.goal", expected_version=page["entries"][0]["entryVersion"])  # still true
+
+backup = client.export()       # every stored memory with its full value, as one dict
+```
+
+Forgetting a memory removes its value from history as well: earlier values of a forgotten
+memory are not returned.
+
 For server, CI, and hosted agent runtimes, store the key as `BILINC_API_KEY`.
 
 ## CLI
@@ -216,6 +237,16 @@ bilinc snapshot list
 bilinc diff --from-snapshot snap_...
 bilinc forget --key agent.goal --reason "superseded by the planner service"
 bilinc doctor
+```
+
+Review what is stored:
+
+```bash
+bilinc list --prefix agent.          # table of keys, types, update times, value previews
+bilinc list --all --json             # every page as JSON
+bilinc history agent.goal            # recorded changes, newest first
+bilinc confirm agent.goal            # still accurate; the value is unchanged
+bilinc export -o bilinc-export.json  # full values; the file is readable only by you
 ```
 
 Rollback is two stages. Execute takes the token from the preview and never prompts interactively,

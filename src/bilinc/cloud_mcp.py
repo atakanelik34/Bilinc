@@ -9,7 +9,9 @@ Requires BILINC_API_KEY at call time, not at import time.
 This adapter exposes the eight core memory-lifecycle capabilities of hosted
 Bilinc — write, recall, deliberately revise, deliberately forget, checkpoint,
 inspect a change, restore a known-good state, and inspect runtime status —
-without bundling local StatePlane or storage internals.
+plus three review tools (list what is stored, show one memory's history, and
+confirm a memory is still accurate), without bundling local StatePlane or
+storage internals.
 
 Operator/debug tooling (health, benchmark, export/import, workspace replay) and
 the epistemic read tools (verify, claims, contradictions, graph queries) stay
@@ -33,6 +35,9 @@ CLOUD_MCP_TOOLS = (
     "snapshot",
     "diff",
     "rollback",
+    "list_memories",
+    "history",
+    "confirm",
 )
 
 
@@ -49,6 +54,8 @@ def build_server():
         from mcp.server.fastmcp import FastMCP
     except Exception as exc:  # pragma: no cover - depends on optional MCP runtime import path
         raise RuntimeError("Bilinc Cloud MCP adapter requires mcp>=1.0.0") from exc
+
+    from mcp.types import ToolAnnotations
 
     mcp = FastMCP("bilinc")
 
@@ -264,6 +271,96 @@ def build_server():
                 idempotency_key=idempotency_key,
             )
         raise ValueError("mode must be either preview or execute")
+
+    @mcp.tool(
+        title="List stored memories",
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    def list_memories(
+        prefix: str | None = None,
+        memory_type: str | None = None,
+        updated_after: str | None = None,
+        updated_before: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+        values: str = "preview",
+    ) -> dict[str, Any]:
+        """List the memories stored in this Bilinc Cloud project, ordered by key.
+
+        Read-only and free. Filters: key `prefix`, `memory_type`, and ISO-8601
+        `updated_after` / `updated_before`. Returns up to `limit` entries
+        (1-100) with key, type, importance, source, created and updated times,
+        entry version, and a value whose size follows `values` ("preview" by
+        default, "full", or "none"). `total` counts all matches; `nextCursor`
+        is the `cursor` for the next page and is null on the last page.
+        """
+
+        return create_client().list_memories(
+            prefix=prefix,
+            memory_type=memory_type,
+            updated_after=updated_after,
+            updated_before=updated_before,
+            cursor=cursor,
+            limit=limit,
+            values=values,
+        )
+
+    @mcp.tool(
+        title="Show a memory's history",
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    def history(key: str, limit: int = 20, values: str = "full") -> dict[str, Any]:
+        """Show the recorded changes to one memory key, newest first.
+
+        Read-only and free. Each entry has the operation (create, update,
+        confirm, forget, rollback and others), its time, the recorded reason
+        and source, and the value before and after unless `values` is "none".
+        Values recorded before a memory was forgotten are not returned.
+        `exists` is false when the key is not currently stored.
+        """
+
+        return create_client().history(key, limit=limit, values=values)
+
+    @mcp.tool(
+        title="Confirm a memory is still accurate",
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            # Each call adds a history entry, so a repeat is not a no-op.
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    )
+    def confirm(
+        key: str,
+        expected_version: str | None = None,
+        reason: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Record that an existing memory is still accurate.
+
+        The stored value is not changed; the memory's updated time moves to now
+        and its history gains a confirm entry. Costs one write operation.
+        Fails with `memory_not_found` when the key does not exist, and with
+        `version_conflict` when `expected_version` no longer matches.
+        """
+
+        return create_client().confirm(
+            key,
+            expected_version=expected_version,
+            reason=reason,
+            idempotency_key=idempotency_key,
+        )
 
     return mcp
 
