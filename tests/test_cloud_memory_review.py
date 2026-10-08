@@ -427,3 +427,73 @@ def test_iterated_revision_keeps_agm_entrenchment_outside_rollback(sidecar):
     assert second.json()["success"] is False
     listed = _post(sidecar, project, "memories", {"values": "full"}).json()["entries"][0]
     assert listed["value"] == "b"
+
+
+def test_confirm_changes_only_the_update_time(tmp_path):
+    """No re-verification, no revision: every other stored field stays exactly as it was."""
+    app = create_app(runtime_dir=tmp_path, sidecar_token="secret")
+    project = str(uuid4())
+
+    with TestClient(app) as client:
+        _commit(client, project, "fact", "stated once", importance=0.4, metadata={"note": "kept"})
+
+        async def mark_unverified():
+            plane = await app.state.runtime_manager.get_plane(project)
+            entry = await plane.backend.load("fact")
+            entry.is_verified = False
+            entry.verification_score = 0.123
+            entry.verification_method = "legacy-rule"
+            await plane.backend.save(entry)
+            return entry.to_dict()
+
+        before = client.portal.call(mark_unverified)
+        assert _post(client, project, "confirm", {"key": "fact"}).status_code == 200
+
+        async def load():
+            plane = await app.state.runtime_manager.get_plane(project)
+            return (await plane.backend.load("fact")).to_dict()
+
+        after = client.portal.call(load)
+
+    assert after["updated_at"] > before["updated_at"]
+    # Read counters move on every backend load, including this test's own.
+    read_counters = {"access_count", "last_accessed"}
+    changed = {name for name in before if before[name] != after[name]} - read_counters
+    assert changed == {"updated_at"}
+
+
+def test_agm_judges_a_revision_against_the_persisted_entry(tmp_path):
+    """After a backend-only restore (as a rollback does), AGM must see the stored
+    instance, timestamps included, so recency compares against what is stored."""
+    app = create_app(runtime_dir=tmp_path, sidecar_token="secret")
+    project = str(uuid4())
+    seen = {}
+
+    with TestClient(app) as client:
+        _commit(client, project, "status", "green")
+
+        async def restore_older_instance_and_spy():
+            plane = await app.state.runtime_manager.get_plane(project)
+            conn = plane.backend._get_conn()
+            conn.execute(
+                "UPDATE memories SET created_at = created_at - 3600, updated_at = updated_at - 3600 WHERE key = ?",
+                ("status",),
+            )
+            conn.commit()
+            entry = await plane.backend.load("status")
+            assert plane.agm_engine.belief_state.get_belief("status").created_at > entry.created_at
+
+            original = plane.agm_engine.revise
+
+            def spy(new_entry, *args, **kwargs):
+                seen["cached_created_at"] = plane.agm_engine.belief_state.get_belief("status").created_at
+                return original(new_entry, *args, **kwargs)
+
+            plane.agm_engine.revise = spy
+            return entry.created_at
+
+        persisted_created_at = client.portal.call(restore_older_instance_and_spy)
+        revised = _post(client, project, "revise", {"key": "status", "value": "amber", "strategy": "recency"})
+
+    assert revised.status_code == 200
+    assert seen["cached_created_at"] == pytest.approx(persisted_created_at)

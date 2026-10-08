@@ -275,7 +275,7 @@ _BELIEF_IDENTITY_FIELDS = ("value", "memory_type", "importance")
 
 
 def _belief_is_stale(cached: Any, persisted_state: dict[str, Any]) -> bool:
-    """Whether the in-memory belief no longer matches the persisted entry."""
+    """Whether the in-memory belief's content no longer matches the persisted entry."""
     if cached is None:
         return True
     cached_state = cached.to_dict()
@@ -661,12 +661,15 @@ class ProjectRuntimeManager:
     ) -> dict[str, Any]:
         """Record that a memory is still accurate, without resending its value.
 
-        This is a same-value revision: the value, type and importance stay as
-        stored, ``updated_at`` moves to now, and the audit trail gets an UPDATE
-        marked ``confirmed`` so history can tell a confirmation from an edit.
+        Only ``updated_at`` changes. The entry is not re-verified or revised:
+        value, type, importance, verification results and metadata stay
+        exactly as stored. The audit trail gets an UPDATE marked ``confirmed``
+        so history can tell a confirmation from an edit.
         """
+        from bilinc.core.models import MemoryEntry
+
         plane = await self.get_plane(project_id)
-        if not plane.backend or not plane.agm_engine:
+        if not plane.backend:
             raise ValueError("invalid_request")
 
         previous = await plane.backend.load(key)
@@ -675,24 +678,32 @@ class ProjectRuntimeManager:
 
         previous_state = previous.to_dict()
         self._assert_expected_version(previous_state, expected_version)
-        result = await self._revise_loaded(
-            plane,
-            key=key,
-            previous_state=previous_state,
-            value=previous.value,
-            importance=previous.importance,
-            strategy="entrenchment",
-            audit_metadata={"reason": reason, "confirmed": True},
-        )
-        if not result["success"]:
+
+        next_state = dict(previous_state)
+        next_state["updated_at"] = time.time()
+        confirmed = MemoryEntry.from_dict(dict(next_state))
+        if not await plane.backend.save(confirmed):
             raise ValueError("invalid_request")
+        plane.working_memory.remove(key)
+        if plane.agm_engine:
+            # Same belief, newer timestamp: entrenchment is left as it is.
+            plane.agm_engine.belief_state.add_belief(MemoryEntry.from_dict(dict(next_state)))
+        saved_state = confirmed.to_dict()
+        if plane.enable_audit and plane.audit:
+            plane.audit.log(
+                OpType.UPDATE,
+                key,
+                before_value=previous_state,
+                after_value=saved_state,
+                metadata={"reason": reason, "confirmed": True, "origin": "bilinc_cloud"},
+            )
         return {
             "success": True,
             "key": key,
             "confirmed": True,
-            "updated_at": result["updated_at"],
-            "entry_version": result["entry_version"],
-            "state_version": result["state_version"],
+            "updated_at": saved_state.get("updated_at"),
+            "entry_version": entry_version(saved_state),
+            "state_version": state_version(plane),
         }
 
     async def _revise_loaded(
@@ -716,11 +727,15 @@ class ProjectRuntimeManager:
         # The backend is the source of truth. A rollback restores entries in
         # the backend only, so the in-memory belief and its entrenchment can
         # still reflect a newer, more entrenched value that would make AGM
-        # judge this revision against state that no longer exists. Reconcile
-        # only then: in normal iterated revision AGM deliberately keeps the
-        # higher entrenchment of a replaced belief, and that must survive.
-        if _belief_is_stale(plane.agm_engine.belief_state.get_belief(key), previous_state):
-            plane.agm_engine.belief_state.add_belief(MemoryEntry.from_dict(dict(previous_state)))
+        # judge this revision against state that no longer exists. The
+        # entrenchment is reset only when the content differs: in normal
+        # iterated revision AGM deliberately keeps the higher entrenchment of
+        # a replaced belief, and that must survive.
+        cached = plane.agm_engine.belief_state.get_belief(key)
+        # The belief itself always becomes the persisted entry, so every
+        # strategy (recency included) compares against what is stored.
+        plane.agm_engine.belief_state.add_belief(MemoryEntry.from_dict(dict(previous_state)))
+        if _belief_is_stale(cached, previous_state):
             plane.agm_engine.set_entrenchment(key, float(previous_state.get("importance", 0.5)))
 
         try:
