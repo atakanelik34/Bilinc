@@ -735,11 +735,11 @@ class CloudClient:
 
         Starts after ``cursor`` when one is given. With ``values="full"`` a
         page too large for one response is fetched again in smaller pages,
-        and the smaller size is kept for the rest of the walk; Bilinc Cloud
-        always returns a single entry whole, so the walk never fails on size.
+        and the walk steps back up one size after each page that fits; Bilinc
+        Cloud always returns a single entry whole, so it never fails on size.
         """
 
-        sizes = [size for size in (page_size, 10, 1) if size <= page_size]
+        sizes = sorted({page_size, min(page_size, 10), 1}, reverse=True)
         size_index = 0
         seen: set[str] = set()
         while True:
@@ -758,6 +758,9 @@ class CloudClient:
                     raise
                 size_index += 1
                 continue
+            # Step back up after a page that fit, so one large value does not
+            # leave the rest of the walk at one entry per request.
+            size_index = max(0, size_index - 1)
             entries = page.get("entries")
             yield from entries if isinstance(entries, list) else []
             next_cursor = page.get("nextCursor")

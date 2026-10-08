@@ -498,8 +498,16 @@ def test_iter_memories_shrinks_full_value_pages_and_keeps_the_smaller_size():
     keys = [entry["key"] for entry in _client(transport).iter_memories(values="full")]
 
     assert keys == ["a", "b"]
-    # 100 failed once; the walk then stays at 10 instead of retrying 100 per page.
-    assert [call["body"]["limit"] for call in transport.calls] == [100, 10, 10]
+    # 100 failed once; the next page steps back up to 100.
+    assert [call["body"]["limit"] for call in transport.calls] == [100, 10, 100]
+
+
+def test_iter_memories_page_sizes_have_no_duplicates():
+    transport = RecordingTransport(_too_large(), {"entries": [{"key": "a"}], "nextCursor": None})
+
+    list(_client(transport).iter_memories(values="full", page_size=10))
+
+    assert [call["body"]["limit"] for call in transport.calls] == [10, 1]
 
 
 def test_iter_memories_starts_after_a_given_cursor():
