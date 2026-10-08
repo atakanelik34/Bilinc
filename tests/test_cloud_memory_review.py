@@ -374,3 +374,18 @@ def test_list_rejects_cursors_it_could_not_have_issued(sidecar, cursor):
     else:
         assert response.status_code == 400, cursor
         assert response.json()["detail"] == "invalid_cursor"
+
+
+def test_cursors_page_past_the_widest_possible_key(sidecar):
+    project = str(uuid4())
+    widest = "🙂" * 512  # 512 characters, 2,048 UTF-8 bytes
+    _commit(sidecar, project, widest, "wide")
+    _commit(sidecar, project, "\U0010ffff", "after")
+
+    first = _post(sidecar, project, "memories", {"limit": 1}).json()
+    assert first["entries"][0]["key"] == widest
+    assert len(first["next_cursor"]) > 2700
+
+    second = _post(sidecar, project, "memories", {"limit": 1, "cursor": first["next_cursor"]})
+    assert second.status_code == 200, second.text
+    assert second.json()["entries"][0]["key"] == "\U0010ffff"
