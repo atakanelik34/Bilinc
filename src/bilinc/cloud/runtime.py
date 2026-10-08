@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import inspect
 import json
@@ -155,6 +156,104 @@ def _diff_record(
     if after is not None:
         record["after"] = after.get("value") if isinstance(after, dict) else after
     return record
+
+
+#: Value modes shared by history and list: full values, a short preview, or
+#: none at all (keys and metadata only).
+VALUE_MODES = frozenset({"full", "preview", "none"})
+VALUE_PREVIEW_CHARS = 200
+
+#: Same ceiling as a value-bearing diff, for the same reason.
+MAX_HISTORY_RESPONSE_BYTES = MAX_DIFF_RESPONSE_BYTES
+MAX_LIST_RESPONSE_BYTES = MAX_DIFF_RESPONSE_BYTES
+
+
+def value_preview(value: Any) -> str:
+    """Return a bounded, single-string rendering of a stored value."""
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) <= VALUE_PREVIEW_CHARS:
+        return text
+    return text[:VALUE_PREVIEW_CHARS] + "…"
+
+
+def _render_value(value: Any, mode: str) -> Any:
+    return value if mode == "full" else value_preview(value)
+
+
+def encode_cursor(key: str) -> str:
+    return base64.urlsafe_b64encode(key.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def decode_cursor(cursor: str) -> str:
+    """Decode a list cursor; anything malformed is a caller error, not a 500."""
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        return base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError("invalid_cursor") from exc
+
+
+def _audit_json(raw: Any) -> Any:
+    if raw is None or isinstance(raw, (dict, list)):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _state_value(state: Any) -> Any:
+    return state.get("value") if isinstance(state, dict) else None
+
+
+def history_records(rows: list[Any], *, values: str) -> list[dict[str, Any]]:
+    """Turn newest-first audit rows for one key into public history records.
+
+    Forgetting a memory removes its value from every read path: values recorded
+    at or before the newest FORGET are never returned, only the fact that the
+    change happened. The runtime writes two FORGET rows per forget (the core's,
+    carrying the deleted state, and a value-free one carrying the reason); they
+    are reported as one event.
+    """
+    records: list[dict[str, Any]] = []
+    forgotten = False
+    previous_was_reasoned_forget = False
+    for row in rows:
+        op = str(row.op_type)
+        metadata = _audit_json(row.metadata) or {}
+        if op == OpType.FORGET.value:
+            forgotten = True
+            if previous_was_reasoned_forget and not metadata.get("reason"):
+                previous_was_reasoned_forget = False
+                continue
+            previous_was_reasoned_forget = bool(metadata.get("reason"))
+        else:
+            previous_was_reasoned_forget = False
+
+        before = _audit_json(row.before_value)
+        after = _audit_json(row.after_value)
+        source = None
+        if isinstance(after, dict):
+            source = after.get("source") or (after.get("metadata") or {}).get("source")
+
+        record: dict[str, Any] = {
+            "op": "confirm" if metadata.get("confirmed") else op,
+            "at": float(row.timestamp),
+            "reason": metadata.get("reason"),
+            "source": source or None,
+        }
+        if metadata.get("rollback"):
+            record["rollback_snapshot_id"] = metadata.get("snapshot_id")
+        if values != "none":
+            if forgotten:
+                record["values_redacted"] = True
+            elif op != OpType.FORGET.value:
+                if before is not None:
+                    record["before"] = _render_value(_state_value(before), values)
+                if after is not None:
+                    record["after"] = _render_value(_state_value(after), values)
+        records.append(record)
+    return records
 
 
 @dataclass(frozen=True)
@@ -380,6 +479,104 @@ class ProjectRuntimeManager:
             payload["query_timestamp_supported"] = False
         return payload
 
+    async def history(
+        self,
+        project_id: str,
+        *,
+        key: str,
+        limit: int = 20,
+        values: str = "full",
+    ) -> dict[str, Any]:
+        """Return one key's recorded changes, newest first. Read-only."""
+        if values not in VALUE_MODES:
+            raise ValueError("invalid_request")
+        plane = await self.get_plane(project_id)
+        if not plane.enable_audit or not plane.audit:
+            raise ValueError("invalid_request")
+
+        bound = max(1, int(limit))
+        # One extra row tells us whether older history exists, and lets the
+        # paired FORGET rows collapse without shortening the page.
+        rows = plane.audit.get_history(key, limit=bound + 2)
+        records = history_records(rows, values=values)
+        exists = plane.backend is not None and await plane.backend.load(key) is not None
+        result = {
+            "key": key,
+            "exists": exists,
+            "entries": records[:bound],
+            # A full fetch may still hide older rows behind a collapsed pair.
+            "truncated": len(records) > bound or len(rows) >= bound + 2,
+            "values": values,
+        }
+        if len(json.dumps(result, default=str)) > MAX_HISTORY_RESPONSE_BYTES:
+            raise ValueError("response_too_large")
+        return result
+
+    async def list_memories(
+        self,
+        project_id: str,
+        *,
+        prefix: str | None = None,
+        memory_type: str | None = None,
+        updated_after: float | None = None,
+        updated_before: float | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+        values: str = "preview",
+    ) -> dict[str, Any]:
+        """Return one key-ordered page of stored memories. Read-only.
+
+        Paging is by key, so a cursor stays valid while other writes land.
+        ``total`` counts every entry matching the filters, not just this page.
+        """
+        if values not in VALUE_MODES:
+            raise ValueError("invalid_request")
+        if memory_type is not None:
+            _coerce_memory_types([memory_type])
+        plane = await self.get_plane(project_id)
+        backend = plane.backend
+        if backend is None or not hasattr(backend, "list_page"):
+            raise ValueError("invalid_request")
+
+        after_key = decode_cursor(cursor) if cursor else None
+        bound = max(1, int(limit))
+        filters = {
+            "prefix": prefix or None,
+            "memory_type": memory_type,
+            "updated_after": updated_after,
+            "updated_before": updated_before,
+        }
+        page = await backend.list_page(**filters, after_key=after_key, limit=bound + 1)
+        has_more = len(page) > bound
+        page = page[:bound]
+
+        entries = []
+        for entry in page:
+            state = entry.to_dict()
+            item: dict[str, Any] = {
+                "key": entry.key,
+                "memory_type": state.get("memory_type"),
+                "importance": entry.importance,
+                "source": state.get("source") or (state.get("metadata") or {}).get("source") or None,
+                "created_at": entry.created_at,
+                "updated_at": entry.updated_at,
+                "entry_version": entry_version(state),
+            }
+            if values != "none":
+                item["value"] = _render_value(entry.value, values)
+            entries.append(item)
+
+        result = {
+            "entries": entries,
+            "next_cursor": encode_cursor(page[-1].key) if has_more and page else None,
+            "total": await backend.count_filtered(**filters),
+            "values": values,
+            "state_version": state_version(plane),
+        }
+        if values == "full" and len(json.dumps(result, default=str)) > MAX_LIST_RESPONSE_BYTES:
+            raise ValueError("response_too_large")
+        return result
+
     @_serialized_project_mutation
     async def revise(
         self,
@@ -398,9 +595,6 @@ class ProjectRuntimeManager:
         that is not there is a caller mistake, not a silent insert. That is what
         makes a revision distinguishable from an accidental overwrite.
         """
-        from bilinc.adaptive.agm_engine import ConflictStrategy
-        from bilinc.core.models import MemoryEntry
-
         plane = await self.get_plane(project_id)
         if not plane.backend or not plane.agm_engine:
             raise ValueError("invalid_request")
@@ -411,6 +605,79 @@ class ProjectRuntimeManager:
 
         previous_state = previous.to_dict()
         self._assert_expected_version(previous_state, expected_version)
+        return await self._revise_loaded(
+            plane,
+            key=key,
+            previous_state=previous_state,
+            value=value,
+            importance=importance,
+            strategy=strategy,
+            audit_metadata={"reason": reason},
+        )
+
+    @_serialized_project_mutation
+    async def confirm(
+        self,
+        project_id: str,
+        *,
+        key: str,
+        expected_version: str | None = None,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Record that a memory is still accurate, without resending its value.
+
+        This is a same-value revision: the value, type and importance stay as
+        stored, ``updated_at`` moves to now, and the audit trail gets an UPDATE
+        marked ``confirmed`` so history can tell a confirmation from an edit.
+        """
+        plane = await self.get_plane(project_id)
+        if not plane.backend or not plane.agm_engine:
+            raise ValueError("invalid_request")
+
+        previous = await plane.backend.load(key)
+        if previous is None:
+            raise ValueError("memory_not_found")
+
+        previous_state = previous.to_dict()
+        self._assert_expected_version(previous_state, expected_version)
+        result = await self._revise_loaded(
+            plane,
+            key=key,
+            previous_state=previous_state,
+            value=previous.value,
+            importance=previous.importance,
+            strategy="entrenchment",
+            audit_metadata={"reason": reason, "confirmed": True},
+        )
+        if not result["success"]:
+            raise ValueError("invalid_request")
+        current = await plane.backend.load(key)
+        return {
+            "success": True,
+            "key": key,
+            "confirmed": True,
+            "updated_at": current.updated_at if current else None,
+            "entry_version": result["entry_version"],
+            "state_version": result["state_version"],
+        }
+
+    async def _revise_loaded(
+        self,
+        plane: StatePlane,
+        *,
+        key: str,
+        previous_state: dict[str, Any],
+        value: Any,
+        importance: float,
+        strategy: str,
+        audit_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Apply a revision to an entry the caller already loaded and version-checked.
+
+        Callers hold the project mutation lock.
+        """
+        from bilinc.adaptive.agm_engine import ConflictStrategy
+        from bilinc.core.models import MemoryEntry
 
         try:
             conflict_strategy = ConflictStrategy(strategy)
@@ -471,7 +738,7 @@ class ProjectRuntimeManager:
                     "revision_strategy": conflict_strategy.value,
                     "conflicts_resolved": result.conflicts_resolved,
                     # The reason is audit-visible; the value is already in the diff.
-                    "reason": reason,
+                    **audit_metadata,
                     "origin": "bilinc_cloud",
                 },
             )

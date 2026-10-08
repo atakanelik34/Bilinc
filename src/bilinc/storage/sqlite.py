@@ -13,7 +13,7 @@ except ImportError:
     import sqlite3
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.event_ledger import MemoryEvent, create_memory_event, event_from_dict, stable_json
@@ -880,6 +880,70 @@ class SQLiteBackend(StorageBackend):
         rows = self._get_conn().execute("SELECT * FROM memories ORDER BY created_at DESC").fetchall()
         return [self._row_to_entry(r) for r in rows]
     
+    @staticmethod
+    def _page_filters(
+        prefix: Optional[str],
+        memory_type: Optional[str],
+        updated_after: Optional[float],
+        updated_before: Optional[float],
+    ) -> tuple[list[str], list[Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if prefix:
+            # substr() instead of LIKE: no wildcard escaping, and `_`/`%` in
+            # dotted keys stay literal.
+            clauses.append("substr(key, 1, ?) = ?")
+            params.extend([len(prefix), prefix])
+        if memory_type:
+            clauses.append("memory_type = ?")
+            params.append(memory_type)
+        if updated_after is not None:
+            clauses.append("updated_at > ?")
+            params.append(float(updated_after))
+        if updated_before is not None:
+            clauses.append("updated_at < ?")
+            params.append(float(updated_before))
+        return clauses, params
+
+    async def list_page(
+        self,
+        *,
+        prefix: Optional[str] = None,
+        memory_type: Optional[str] = None,
+        updated_after: Optional[float] = None,
+        updated_before: Optional[float] = None,
+        after_key: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[MemoryEntry]:
+        """Return one key-ordered page of entries.
+
+        Ordered by key so a cursor (the last key seen) stays stable while other
+        writes land: new keys appear in their sorted place, never shift a page.
+        """
+        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before)
+        if after_key is not None:
+            clauses.append("key > ?")
+            params.append(after_key)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._get_conn().execute(
+            f"SELECT * FROM memories {where} ORDER BY key ASC LIMIT ?",
+            (*params, max(1, int(limit))),
+        ).fetchall()
+        return [self._row_to_entry(r) for r in rows]
+
+    async def count_filtered(
+        self,
+        *,
+        prefix: Optional[str] = None,
+        memory_type: Optional[str] = None,
+        updated_after: Optional[float] = None,
+        updated_before: Optional[float] = None,
+    ) -> int:
+        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        row = self._get_conn().execute(f"SELECT COUNT(*) AS cnt FROM memories {where}", params).fetchone()
+        return int(row["cnt"])
+
     async def count_by_type(self) -> Dict[str, int]:
         rows = self._get_conn().execute("SELECT memory_type, COUNT(*) as cnt FROM memories GROUP BY memory_type")
         return {r["memory_type"]: r["cnt"] for r in rows}
