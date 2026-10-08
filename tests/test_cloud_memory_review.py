@@ -389,3 +389,24 @@ def test_cursors_page_past_the_widest_possible_key(sidecar):
     second = _post(sidecar, project, "memories", {"limit": 1, "cursor": first["next_cursor"]})
     assert second.status_code == 200, second.text
     assert second.json()["entries"][0]["key"] == "\U0010ffff"
+
+
+def test_revise_after_rollback_is_judged_against_the_restored_entry(sidecar):
+    """Entrenchment from the rolled-back revision must not outrank later edits."""
+    project = str(uuid4())
+    _commit(sidecar, project, "plan", "v1", importance=0.2)
+    snapshot = _post(sidecar, project, "snapshots", {}).json()["snapshot"]["id"]
+    _post(sidecar, project, "revise", {"key": "plan", "value": "v2", "importance": 1.0})
+    preview = _post(sidecar, project, "rollback/preview", {"snapshot_id": snapshot}).json()
+    _post(
+        sidecar,
+        project,
+        "rollback",
+        {"snapshot_id": snapshot, "reason": "undo", "expected_current_root": preview["current_root_hash"]},
+    )
+
+    revised = _post(sidecar, project, "revise", {"key": "plan", "value": "v3", "importance": 0.5})
+
+    assert revised.status_code == 200 and revised.json()["success"] is True, revised.text
+    listed = _post(sidecar, project, "memories", {"values": "full"}).json()["entries"][0]
+    assert listed["value"] == "v3"

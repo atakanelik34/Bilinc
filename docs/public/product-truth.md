@@ -6,7 +6,7 @@
 - License: `BUSL-1.1`
 - Install: `pip install bilinc`
 - Canonical repository: https://github.com/atakanelik34/Bilinc
-- Verified: `2026-10-06`
+- Verified: `2026-10-08`
 
 ## Public surface
 

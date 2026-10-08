@@ -706,9 +706,11 @@ class ProjectRuntimeManager:
         from bilinc.core.models import MemoryEntry
 
         # The backend is the source of truth. A rollback restores entries in
-        # the backend only, so the in-memory belief can still hold a newer,
-        # more entrenched value that would make AGM reject this revision.
+        # the backend only, so the in-memory belief and its entrenchment can
+        # still reflect a newer, more entrenched value that would make AGM
+        # judge this revision against state that no longer exists.
         plane.agm_engine.belief_state.add_belief(MemoryEntry.from_dict(dict(previous_state)))
+        plane.agm_engine.set_entrenchment(key, float(previous_state.get("importance", 0.5)))
 
         try:
             conflict_strategy = ConflictStrategy(strategy)
