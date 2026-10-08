@@ -71,7 +71,7 @@ claude mcp add --transport http --scope user bilinc https://mcp.bilinc.space/mcp
 ```
 
 Then run `/mcp` and authenticate. The remote connector has ten tools; the Python
-stdio adapter below has eight. Both connect to hosted Bilinc memory.
+stdio adapter below has eleven. Both connect to hosted Bilinc memory.
 
 Recall in the remote connector shows how long ago each memory was last confirmed
 and marks entries that are past their review window (90 days for facts, decisions,
