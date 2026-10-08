@@ -508,7 +508,9 @@ class ProjectRuntimeManager:
             "truncated": len(records) > bound or len(rows) >= bound + 2,
             "values": values,
         }
-        if len(json.dumps(result, default=str)) > MAX_HISTORY_RESPONSE_BYTES:
+        # One entry is always returned whole, so a caller can always page down
+        # to a single change instead of losing it to the bound.
+        if len(result["entries"]) > 1 and len(json.dumps(result, default=str)) > MAX_HISTORY_RESPONSE_BYTES:
             raise ValueError("response_too_large")
         return result
 
@@ -573,7 +575,13 @@ class ProjectRuntimeManager:
             "values": values,
             "state_version": state_version(plane),
         }
-        if values == "full" and len(json.dumps(result, default=str)) > MAX_LIST_RESPONSE_BYTES:
+        # One entry is always returned whole: an export that pages down to a
+        # single memory gets its full value, however large.
+        if (
+            values == "full"
+            and len(entries) > 1
+            and len(json.dumps(result, default=str)) > MAX_LIST_RESPONSE_BYTES
+        ):
             raise ValueError("response_too_large")
         return result
 

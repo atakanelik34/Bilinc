@@ -284,3 +284,38 @@ def test_cursor_round_trips_unicode_keys():
 def test_value_preview_renders_structured_values_as_json():
     assert value_preview({"a": "ö"}) == '{"a": "ö"}'
     assert value_preview("short") == "short"
+
+
+def test_a_single_entry_is_returned_whole_however_large(tmp_path):
+    from bilinc.core.audit import OpType
+    from bilinc.core.models import MemoryEntry, MemoryType
+
+    app = create_app(runtime_dir=tmp_path, sidecar_token="secret")
+    project = str(uuid4())
+    big = "z" * 600_000
+
+    # Seed through the backend and audit trail directly: the full write path
+    # is not what this test is about, and it is slow on values this large.
+    async def seed():
+        plane = await app.state.runtime_manager.get_plane(project)
+        for key in ("big.one", "big.two"):
+            entry = MemoryEntry(key=key, value=big, memory_type=MemoryType.SEMANTIC)
+            await plane.backend.save(entry)
+            plane.audit.log(OpType.CREATE, key, after_value=entry.to_dict())
+
+    with TestClient(app) as client:
+        # Seed on the app's own loop thread, where the runtime's connections live.
+        client.portal.call(seed)
+        _assert_single_entries_come_back_whole(client, project, big)
+
+
+def _assert_single_entries_come_back_whole(client, project, big):
+    # Two big entries on one page exceed the bound...
+    assert _post(client, project, "memories", {"values": "full"}).status_code == 400
+    # ...but a page of one always comes back with the full value.
+    single = _post(client, project, "memories", {"values": "full", "limit": 1})
+    assert single.status_code == 200
+    assert single.json()["entries"][0]["value"] == big
+    one_change = _post(client, project, "history", {"key": "big.one", "limit": 1})
+    assert one_change.status_code == 200
+    assert one_change.json()["entries"][0]["after"] == big

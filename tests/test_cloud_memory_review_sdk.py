@@ -177,23 +177,31 @@ def test_export_retries_an_oversized_page_with_smaller_pages():
     assert "valueOmitted" not in exported["entries"][0]
 
 
-def test_export_keeps_a_value_too_large_for_one_response_as_a_marked_key():
+def test_export_shrinks_to_single_entries_and_keeps_every_full_value():
     transport = RecordingTransport(
         _too_large(),
         _too_large(),
-        _too_large(),
-        {"entries": [{"key": "huge"}], "nextCursor": None},
+        {"entries": [{"key": "huge", "value": "x" * 50}], "nextCursor": None},
     )
 
     exported = _client(transport).export()
 
-    assert exported["entries"] == [{"key": "huge", "valueOmitted": True}]
+    assert exported["entries"] == [{"key": "huge", "value": "x" * 50}]
     assert [(call["body"]["limit"], call["body"]["values"]) for call in transport.calls] == [
         (100, "full"),
         (10, "full"),
         (1, "full"),
-        (1, "none"),
     ]
+
+
+def test_export_fails_rather_than_dropping_a_value():
+    from bilinc import BilincValidationError
+
+    transport = RecordingTransport(_too_large(), _too_large(), _too_large())
+
+    with pytest.raises(BilincValidationError):
+        _client(transport).export()
+    assert all(call["body"]["values"] == "full" for call in transport.calls)
 
 
 def test_export_does_not_swallow_other_validation_errors():
@@ -342,7 +350,8 @@ def test_cli_list_prints_a_table_with_a_next_page_hint(cli, capsys):
     assert "KEY" in out and "UPDATED (UTC)" in out
     assert "team.deploy_day" in out and "thursday" in out
     assert "1 shown of 7" in out
-    assert "bilinc list --cursor next123" in out
+    # The continuation repeats the filters: a cursor alone would widen the scope.
+    assert "bilinc list --prefix team. --type semantic --limit 10 --cursor next123" in out
     _, kwargs = FakeClient.instances[0].calls[0]
     assert kwargs["prefix"] == "team." and kwargs["memory_type"] == "semantic" and kwargs["limit"] == 10
 
@@ -433,3 +442,21 @@ def test_cloud_mcp_tool_constant_matches_the_registered_tools():
     from bilinc.cloud_mcp import CLOUD_MCP_TOOLS
 
     assert set(CLOUD_MCP_TOOLS) == set(_tools())
+
+
+def test_cli_list_hint_quotes_filter_values(cli, capsys):
+    assert cli.main(["list", "--prefix", "my team", "--values", "none"]) == 0
+    out = capsys.readouterr().out
+
+    assert "bilinc list --prefix 'my team' --limit 50 --values none --cursor next123" in out
+
+
+def test_cli_export_tightens_an_existing_world_readable_file(cli, capsys, tmp_path):
+    target = tmp_path / "existing.json"
+    target.write_text("old")
+    os.chmod(target, 0o644)
+
+    assert cli.main(["export", "-o", str(target)]) == 0
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert json.loads(target.read_text())["count"] == 1

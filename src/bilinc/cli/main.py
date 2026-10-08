@@ -85,7 +85,39 @@ def _print_history(payload: dict[str, Any]) -> None:
         print("  … older changes not shown; raise --limit to see more.")
 
 
-def _print_memories(entries: list[dict[str, Any]], *, total: Any, next_cursor: Any) -> None:
+def _continuation_command(next_cursor: str, filters: dict[str, Any] | None) -> str:
+    """The `bilinc list` command for the next page, with the same filters.
+
+    A cursor only marks a position; the filters must be repeated or the next
+    page would cover a different set of memories.
+    """
+
+    parts = ["bilinc list"]
+    flags = {
+        "prefix": "--prefix",
+        "memory_type": "--type",
+        "updated_after": "--updated-after",
+        "updated_before": "--updated-before",
+        "limit": "--limit",
+    }
+    for name, flag in flags.items():
+        value = (filters or {}).get(name)
+        if value is not None and value != "":
+            parts.append(f"{flag} {shlex.quote(str(value))}")
+    values = (filters or {}).get("values")
+    if values and values != "preview":
+        parts.append(f"--values {shlex.quote(str(values))}")
+    parts.append(f"--cursor {shlex.quote(next_cursor)}")
+    return " ".join(parts)
+
+
+def _print_memories(
+    entries: list[dict[str, Any]],
+    *,
+    total: Any,
+    next_cursor: Any,
+    filters: dict[str, Any] | None = None,
+) -> None:
     if not entries:
         print("No memories match.")
         return
@@ -103,12 +135,15 @@ def _print_memories(entries: list[dict[str, Any]], *, total: Any, next_cursor: A
         summary += f" of {total}"
     print(summary)
     if isinstance(next_cursor, str) and next_cursor:
-        print(f"More: bilinc list --cursor {next_cursor}  (or --all)")
+        print(f"More: {_continuation_command(next_cursor, filters)}  (or --all)")
 
 
 def _write_private_json(path: str, payload: dict[str, Any]) -> None:
     """Write an export owner-only: it holds the full memory contents."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # The creation mode is ignored when the file already exists, so tighten an
+    # existing file before any memory content is written into it.
+    os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, indent=2, ensure_ascii=False))
         handle.write("\n")
@@ -479,6 +514,7 @@ def main(argv: list[str] | None = None) -> int:
                         result.get("entries") or [],
                         total=result.get("total"),
                         next_cursor=result.get("nextCursor"),
+                        filters={**filters, "limit": args.limit},
                     )
         elif args.command == "export":
             exported = client.export(prefix=args.prefix, memory_type=args.type)

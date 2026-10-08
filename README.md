@@ -213,7 +213,7 @@ page = client.list_memories(prefix="agent.", limit=50)       # one page, ordered
 for entry in client.iter_memories(memory_type="semantic"):   # every page
     print(entry["key"], entry["updatedAt"])
 
-client.history("agent.goal")   # every recorded change, newest first, before -> after
+client.history("agent.goal")   # newest changes first (20 by default, up to 100); "truncated" marks older ones
 client.confirm("agent.goal", expected_version=page["entries"][0]["entryVersion"])  # still true
 
 backup = client.export()       # every stored memory with its full value, as one dict

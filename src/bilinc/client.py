@@ -788,11 +788,12 @@ class CloudClient:
     ) -> dict[str, Any]:
         """Fetch one export page, shrinking it when its values are too large.
 
-        A single value too large to return on its own is exported without its
-        value and marked ``valueOmitted``, never silently dropped.
+        Bilinc Cloud always returns a single entry whole, so shrinking to one
+        entry per page always succeeds; every exported memory carries its
+        full value.
         """
 
-        for page_size in _EXPORT_PAGE_SIZES:
+        for page_size in _EXPORT_PAGE_SIZES[:-1]:
             try:
                 return self.list_memories(
                     prefix=prefix, memory_type=memory_type, cursor=cursor, limit=page_size, values="full"
@@ -800,11 +801,9 @@ class CloudClient:
             except BilincValidationError as exc:
                 if not _is_response_too_large(exc):
                     raise
-        page = self.list_memories(prefix=prefix, memory_type=memory_type, cursor=cursor, limit=1, values="none")
-        entries = page.get("entries")
-        if isinstance(entries, list):
-            page["entries"] = [{**entry, "valueOmitted": True} for entry in entries if isinstance(entry, dict)]
-        return page
+        return self.list_memories(
+            prefix=prefix, memory_type=memory_type, cursor=cursor, limit=_EXPORT_PAGE_SIZES[-1], values="full"
+        )
 
     def snapshot(
         self,
