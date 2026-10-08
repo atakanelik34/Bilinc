@@ -269,9 +269,9 @@ def history_records(rows: list[Any], *, values: str) -> list[dict[str, Any]]:
     return records
 
 
-#: The fields a rollback changes. Access counters and timestamps that a plain
-#: read may touch are deliberately left out.
-_BELIEF_IDENTITY_FIELDS = ("value", "memory_type", "importance", "updated_at")
+#: The fields that decide an AGM revision. Timestamps and access counters are
+#: left out: maintenance can move them without making the belief stale.
+_BELIEF_IDENTITY_FIELDS = ("value", "memory_type", "importance")
 
 
 def _belief_is_stale(cached: Any, persisted_state: dict[str, Any]) -> bool:
@@ -521,16 +521,11 @@ class ProjectRuntimeManager:
             raise ValueError("invalid_request")
 
         bound = max(1, int(limit))
-        # Paired FORGET rows collapse into one event, so a page of raw rows can
-        # hold fewer events than asked for. Widen the fetch until one event
-        # past the page is visible, or the key's history is exhausted.
-        fetch = bound + 2
-        while True:
-            rows = plane.audit.get_history(key, limit=fetch)
-            records = history_records(rows, values=values)
-            if len(records) > bound or len(rows) < fetch:
-                break
-            fetch *= 2
+        # Each event is at most two audit rows (a forget writes a pair), so
+        # one fetch of 2 * (bound + 1) rows always shows one event past the
+        # page when older history exists.
+        rows = plane.audit.get_history(key, limit=2 * (bound + 1))
+        records = history_records(rows, values=values)
         exists = plane.backend is not None and await plane.backend.load(key) is not None
         result = {
             "key": key,
@@ -691,12 +686,11 @@ class ProjectRuntimeManager:
         )
         if not result["success"]:
             raise ValueError("invalid_request")
-        current = await plane.backend.load(key)
         return {
             "success": True,
             "key": key,
             "confirmed": True,
-            "updated_at": current.updated_at if current else None,
+            "updated_at": result["updated_at"],
             "entry_version": result["entry_version"],
             "state_version": result["state_version"],
         }
@@ -802,6 +796,7 @@ class ProjectRuntimeManager:
             "removed_keys": list(result.removed_keys or []),
             "entry_version": entry_version(next_state),
             "state_version": state_version(plane),
+            "updated_at": next_state.get("updated_at"),
         }
 
     @_serialized_project_mutation

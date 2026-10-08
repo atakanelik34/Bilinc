@@ -59,6 +59,9 @@ CANONICAL_ERROR_CODES: dict[str, int] = {
 }
 
 RETRYABLE_ERROR_CODES = frozenset({"rate_limited", "cloud_runtime_unavailable", "connection_failed"})
+#: Answered with 503, but retrying cannot help: the running service lacks the
+#: feature until it is upgraded.
+NON_RETRYABLE_ERROR_CODES = frozenset({"capability_unavailable"})
 
 
 class BilincError(RuntimeError):
@@ -156,7 +159,9 @@ def error_for_response(status: int, payload: Any) -> BilincCloudError:
     message = body.get("message") if isinstance(body.get("message"), str) else None
     request_id = body.get("requestId") if isinstance(body.get("requestId"), str) else None
     retryable = body.get("retryable")
-    if not isinstance(retryable, bool):
+    if code in NON_RETRYABLE_ERROR_CODES:
+        retryable = False
+    elif not isinstance(retryable, bool):
         retryable = status in (429, 503) or status >= 500 or code in RETRYABLE_ERROR_CODES
 
     error_class = _STATUS_ERRORS.get(status, BilincCloudError)
@@ -286,6 +291,15 @@ def _optional_text(value: Any, field: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise _invalid(field, "must be a non-empty string when provided")
     return value.strip()
+
+
+def _optional_raw_text(value: Any, field: str) -> str | None:
+    """Like :func:`_optional_text`, but keeps the value exactly as given."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or value == "":
+        raise _invalid(field, "must be a non-empty string when provided")
+    return value
 
 
 def _optional_query_timestamp(value: Any) -> str | None:
@@ -468,11 +482,6 @@ def _default_transport(
             "Bilinc Cloud returned invalid JSON",
             code="invalid_response",
         ) from exc
-
-
-#: Page sizes an export falls back through when a page of full values is too
-#: large for one response.
-_EXPORT_PAGE_SIZES = (100, 10, 1)
 
 
 def _is_response_too_large(error: BilincCloudError) -> bool:
@@ -701,7 +710,8 @@ class CloudClient:
             "limit": _require_limit(limit, "limit", MAX_LIST_LIMIT),
             "values": _require_choice(values, "values", VALUE_MODES),
         }
-        _put_optional(payload, "prefix", _optional_text(prefix, "prefix"))
+        # Not stripped: a trailing space is part of the prefix ("note " is not "note").
+        _put_optional(payload, "prefix", _optional_raw_text(prefix, "prefix"))
         if memory_type is not None:
             payload["memoryType"] = _require_memory_type(memory_type)
         _put_optional(payload, "updatedAfter", _optional_timestamp(updated_after, "updated_after"))
@@ -719,21 +729,35 @@ class CloudClient:
         updated_before: datetime | str | None = None,
         page_size: int = MAX_LIST_LIMIT,
         values: str = "preview",
+        cursor: str | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Yield every stored memory matching the filters, page by page."""
+        """Yield every stored memory matching the filters, page by page.
 
-        cursor: str | None = None
+        Starts after ``cursor`` when one is given. With ``values="full"`` a
+        page too large for one response is fetched again in smaller pages,
+        and the smaller size is kept for the rest of the walk; Bilinc Cloud
+        always returns a single entry whole, so the walk never fails on size.
+        """
+
+        sizes = [size for size in (page_size, 10, 1) if size <= page_size]
+        size_index = 0
         seen: set[str] = set()
         while True:
-            page = self.list_memories(
-                prefix=prefix,
-                memory_type=memory_type,
-                updated_after=updated_after,
-                updated_before=updated_before,
-                cursor=cursor,
-                limit=page_size,
-                values=values,
-            )
+            try:
+                page = self.list_memories(
+                    prefix=prefix,
+                    memory_type=memory_type,
+                    updated_after=updated_after,
+                    updated_before=updated_before,
+                    cursor=cursor,
+                    limit=sizes[size_index],
+                    values=values,
+                )
+            except BilincValidationError as exc:
+                if not _is_response_too_large(exc) or size_index == len(sizes) - 1:
+                    raise
+                size_index += 1
+                continue
             entries = page.get("entries")
             yield from entries if isinstance(entries, list) else []
             next_cursor = page.get("nextCursor")
@@ -755,55 +779,14 @@ class CloudClient:
     ) -> dict[str, Any]:
         """Return every stored memory with its full value, as one JSON-ready dict.
 
-        Pages through :meth:`list_memories`; reads are not billed. History is
-        not included; use :meth:`history` per key for that.
+        Pages through :meth:`iter_memories`; reads are not billed. Every
+        exported memory carries its full value. History is not included; use
+        :meth:`history` per key for that.
         """
 
         exported_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        entries: list[dict[str, Any]] = []
-        cursor: str | None = None
-        seen: set[str] = set()
-        while True:
-            page = self._export_page(prefix=prefix, memory_type=memory_type, cursor=cursor)
-            page_entries = page.get("entries")
-            entries.extend(page_entries if isinstance(page_entries, list) else [])
-            next_cursor = page.get("nextCursor")
-            if not isinstance(next_cursor, str) or not next_cursor:
-                break
-            if next_cursor in seen:
-                raise BilincCloudError(
-                    "Bilinc Cloud returned a repeated list cursor",
-                    code="invalid_response",
-                )
-            seen.add(next_cursor)
-            cursor = next_cursor
+        entries = list(self.iter_memories(prefix=prefix, memory_type=memory_type, values="full"))
         return {"exported_at": exported_at, "count": len(entries), "entries": entries}
-
-    def _export_page(
-        self,
-        *,
-        prefix: str | None,
-        memory_type: str | None,
-        cursor: str | None,
-    ) -> dict[str, Any]:
-        """Fetch one export page, shrinking it when its values are too large.
-
-        Bilinc Cloud always returns a single entry whole, so shrinking to one
-        entry per page always succeeds; every exported memory carries its
-        full value.
-        """
-
-        for page_size in _EXPORT_PAGE_SIZES[:-1]:
-            try:
-                return self.list_memories(
-                    prefix=prefix, memory_type=memory_type, cursor=cursor, limit=page_size, values="full"
-                )
-            except BilincValidationError as exc:
-                if not _is_response_too_large(exc):
-                    raise
-        return self.list_memories(
-            prefix=prefix, memory_type=memory_type, cursor=cursor, limit=_EXPORT_PAGE_SIZES[-1], values="full"
-        )
 
     def snapshot(
         self,

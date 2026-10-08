@@ -486,3 +486,75 @@ def test_cli_export_does_not_need_fchmod(cli, monkeypatch, tmp_path):
 
     assert cli.main(["export", "-o", str(target)]) == 0
     assert json.loads(target.read_text())["count"] == 1
+
+
+def test_iter_memories_shrinks_full_value_pages_and_keeps_the_smaller_size():
+    transport = RecordingTransport(
+        _too_large(),
+        {"entries": [{"key": "a", "value": 1}], "nextCursor": "c1"},
+        {"entries": [{"key": "b", "value": 2}], "nextCursor": None},
+    )
+
+    keys = [entry["key"] for entry in _client(transport).iter_memories(values="full")]
+
+    assert keys == ["a", "b"]
+    # 100 failed once; the walk then stays at 10 instead of retrying 100 per page.
+    assert [call["body"]["limit"] for call in transport.calls] == [100, 10, 10]
+
+
+def test_iter_memories_starts_after_a_given_cursor():
+    transport = RecordingTransport({"entries": [], "nextCursor": None})
+
+    list(_client(transport).iter_memories(cursor="c9"))
+
+    assert transport.calls[0]["body"]["cursor"] == "c9"
+
+
+def test_list_prefix_is_sent_exactly_as_given():
+    transport = RecordingTransport({"entries": []})
+
+    _client(transport).list_memories(prefix="note ")
+
+    assert transport.calls[0]["body"]["prefix"] == "note "
+
+
+def test_capability_unavailable_is_not_retried():
+    from bilinc import BilincRuntimeUnavailableError
+    from bilinc.client import error_for_response
+
+    error = error_for_response(503, {"error": "capability_unavailable", "message": "not yet"})
+    transport = RecordingTransport(error, {"key": "k", "entries": []})
+
+    with pytest.raises(BilincRuntimeUnavailableError):
+        _client(transport).history("k")
+    assert len(transport.calls) == 1
+    assert error.retryable is False
+
+
+def test_cli_history_explains_an_oversized_history(cli, capsys, monkeypatch):
+    from bilinc.client import error_for_response
+
+    def too_large(self, key, *, limit, values):
+        raise error_for_response(
+            400, {"error": "invalid_request", "message": "too large", "details": {"reason": "response_too_large"}}
+        )
+
+    monkeypatch.setattr(FakeClient, "history", too_large)
+    assert cli.main(["history", "big.doc"]) != 0
+    captured = capsys.readouterr()
+    assert "--limit 1" in captured.err + captured.out
+
+
+def test_cli_history_says_not_stored_unless_the_newest_change_is_a_forget(cli, capsys, monkeypatch):
+    def rolled_back(self, key, *, limit, values):
+        return {
+            "key": key,
+            "exists": False,
+            "entries": [{"op": "delete", "at": "2026-10-08T12:00:00Z", "rollbackSnapshotId": "snap_1"}],
+            "truncated": False,
+        }
+
+    monkeypatch.setattr(FakeClient, "history", rolled_back)
+    assert cli.main(["history", "gone"]) == 0
+    out = capsys.readouterr().out
+    assert "not currently stored" in out and "forgotten" not in out

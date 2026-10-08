@@ -21,6 +21,7 @@ from bilinc.client import (
     ACTIVATION_SIGNUP_URL,
     BilincApiKeyRequired,
     BilincCloudError,
+    BilincValidationError,
     CloudClient,
     INSTALL_URL,
     MEMORY_TYPES,
@@ -67,7 +68,8 @@ def _print_history(payload: dict[str, Any]) -> None:
     if not entries:
         print(f"No recorded changes for {key}.")
         return
-    state = "" if payload.get("exists", True) else ", forgotten"
+    forgotten = any(entry.get("op") == "forget" for entry in entries[:1])
+    state = "" if payload.get("exists", True) else (", forgotten" if forgotten else ", not currently stored")
     print(f"{key}  ({len(entries)} shown, newest first{state})")
     for entry in entries:
         op = str(entry.get("op", "?"))
@@ -499,7 +501,18 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         elif args.command == "history":
-            result = client.history(args.key, limit=args.limit, values=args.values)
+            try:
+                result = client.history(args.key, limit=args.limit, values=args.values)
+            except BilincValidationError as exc:
+                if (exc.details or {}).get("reason") != "response_too_large":
+                    raise
+                raise BilincValidationError(
+                    "This history is too large to return at once. "
+                    "Try --limit 1, or --values preview.",
+                    code=exc.code,
+                    status=exc.status,
+                    details=exc.details,
+                ) from exc
             if args.json:
                 _print(result)
             else:
@@ -513,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
                 "values": args.values,
             }
             if args.all:
-                entries = list(client.iter_memories(page_size=args.limit, **filters))
+                entries = list(client.iter_memories(page_size=args.limit, cursor=args.cursor, **filters))
                 if args.json:
                     _print({"entries": entries, "count": len(entries)})
                 else:
