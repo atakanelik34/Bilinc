@@ -571,7 +571,8 @@ class ProjectRuntimeManager:
         if backend is None or not hasattr(backend, "list_page"):
             raise ValueError("invalid_request")
 
-        after_key = decode_cursor(cursor) if cursor else None
+        # An explicit empty cursor is malformed, not "start over".
+        after_key = decode_cursor(cursor) if cursor is not None else None
         bound = max(1, int(limit))
         filters = {
             "prefix": prefix or None,

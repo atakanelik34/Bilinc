@@ -360,7 +360,7 @@ def test_history_pages_count_events_not_raw_rows(sidecar):
     assert everything["truncated"] is False
 
 
-@pytest.mark.parametrize("cursor", ["%%%", "a", "abc=", "YQ==", "YQ", "Y Q"])
+@pytest.mark.parametrize("cursor", ["%%%", "a", "abc=", "YQ==", "YQ", "Y Q", ""])
 def test_list_rejects_cursors_it_could_not_have_issued(sidecar, cursor):
     project = str(uuid4())
     _commit(sidecar, project, "a", 1)
