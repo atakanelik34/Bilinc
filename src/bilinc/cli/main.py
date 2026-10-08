@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 import webbrowser
+from datetime import datetime
 from typing import Any
 
 from bilinc import __version__
@@ -18,9 +21,12 @@ from bilinc.client import (
     ACTIVATION_SIGNUP_URL,
     BilincApiKeyRequired,
     BilincCloudError,
+    BilincValidationError,
     CloudClient,
     INSTALL_URL,
+    MEMORY_TYPES,
     SIGNUP_URL,
+    VALUE_MODES,
     config_path,
     load_config_api_key,
     save_config_api_key,
@@ -37,6 +43,125 @@ def _parse_value(value: str) -> Any:
 
 def _print(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+def _short_time(value: Any) -> str:
+    """Render an ISO-8601 timestamp as `YYYY-MM-DD HH:MM:SS` UTC for tables."""
+    if not isinstance(value, str) or not value:
+        return "-"
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    return moment.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _short_value(value: Any, width: int = 60) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    text = " ".join(text.split())
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def _print_history(payload: dict[str, Any]) -> None:
+    key = payload.get("key", "")
+    entries = payload.get("entries") or []
+    if not entries:
+        print(f"No recorded changes for {key}.")
+        return
+    forgotten = any(entry.get("op") == "forget" for entry in entries[:1])
+    state = "" if payload.get("exists", True) else (", forgotten" if forgotten else ", not currently stored")
+    print(f"{key}  ({len(entries)} shown, newest first{state})")
+    for entry in entries:
+        op = str(entry.get("op", "?"))
+        line = f"  {_short_time(entry.get('at'))}  {op:<8}"
+        if entry.get("valuesRedacted"):
+            line += "  (value not shown: the memory was forgotten)"
+        elif "before" in entry and "after" in entry and op != "confirm":
+            line += f"  {_short_value(entry['before'], 30)} -> {_short_value(entry['after'], 30)}"
+        elif "after" in entry:
+            line += f"  {_short_value(entry['after'])}"
+        if entry.get("reason"):
+            line += f"  reason: {_short_value(entry['reason'], 40)}"
+        if entry.get("source"):
+            line += f"  source: {entry['source']}"
+        print(line)
+    if payload.get("truncated"):
+        print("  … older changes not shown; raise --limit to see more.")
+
+
+def _continuation_command(next_cursor: str, filters: dict[str, Any] | None) -> str:
+    """The `bilinc list` command for the next page, with the same filters.
+
+    A cursor only marks a position; the filters must be repeated or the next
+    page would cover a different set of memories.
+    """
+
+    parts = ["bilinc list"]
+    flags = {
+        "prefix": "--prefix",
+        "memory_type": "--type",
+        "updated_after": "--updated-after",
+        "updated_before": "--updated-before",
+        "limit": "--limit",
+    }
+    for name, flag in flags.items():
+        value = (filters or {}).get(name)
+        if value is not None and value != "":
+            parts.append(f"{flag} {shlex.quote(str(value))}")
+    values = (filters or {}).get("values")
+    if values and values != "preview":
+        parts.append(f"--values {shlex.quote(str(values))}")
+    parts.append(f"--cursor {shlex.quote(next_cursor)}")
+    return " ".join(parts)
+
+
+def _print_memories(
+    entries: list[dict[str, Any]],
+    *,
+    total: Any,
+    next_cursor: Any,
+    filters: dict[str, Any] | None = None,
+) -> None:
+    if not entries:
+        print("No memories match.")
+        return
+    key_width = min(max(len(str(entry.get("key", ""))) for entry in entries), 40)
+    print(f"{'KEY':<{key_width}}  {'TYPE':<10}  {'UPDATED (UTC)':<19}  VALUE")
+    for entry in entries:
+        key = _short_value(str(entry.get("key", "")), key_width)
+        value = _short_value(entry["value"]) if "value" in entry else ""
+        print(
+            f"{key:<{key_width}}  {str(entry.get('memoryType', '-')):<10}  "
+            f"{_short_time(entry.get('updatedAt')):<19}  {value}"
+        )
+    summary = f"{len(entries)} shown"
+    if isinstance(total, int):
+        summary += f" of {total}"
+    print(summary)
+    if isinstance(next_cursor, str) and next_cursor:
+        print(f"More: {_continuation_command(next_cursor, filters)}  (or --all)")
+
+
+def _write_private_json(path: str, payload: dict[str, Any]) -> None:
+    """Write an export owner-only: it holds the full memory contents.
+
+    The content goes to a new temporary file (created 0600) beside the
+    target, which then atomically replaces it. An existing file at ``path``
+    keeps its old contents until the write has fully succeeded, and the
+    result never inherits a wider mode from the file it replaces. This avoids
+    ``os.fchmod``, which Windows lacks before Python 3.13.
+    """
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, temporary = tempfile.mkstemp(prefix=".bilinc-export-", suffix=".json", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, ensure_ascii=False))
+            handle.write("\n")
+        os.replace(temporary, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
+        raise
 
 
 def _client(args: argparse.Namespace) -> CloudClient:
@@ -164,6 +289,33 @@ def build_parser() -> argparse.ArgumentParser:
     forget.add_argument("--key", required=True)
     forget.add_argument("--reason", required=True, help="Required audit reason for the deletion")
     forget.add_argument("--expected-version", help="Fail if the memory changed since this version")
+
+    confirm = sub.add_parser("confirm", help="Record that an existing memory is still accurate")
+    confirm.add_argument("key", help="Memory key")
+    confirm.add_argument("--expected-version", help="Fail if the memory changed since this version")
+    confirm.add_argument("--reason", help="Optional note recorded in the memory's history")
+
+    history = sub.add_parser("history", help="Show one memory's recorded changes, newest first")
+    history.add_argument("key", help="Memory key")
+    history.add_argument("--limit", type=int, default=20)
+    history.add_argument("--values", choices=VALUE_MODES, default="full", help="How much of each value to show")
+    history.add_argument("--json", action="store_true", help="Print the raw JSON response")
+
+    list_cmd = sub.add_parser("list", help="List stored memories, ordered by key")
+    list_cmd.add_argument("--prefix", help="Only keys starting with this text")
+    list_cmd.add_argument("--type", choices=MEMORY_TYPES, help="Only this memory type")
+    list_cmd.add_argument("--updated-after", help="Only memories updated after this ISO-8601 time")
+    list_cmd.add_argument("--updated-before", help="Only memories updated before this ISO-8601 time")
+    list_cmd.add_argument("--limit", type=int, default=50, help="Page size (1-100)")
+    list_cmd.add_argument("--cursor", help="Continue from a previous page")
+    list_cmd.add_argument("--all", action="store_true", help="Follow every page")
+    list_cmd.add_argument("--values", choices=VALUE_MODES, default="preview", help="How much of each value to show")
+    list_cmd.add_argument("--json", action="store_true", help="Print the raw JSON response")
+
+    export = sub.add_parser("export", help="Export every stored memory with its full value as JSON")
+    export.add_argument("-o", "--output", help="Write to this file (owner-only) instead of stdout")
+    export.add_argument("--prefix", help="Only keys starting with this text")
+    export.add_argument("--type", choices=MEMORY_TYPES, help="Only this memory type")
 
     snapshot = sub.add_parser("snapshot", help="Create or list project checkpoints")
     snapshot.add_argument("action", choices=["create", "list"], nargs="?", default="create")
@@ -340,6 +492,63 @@ def main(argv: list[str] | None = None) -> int:
                     expected_version=args.expected_version,
                 )
             )
+        elif args.command == "confirm":
+            _print(
+                client.confirm(
+                    args.key,
+                    expected_version=args.expected_version,
+                    reason=args.reason,
+                )
+            )
+        elif args.command == "history":
+            try:
+                result = client.history(args.key, limit=args.limit, values=args.values)
+            except BilincValidationError as exc:
+                if (exc.details or {}).get("reason") != "response_too_large":
+                    raise
+                raise BilincValidationError(
+                    "This history is too large to return at once. "
+                    "Try --limit 1, or --values preview.",
+                    code=exc.code,
+                    status=exc.status,
+                    details=exc.details,
+                ) from exc
+            if args.json:
+                _print(result)
+            else:
+                _print_history(result)
+        elif args.command == "list":
+            filters = {
+                "prefix": args.prefix,
+                "memory_type": args.type,
+                "updated_after": args.updated_after,
+                "updated_before": args.updated_before,
+                "values": args.values,
+            }
+            if args.all:
+                entries = list(client.iter_memories(page_size=args.limit, cursor=args.cursor, **filters))
+                if args.json:
+                    _print({"entries": entries, "count": len(entries)})
+                else:
+                    _print_memories(entries, total=len(entries), next_cursor=None)
+            else:
+                result = client.list_memories(cursor=args.cursor, limit=args.limit, **filters)
+                if args.json:
+                    _print(result)
+                else:
+                    _print_memories(
+                        result.get("entries") or [],
+                        total=result.get("total"),
+                        next_cursor=result.get("nextCursor"),
+                        filters={**filters, "limit": args.limit},
+                    )
+        elif args.command == "export":
+            exported = client.export(prefix=args.prefix, memory_type=args.type)
+            if args.output:
+                _write_private_json(args.output, exported)
+                print(f"Exported {exported['count']} memories to {args.output}", file=sys.stderr)
+            else:
+                _print(exported)
         elif args.command == "snapshot":
             if args.action == "list":
                 _print(client.list_snapshots(limit=args.limit))

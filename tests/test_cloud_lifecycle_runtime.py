@@ -162,6 +162,23 @@ async def test_revise_rejects_an_unknown_strategy(manager, project_id):
 
 
 @pytest.mark.asyncio
+async def test_revise_with_an_unknown_strategy_leaves_the_cached_belief_alone(manager, project_id):
+    await manager.commit(project_id, key="plan", value={"step": 1})
+    plane = await manager.get_plane(project_id)
+    # Make the cache disagree with the backend, as it does after a rollback.
+    stale = plane.agm_engine.belief_state.get_belief("plan")
+    stale.value = {"step": "stale"}
+    plane.agm_engine.set_entrenchment("plan", 0.97)
+
+    with pytest.raises(ValueError, match="invalid_request"):
+        await manager.revise(project_id, key="plan", value={"step": 2}, strategy="vibes")
+
+    assert plane.agm_engine.belief_state.get_belief("plan") is stale
+    assert stale.value == {"step": "stale"}
+    assert plane.agm_engine.get_entrenchment("plan") == 0.97
+
+
+@pytest.mark.asyncio
 async def test_revise_is_isolated_per_project(manager):
     project_a = str(uuid4())
     project_b = str(uuid4())

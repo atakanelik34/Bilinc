@@ -25,7 +25,7 @@ def test_public_product_truth_matches_the_shipped_cloud_surface() -> None:
 
     payload = json.loads(manifest.read_text())
     assert payload["package"]["name"] == "bilinc"
-    assert payload["package"]["version"] == "2.3.7"
+    assert payload["package"]["version"] == "2.3.8"
     assert payload["cloud_mcp"]["tools"] == [
         "commit_mem",
         "recall",
@@ -35,6 +35,9 @@ def test_public_product_truth_matches_the_shipped_cloud_surface() -> None:
         "snapshot",
         "diff",
         "rollback",
+        "list_memories",
+        "history",
+        "confirm",
     ]
     benchmark = payload["benchmark_claims"]
     assert benchmark["state"] == "historical_scoped"

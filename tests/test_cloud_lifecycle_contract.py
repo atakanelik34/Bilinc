@@ -1,9 +1,10 @@
 """Frozen public contract for the Bilinc Cloud core memory lifecycle.
 
 This file is the single source of truth for what the public SDK and the Cloud
-MCP adapter promise to agent developers. The target surface is exactly eight
-lifecycle capabilities: commit_mem, recall, revise, forget, status, snapshot,
-diff, and rollback. Operator/debug tooling stays local-only.
+MCP adapter promise to agent developers. The surface is the eight lifecycle
+capabilities (commit_mem, recall, revise, forget, status, snapshot, diff,
+rollback) plus three review tools added in 2.3.8 (list_memories, history,
+confirm). Operator/debug tooling stays local-only.
 """
 
 from __future__ import annotations
@@ -23,6 +24,9 @@ CLOUD_MCP_TOOL_NAMES = (
     "snapshot",
     "diff",
     "rollback",
+    "list_memories",
+    "history",
+    "confirm",
 )
 
 # Local-only tools that must never leak into the Cloud MCP adapter.
@@ -88,7 +92,7 @@ def _tools():
 # --------------------------------------------------------------------------
 
 
-def test_cloud_mcp_exposes_exactly_the_eight_lifecycle_tools():
+def test_cloud_mcp_exposes_exactly_the_lifecycle_and_review_tools():
     assert tuple(sorted(_tools())) == tuple(sorted(CLOUD_MCP_TOOL_NAMES))
 
 
@@ -266,6 +270,7 @@ CANONICAL_ERROR_STATUS = {
     "payment_required": 402,
     "invalid_request": 400,
     "memory_not_found": 404,
+    "memory_exists": 409,
     "snapshot_not_found": 404,
     "version_conflict": 409,
     "idempotency_conflict": 409,
@@ -273,6 +278,7 @@ CANONICAL_ERROR_STATUS = {
     "rollback_confirmation_expired": 410,
     "rate_limited": 429,
     "cloud_runtime_unavailable": 503,
+    "capability_unavailable": 503,
 }
 
 

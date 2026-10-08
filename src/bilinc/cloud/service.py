@@ -6,7 +6,7 @@ import os
 import hmac
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -20,6 +20,15 @@ from bilinc.cloud.runtime import ProjectRuntimeManager
 MAX_RECALL_LIMIT = 100
 MAX_SNAPSHOT_LIST_LIMIT = 100
 MAX_DIFF_LIMIT = 500
+MAX_HISTORY_LIMIT = 100
+MAX_LIST_LIMIT = 100
+#: A cursor is the URL-safe Base64 of the last key: 512 characters of up to
+#: 4 UTF-8 bytes each encode to at most 2,731 characters.
+MAX_CURSOR_LENGTH = 4096
+
+#: Feature flags the control plane checks before routing a request here. An
+#: older sidecar without a route would 404, which must not read as "no memory".
+SIDECAR_CAPABILITIES = ["commit_if_absent", "memory_history", "memory_list", "memory_confirm"]
 
 
 class CommitRequest(BaseModel):
@@ -60,6 +69,28 @@ class ForgetRequest(BaseModel):
     expected_version: str | None = Field(default=None, max_length=128)
 
 
+class ConfirmRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=512)
+    expected_version: str | None = Field(default=None, max_length=128)
+    reason: str | None = Field(default=None, max_length=512)
+
+
+class HistoryRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=512)
+    limit: int = Field(default=20, ge=1, le=MAX_HISTORY_LIMIT)
+    values: Literal["full", "preview", "none"] = "full"
+
+
+class ListRequest(BaseModel):
+    prefix: str | None = Field(default=None, max_length=512)
+    memory_type: str | None = Field(default=None, max_length=32)
+    updated_after: float | None = None
+    updated_before: float | None = None
+    cursor: str | None = Field(default=None, max_length=MAX_CURSOR_LENGTH)
+    limit: int = Field(default=50, ge=1, le=MAX_LIST_LIMIT)
+    values: Literal["full", "preview", "none"] = "preview"
+
+
 class SnapshotCreateRequest(BaseModel):
     label: str | None = Field(default=None, max_length=128)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -92,6 +123,7 @@ _PUBLIC_RUNTIME_ERRORS = frozenset(
         "invalid_project_id",
         "invalid_memory_type",
         "invalid_request",
+        "invalid_cursor",
         "memory_not_found",
         "memory_exists",
         "snapshot_not_found",
@@ -159,7 +191,7 @@ def create_app(
         return {
             "status": "ok",
             "runtimeIsolation": "project_filesystem",
-            "capabilities": ["commit_if_absent"],
+            "capabilities": SIDECAR_CAPABILITIES,
         }
 
     @app.post("/v1/projects/{project_id}/commit")
@@ -200,6 +232,33 @@ def create_app(
     ):
         with _runtime_errors():
             return await manager.forget(project_id, **payload.model_dump())
+
+    @app.post("/v1/projects/{project_id}/confirm")
+    async def confirm(
+        project_id: str,
+        payload: ConfirmRequest,
+        _: None = Depends(require_sidecar_token),
+    ):
+        with _runtime_errors():
+            return await manager.confirm(project_id, **payload.model_dump())
+
+    @app.post("/v1/projects/{project_id}/history")
+    async def history(
+        project_id: str,
+        payload: HistoryRequest,
+        _: None = Depends(require_sidecar_token),
+    ):
+        with _runtime_errors():
+            return await manager.history(project_id, **payload.model_dump())
+
+    @app.post("/v1/projects/{project_id}/memories")
+    async def list_memories(
+        project_id: str,
+        payload: ListRequest,
+        _: None = Depends(require_sidecar_token),
+    ):
+        with _runtime_errors():
+            return await manager.list_memories(project_id, **payload.model_dump())
 
     @app.post("/v1/projects/{project_id}/diff")
     async def diff(

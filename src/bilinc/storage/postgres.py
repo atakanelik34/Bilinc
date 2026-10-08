@@ -937,6 +937,76 @@ class PostgresBackend(StorageBackend):
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM bilinc_entries ORDER BY importance DESC, created_at DESC")
             return [self._row_to_entry(r) for r in rows]
+
+    @staticmethod
+    def _page_filters(
+        prefix: Optional[str],
+        memory_type: Optional[str],
+        updated_after: Optional[float],
+        updated_before: Optional[float],
+    ) -> tuple[list[str], list[Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        def bind(value: Any) -> str:
+            params.append(value)
+            return f"${len(params)}"
+
+        if prefix:
+            # left() instead of LIKE: no wildcard escaping, `_`/`%` stay literal.
+            clauses.append(f"left(key, {bind(len(prefix))}) = {bind(prefix)}")
+        if memory_type:
+            clauses.append(f"memory_type = {bind(memory_type)}")
+        if updated_after is not None:
+            clauses.append(f"updated_at > {bind(float(updated_after))}")
+        if updated_before is not None:
+            clauses.append(f"updated_at < {bind(float(updated_before))}")
+        return clauses, params
+
+    async def list_page(
+        self,
+        *,
+        prefix: Optional[str] = None,
+        memory_type: Optional[str] = None,
+        updated_after: Optional[float] = None,
+        updated_before: Optional[float] = None,
+        after_key: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[MemoryEntry]:
+        """Return one key-ordered page of entries (see SQLiteBackend.list_page)."""
+        if not self._initialized:
+            await self.init()
+        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before)
+        # COLLATE "C" (byte order) on both the cursor comparison and ORDER BY,
+        # so paging agrees with SQLite regardless of the database's locale.
+        if after_key is not None:
+            params.append(after_key)
+            clauses.append(f'key COLLATE "C" > ${len(params)}')
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, int(limit)))
+        sql = (
+            f"SELECT * FROM bilinc_entries {where} "
+            f'ORDER BY key COLLATE "C" ASC LIMIT ${len(params)}'
+        )
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+            return [self._row_to_entry(r) for r in rows]
+
+    async def count_filtered(
+        self,
+        *,
+        prefix: Optional[str] = None,
+        memory_type: Optional[str] = None,
+        updated_after: Optional[float] = None,
+        updated_before: Optional[float] = None,
+    ) -> int:
+        if not self._initialized:
+            await self.init()
+        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        async with self.pool.acquire() as conn:
+            return int(await conn.fetchval(f"SELECT COUNT(*) FROM bilinc_entries {where}", *params))
+
     async def load_by_type(self, memory_type: Any, limit: int = 100) -> List[MemoryEntry]:
         """Load entries by memory type."""
         if not self._initialized:

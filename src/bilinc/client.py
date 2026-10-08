@@ -1,6 +1,6 @@
 """Bilinc Cloud client.
 
-Bilinc 2.3.7 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
+Bilinc 2.3.8 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
 https://bilinc.space. Local self-hosted StatePlane internals are no longer
 shipped in the public package.
 """
@@ -15,10 +15,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
-__version__ = "2.3.7"
+__version__ = "2.3.8"
 DEFAULT_BASE_URL = "https://bilinc.space"
 SIGNUP_URL = "https://bilinc.space/signup"
 ACTIVATION_CAMPAIGN = "activation_2_3_4"
@@ -46,6 +47,7 @@ CANONICAL_ERROR_CODES: dict[str, int] = {
     "payment_required": 402,
     "invalid_request": 400,
     "memory_not_found": 404,
+    "memory_exists": 409,
     "snapshot_not_found": 404,
     "version_conflict": 409,
     "idempotency_conflict": 409,
@@ -53,9 +55,13 @@ CANONICAL_ERROR_CODES: dict[str, int] = {
     "rollback_confirmation_expired": 410,
     "rate_limited": 429,
     "cloud_runtime_unavailable": 503,
+    "capability_unavailable": 503,
 }
 
 RETRYABLE_ERROR_CODES = frozenset({"rate_limited", "cloud_runtime_unavailable", "connection_failed"})
+#: Answered with 503, but retrying cannot help: the running service lacks the
+#: feature until it is upgraded.
+NON_RETRYABLE_ERROR_CODES = frozenset({"capability_unavailable"})
 
 
 class BilincError(RuntimeError):
@@ -153,7 +159,9 @@ def error_for_response(status: int, payload: Any) -> BilincCloudError:
     message = body.get("message") if isinstance(body.get("message"), str) else None
     request_id = body.get("requestId") if isinstance(body.get("requestId"), str) else None
     retryable = body.get("retryable")
-    if not isinstance(retryable, bool):
+    if code in NON_RETRYABLE_ERROR_CODES:
+        retryable = False
+    elif not isinstance(retryable, bool):
         retryable = status in (429, 503) or status >= 500 or code in RETRYABLE_ERROR_CODES
 
     error_class = _STATUS_ERRORS.get(status, BilincCloudError)
@@ -181,6 +189,12 @@ MAX_REASON_LENGTH = 512
 MAX_RECALL_LIMIT = 100
 MAX_SNAPSHOT_LIST_LIMIT = 100
 MAX_DIFF_LIMIT = 500
+MAX_HISTORY_LIMIT = 100
+MAX_LIST_LIMIT = 100
+
+#: How much of each stored value history and list return: the whole value, a
+#: short single-string preview, or nothing (keys and metadata only).
+VALUE_MODES = ("full", "preview", "none")
 
 #: Bounded retries for read-only calls. Mutations are never retried
 #: automatically: billing idempotency alone does not prove that a retried write
@@ -279,6 +293,15 @@ def _optional_text(value: Any, field: str) -> str | None:
     return value.strip()
 
 
+def _optional_raw_text(value: Any, field: str) -> str | None:
+    """Like :func:`_optional_text`, but keeps the value exactly as given."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or value == "":
+        raise _invalid(field, "must be a non-empty string when provided")
+    return value
+
+
 def _optional_query_timestamp(value: Any) -> str | None:
     """Validate the bounded public representation of a point-in-time query.
 
@@ -293,6 +316,24 @@ def _optional_query_timestamp(value: Any) -> str | None:
             "query_timestamp",
             f"must be at most {MAX_QUERY_TIMESTAMP_LENGTH} characters",
         )
+    return parsed
+
+
+def _optional_timestamp(value: Any, field: str) -> str | None:
+    """Accept a datetime or an ISO-8601 string; send ISO-8601.
+
+    A naive datetime is read as UTC, so the same call means the same instant
+    on every machine.
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        moment = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    parsed = _optional_text(value, field)
+    if parsed is not None and len(parsed) > MAX_QUERY_TIMESTAMP_LENGTH:
+        raise _invalid(field, f"must be at most {MAX_QUERY_TIMESTAMP_LENGTH} characters")
     return parsed
 
 
@@ -441,6 +482,11 @@ def _default_transport(
             "Bilinc Cloud returned invalid JSON",
             code="invalid_response",
         ) from exc
+
+
+def _is_response_too_large(error: BilincCloudError) -> bool:
+    details = getattr(error, "details", None)
+    return isinstance(details, dict) and details.get("reason") == "response_too_large"
 
 
 @dataclass(slots=True)
@@ -597,6 +643,153 @@ class CloudClient:
             payload,
             idempotency_key=_optional_text(idempotency_key, "idempotency_key"),
         )
+
+    def confirm(
+        self,
+        key: str,
+        *,
+        expected_version: str | None = None,
+        reason: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Record that an existing memory is still accurate.
+
+        The value stays exactly as stored; only its last-updated time moves to
+        now, and history records the step as a confirmation rather than an
+        edit. Costs one write operation. Pass ``expected_version`` to get
+        ``version_conflict`` if the memory changed since you read it.
+        """
+
+        payload: dict[str, Any] = {"key": _require_key(key)}
+        _put_optional(payload, "expectedVersion", _optional_text(expected_version, "expected_version"))
+        _put_optional(payload, "reason", _optional_text(reason, "reason"))
+
+        return self._post(
+            "/api/cloud/memory/confirm",
+            payload,
+            idempotency_key=_optional_text(idempotency_key, "idempotency_key"),
+        )
+
+    def history(self, key: str, *, limit: int = 20, values: str = "full") -> dict[str, Any]:
+        """Return one memory's recorded changes, newest first.
+
+        Read-only and not billed. Each entry carries the operation, when it
+        happened, the recorded reason and source, and (unless ``values`` is
+        ``"none"``) the value before and after. Values recorded before the
+        memory was forgotten are never returned.
+        """
+
+        return self._read(
+            "/api/cloud/memory/history",
+            {
+                "key": _require_key(key),
+                "limit": _require_limit(limit, "limit", MAX_HISTORY_LIMIT),
+                "values": _require_choice(values, "values", VALUE_MODES),
+            },
+        )
+
+    def list_memories(
+        self,
+        *,
+        prefix: str | None = None,
+        memory_type: str | None = None,
+        updated_after: datetime | str | None = None,
+        updated_before: datetime | str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+        values: str = "preview",
+    ) -> dict[str, Any]:
+        """Return one page of stored memories, ordered by key.
+
+        Read-only and not billed. ``total`` counts every memory matching the
+        filters; pass ``nextCursor`` back as ``cursor`` for the next page, or
+        use :meth:`iter_memories` to walk every page.
+        """
+
+        payload: dict[str, Any] = {
+            "limit": _require_limit(limit, "limit", MAX_LIST_LIMIT),
+            "values": _require_choice(values, "values", VALUE_MODES),
+        }
+        # Not stripped: a trailing space is part of the prefix ("note " is not "note").
+        _put_optional(payload, "prefix", _optional_raw_text(prefix, "prefix"))
+        if memory_type is not None:
+            payload["memoryType"] = _require_memory_type(memory_type)
+        _put_optional(payload, "updatedAfter", _optional_timestamp(updated_after, "updated_after"))
+        _put_optional(payload, "updatedBefore", _optional_timestamp(updated_before, "updated_before"))
+        _put_optional(payload, "cursor", _optional_text(cursor, "cursor"))
+
+        return self._read("/api/cloud/memory/list", payload)
+
+    def iter_memories(
+        self,
+        *,
+        prefix: str | None = None,
+        memory_type: str | None = None,
+        updated_after: datetime | str | None = None,
+        updated_before: datetime | str | None = None,
+        page_size: int = MAX_LIST_LIMIT,
+        values: str = "preview",
+        cursor: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield every stored memory matching the filters, page by page.
+
+        Starts after ``cursor`` when one is given. With ``values="full"`` a
+        page too large for one response is fetched again in smaller pages,
+        and the walk steps back up one size after each page that fits; Bilinc
+        Cloud always returns a single entry whole, so it never fails on size.
+        """
+
+        sizes = sorted({page_size, min(page_size, 10), 1}, reverse=True)
+        size_index = 0
+        seen: set[str] = set()
+        while True:
+            try:
+                page = self.list_memories(
+                    prefix=prefix,
+                    memory_type=memory_type,
+                    updated_after=updated_after,
+                    updated_before=updated_before,
+                    cursor=cursor,
+                    limit=sizes[size_index],
+                    values=values,
+                )
+            except BilincValidationError as exc:
+                if not _is_response_too_large(exc) or size_index == len(sizes) - 1:
+                    raise
+                size_index += 1
+                continue
+            # Step back up after a page that fit, so one large value does not
+            # leave the rest of the walk at one entry per request.
+            size_index = max(0, size_index - 1)
+            entries = page.get("entries")
+            yield from entries if isinstance(entries, list) else []
+            next_cursor = page.get("nextCursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                return
+            if next_cursor in seen:
+                raise BilincCloudError(
+                    "Bilinc Cloud returned a repeated list cursor",
+                    code="invalid_response",
+                )
+            seen.add(next_cursor)
+            cursor = next_cursor
+
+    def export(
+        self,
+        *,
+        prefix: str | None = None,
+        memory_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Return every stored memory with its full value, as one JSON-ready dict.
+
+        Pages through :meth:`iter_memories`; reads are not billed. Every
+        exported memory carries its full value. History is not included; use
+        :meth:`history` per key for that.
+        """
+
+        exported_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        entries = list(self.iter_memories(prefix=prefix, memory_type=memory_type, values="full"))
+        return {"exported_at": exported_at, "count": len(entries), "entries": entries}
 
     def snapshot(
         self,
@@ -834,6 +1027,8 @@ __all__ = [
     "INSTALL_URL",
     "load_config_api_key",
     "MAX_DIFF_LIMIT",
+    "MAX_HISTORY_LIMIT",
+    "MAX_LIST_LIMIT",
     "MAX_RECALL_LIMIT",
     "MAX_SNAPSHOT_LIST_LIMIT",
     "MEMORY_TYPES",
@@ -842,4 +1037,5 @@ __all__ = [
     "REVISION_STRATEGIES",
     "save_config_api_key",
     "SIGNUP_URL",
+    "VALUE_MODES",
 ]
