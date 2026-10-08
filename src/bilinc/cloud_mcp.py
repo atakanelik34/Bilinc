@@ -323,8 +323,10 @@ def build_server():
         """Show the recorded changes to one memory key, newest first.
 
         Read-only and free. Each entry has the operation (create, update,
-        confirm, forget, rollback and others), its time, the recorded reason
-        and source, and the value before and after unless `values` is "none".
+        confirm, forget or delete), its time, the recorded reason and source,
+        and the value before and after unless `values` is "none". A change
+        made by a rollback keeps its create, update or delete operation and
+        also carries `rollbackSnapshotId`.
         Values recorded before a memory was forgotten are not returned.
         `exists` is false when the key is not currently stored.
         """
