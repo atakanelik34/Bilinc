@@ -2,16 +2,22 @@
 
 All notable changes to Bilinc.
 
-## 2.3.8 (unreleased)
+## [2.3.8] — 2026-10-08
 
 ### Added
 
 - Review what Bilinc remembers. Bilinc Cloud can list the memories a project stores (ordered by key, with prefix, memory type and updated-time filters, page by page with a total count), show one memory's recorded changes newest first with the value before and after, and confirm that a memory is still accurate without resending its value. Listing and history are reads and are not billed; confirming costs one write.
-- Forgetting a memory also removes its earlier values from history; history still shows that the change happened and the recorded reason.
+- History never returns values recorded before a memory was forgotten; it still shows that the change happened and the recorded reason.
 - SDK: `CloudClient.list_memories()`, `iter_memories()`, `history()`, `confirm()` and `export()`, which returns every stored memory with its full value.
 - CLI: `bilinc list`, `bilinc history`, `bilinc confirm` and `bilinc export` (`-o` writes a file readable only by its owner).
 - MCP adapter: `list_memories` and `history` (read-only) and `confirm`, with read-only and destructive hints on each.
 - The SDK publishes the `memory_exists` and `capability_unavailable` error codes, which Bilinc Cloud already returns.
+
+### Changed
+
+- The MCP adapter needs `mcp` 1.10.0 or newer (tool titles and annotations).
+- The website dashboard can browse a workspace's memory read-only and export it as JSON.
+- Align the SDK, CLI, PyPI package, hosted website and MCP Registry release versions at 2.3.8.
 
 ## [2.3.7] — 2026-10-08
 
