@@ -184,13 +184,26 @@ def encode_cursor(key: str) -> str:
     return base64.urlsafe_b64encode(key.encode("utf-8")).decode("ascii").rstrip("=")
 
 
+_CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
 def decode_cursor(cursor: str) -> str:
-    """Decode a list cursor; anything malformed is a caller error, not a 500."""
+    """Decode a list cursor; anything malformed is a caller error, not a 500.
+
+    The decoder silently skips characters outside the alphabet, which would
+    turn junk into an empty key and restart the listing. Only cursors this
+    module could have produced are accepted.
+    """
+    if not _CURSOR_PATTERN.match(cursor or ""):
+        raise ValueError("invalid_cursor")
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
-        return base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        key = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
     except (ValueError, UnicodeError) as exc:
         raise ValueError("invalid_cursor") from exc
+    if not key or encode_cursor(key) != cursor:
+        raise ValueError("invalid_cursor")
+    return key
 
 
 def _audit_json(raw: Any) -> Any:
@@ -495,17 +508,22 @@ class ProjectRuntimeManager:
             raise ValueError("invalid_request")
 
         bound = max(1, int(limit))
-        # One extra row tells us whether older history exists, and lets the
-        # paired FORGET rows collapse without shortening the page.
-        rows = plane.audit.get_history(key, limit=bound + 2)
-        records = history_records(rows, values=values)
+        # Paired FORGET rows collapse into one event, so a page of raw rows can
+        # hold fewer events than asked for. Widen the fetch until one event
+        # past the page is visible, or the key's history is exhausted.
+        fetch = bound + 2
+        while True:
+            rows = plane.audit.get_history(key, limit=fetch)
+            records = history_records(rows, values=values)
+            if len(records) > bound or len(rows) < fetch:
+                break
+            fetch *= 2
         exists = plane.backend is not None and await plane.backend.load(key) is not None
         result = {
             "key": key,
             "exists": exists,
             "entries": records[:bound],
-            # A full fetch may still hide older rows behind a collapsed pair.
-            "truncated": len(records) > bound or len(rows) >= bound + 2,
+            "truncated": len(records) > bound,
             "values": values,
         }
         # One entry is always returned whole, so a caller can always page down
@@ -686,6 +704,11 @@ class ProjectRuntimeManager:
         """
         from bilinc.adaptive.agm_engine import ConflictStrategy
         from bilinc.core.models import MemoryEntry
+
+        # The backend is the source of truth. A rollback restores entries in
+        # the backend only, so the in-memory belief can still hold a newer,
+        # more entrenched value that would make AGM reject this revision.
+        plane.agm_engine.belief_state.add_belief(MemoryEntry.from_dict(dict(previous_state)))
 
         try:
             conflict_strategy = ConflictStrategy(strategy)

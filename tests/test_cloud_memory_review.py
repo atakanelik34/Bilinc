@@ -319,3 +319,58 @@ def _assert_single_entries_come_back_whole(client, project, big):
     one_change = _post(client, project, "history", {"key": "big.one", "limit": 1})
     assert one_change.status_code == 200
     assert one_change.json()["entries"][0]["after"] == big
+
+
+def test_confirm_works_on_an_entry_restored_by_rollback(sidecar):
+    """Rollback restores the backend only; confirm must not trip on the stale belief."""
+    project = str(uuid4())
+    _commit(sidecar, project, "plan", "old plan", importance=0.2)
+    snapshot = _post(sidecar, project, "snapshots", {"label": "before"}).json()["snapshot"]["id"]
+    assert _post(sidecar, project, "revise", {"key": "plan", "value": "new plan", "importance": 1.0}).status_code == 200
+    preview = _post(sidecar, project, "rollback/preview", {"snapshot_id": snapshot}).json()
+    restored = _post(
+        sidecar,
+        project,
+        "rollback",
+        {"snapshot_id": snapshot, "reason": "undo", "expected_current_root": preview["current_root_hash"]},
+    )
+    assert restored.status_code == 200, restored.text
+
+    confirmed = _post(sidecar, project, "confirm", {"key": "plan"})
+
+    assert confirmed.status_code == 200, confirmed.text
+    listed = _post(sidecar, project, "memories", {"values": "full"}).json()["entries"][0]
+    assert listed["value"] == "old plan"
+    assert _post(sidecar, project, "history", {"key": "plan", "limit": 1}).json()["entries"][0]["op"] == "confirm"
+
+
+def test_history_pages_count_events_not_raw_rows(sidecar):
+    """Each forget writes two rows; pages must still fill with logical events."""
+    project = str(uuid4())
+    for cycle in range(6):
+        _commit(sidecar, project, "cycled", f"v{cycle}")
+        _post(sidecar, project, "forget", {"key": "cycled", "reason": f"cycle {cycle}"})
+
+    page = _post(sidecar, project, "history", {"key": "cycled", "limit": 8, "values": "none"}).json()
+
+    assert len(page["entries"]) == 8
+    assert page["truncated"] is True
+    everything = _post(sidecar, project, "history", {"key": "cycled", "limit": 100, "values": "none"}).json()
+    assert [entry["op"] for entry in everything["entries"]] == ["forget", "create"] * 6
+    assert everything["truncated"] is False
+
+
+@pytest.mark.parametrize("cursor", ["%%%", "a", "abc=", "YQ==", "YQ", "Y Q"])
+def test_list_rejects_cursors_it_could_not_have_issued(sidecar, cursor):
+    project = str(uuid4())
+    _commit(sidecar, project, "a", 1)
+    _commit(sidecar, project, "b", 2)
+
+    response = _post(sidecar, project, "memories", {"cursor": cursor})
+
+    if cursor == "YQ":  # the canonical cursor for key "a"
+        assert response.status_code == 200
+        assert [entry["key"] for entry in response.json()["entries"]] == ["b"]
+    else:
+        assert response.status_code == 400, cursor
+        assert response.json()["detail"] == "invalid_cursor"
