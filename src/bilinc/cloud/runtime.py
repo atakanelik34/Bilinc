@@ -269,6 +269,19 @@ def history_records(rows: list[Any], *, values: str) -> list[dict[str, Any]]:
     return records
 
 
+#: The fields a rollback changes. Access counters and timestamps that a plain
+#: read may touch are deliberately left out.
+_BELIEF_IDENTITY_FIELDS = ("value", "memory_type", "importance", "updated_at")
+
+
+def _belief_is_stale(cached: Any, persisted_state: dict[str, Any]) -> bool:
+    """Whether the in-memory belief no longer matches the persisted entry."""
+    if cached is None:
+        return True
+    cached_state = cached.to_dict()
+    return any(cached_state.get(name) != persisted_state.get(name) for name in _BELIEF_IDENTITY_FIELDS)
+
+
 @dataclass(frozen=True)
 class ProjectSnapshot:
     """Persisted project snapshot metadata.
@@ -708,9 +721,12 @@ class ProjectRuntimeManager:
         # The backend is the source of truth. A rollback restores entries in
         # the backend only, so the in-memory belief and its entrenchment can
         # still reflect a newer, more entrenched value that would make AGM
-        # judge this revision against state that no longer exists.
-        plane.agm_engine.belief_state.add_belief(MemoryEntry.from_dict(dict(previous_state)))
-        plane.agm_engine.set_entrenchment(key, float(previous_state.get("importance", 0.5)))
+        # judge this revision against state that no longer exists. Reconcile
+        # only then: in normal iterated revision AGM deliberately keeps the
+        # higher entrenchment of a replaced belief, and that must survive.
+        if _belief_is_stale(plane.agm_engine.belief_state.get_belief(key), previous_state):
+            plane.agm_engine.belief_state.add_belief(MemoryEntry.from_dict(dict(previous_state)))
+            plane.agm_engine.set_entrenchment(key, float(previous_state.get("importance", 0.5)))
 
         try:
             conflict_strategy = ConflictStrategy(strategy)

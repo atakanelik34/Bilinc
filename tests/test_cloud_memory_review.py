@@ -410,3 +410,20 @@ def test_revise_after_rollback_is_judged_against_the_restored_entry(sidecar):
     assert revised.status_code == 200 and revised.json()["success"] is True, revised.text
     listed = _post(sidecar, project, "memories", {"values": "full"}).json()["entries"][0]
     assert listed["value"] == "v3"
+
+
+def test_iterated_revision_keeps_agm_entrenchment_outside_rollback(sidecar):
+    """A recency revision keeps the replaced belief's entrenchment (AGM max rule)."""
+    project = str(uuid4())
+    _commit(sidecar, project, "policy", "a", importance=1.0)
+    first = _post(sidecar, project, "revise", {"key": "policy", "value": "b", "importance": 0.2, "strategy": "recency"})
+    assert first.json()["success"] is True
+
+    second = _post(
+        sidecar, project, "revise", {"key": "policy", "value": "c", "importance": 0.5, "strategy": "entrenchment"}
+    )
+
+    assert second.status_code == 200
+    assert second.json()["success"] is False
+    listed = _post(sidecar, project, "memories", {"values": "full"}).json()["entries"][0]
+    assert listed["value"] == "b"
