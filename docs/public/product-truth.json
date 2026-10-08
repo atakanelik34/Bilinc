@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "canonical_repository": "https://github.com/atakanelik34/Bilinc",
-  "source_commit": "9821ac84ca059d429ea82a242466177fe15060ee",
+  "source_commit": "970364de0f499e646c6f406fce8121efd9bcc4d1",
   "verified_at": "2026-10-08",
   "package": {
     "name": "bilinc",
