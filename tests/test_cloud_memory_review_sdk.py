@@ -460,3 +460,29 @@ def test_cli_export_tightens_an_existing_world_readable_file(cli, capsys, tmp_pa
 
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert json.loads(target.read_text())["count"] == 1
+
+
+def test_cli_export_keeps_the_old_file_when_writing_fails(cli, monkeypatch, tmp_path):
+    from bilinc.cli import main as cli_main
+
+    target = tmp_path / "existing.json"
+    target.write_text("previous export")
+
+    def broken_dumps(*_args, **_kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(cli_main.json, "dumps", broken_dumps)
+    with pytest.raises(RuntimeError):
+        cli_main._write_private_json(str(target), {"count": 0})
+
+    assert target.read_text() == "previous export"
+    assert [path.name for path in tmp_path.iterdir() if path.name.startswith(".bilinc-export-")] == []
+
+
+def test_cli_export_does_not_need_fchmod(cli, monkeypatch, tmp_path):
+    """Windows before Python 3.13 has no os.fchmod."""
+    monkeypatch.delattr(os, "fchmod", raising=False)
+    target = tmp_path / "out.json"
+
+    assert cli.main(["export", "-o", str(target)]) == 0
+    assert json.loads(target.read_text())["count"] == 1

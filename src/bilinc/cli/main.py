@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 import webbrowser
 from datetime import datetime
@@ -139,14 +141,25 @@ def _print_memories(
 
 
 def _write_private_json(path: str, payload: dict[str, Any]) -> None:
-    """Write an export owner-only: it holds the full memory contents."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    # The creation mode is ignored when the file already exists, so tighten an
-    # existing file before any memory content is written into it.
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, indent=2, ensure_ascii=False))
-        handle.write("\n")
+    """Write an export owner-only: it holds the full memory contents.
+
+    The content goes to a new temporary file (created 0600) beside the
+    target, which then atomically replaces it. An existing file at ``path``
+    keeps its old contents until the write has fully succeeded, and the
+    result never inherits a wider mode from the file it replaces. This avoids
+    ``os.fchmod``, which Windows lacks before Python 3.13.
+    """
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, temporary = tempfile.mkstemp(prefix=".bilinc-export-", suffix=".json", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, ensure_ascii=False))
+            handle.write("\n")
+        os.replace(temporary, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
+        raise
 
 
 def _client(args: argparse.Namespace) -> CloudClient:
