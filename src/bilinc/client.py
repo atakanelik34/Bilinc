@@ -470,6 +470,16 @@ def _default_transport(
         ) from exc
 
 
+#: Page sizes an export falls back through when a page of full values is too
+#: large for one response.
+_EXPORT_PAGE_SIZES = (100, 10, 1)
+
+
+def _is_response_too_large(error: BilincCloudError) -> bool:
+    details = getattr(error, "details", None)
+    return isinstance(details, dict) and details.get("reason") == "response_too_large"
+
+
 @dataclass(slots=True)
 class CloudClient:
     """Minimal Bilinc Cloud SDK client."""
@@ -750,8 +760,51 @@ class CloudClient:
         """
 
         exported_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        entries = list(self.iter_memories(prefix=prefix, memory_type=memory_type, values="full"))
+        entries: list[dict[str, Any]] = []
+        cursor: str | None = None
+        seen: set[str] = set()
+        while True:
+            page = self._export_page(prefix=prefix, memory_type=memory_type, cursor=cursor)
+            page_entries = page.get("entries")
+            entries.extend(page_entries if isinstance(page_entries, list) else [])
+            next_cursor = page.get("nextCursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                break
+            if next_cursor in seen:
+                raise BilincCloudError(
+                    "Bilinc Cloud returned a repeated list cursor",
+                    code="invalid_response",
+                )
+            seen.add(next_cursor)
+            cursor = next_cursor
         return {"exported_at": exported_at, "count": len(entries), "entries": entries}
+
+    def _export_page(
+        self,
+        *,
+        prefix: str | None,
+        memory_type: str | None,
+        cursor: str | None,
+    ) -> dict[str, Any]:
+        """Fetch one export page, shrinking it when its values are too large.
+
+        A single value too large to return on its own is exported without its
+        value and marked ``valueOmitted``, never silently dropped.
+        """
+
+        for page_size in _EXPORT_PAGE_SIZES:
+            try:
+                return self.list_memories(
+                    prefix=prefix, memory_type=memory_type, cursor=cursor, limit=page_size, values="full"
+                )
+            except BilincValidationError as exc:
+                if not _is_response_too_large(exc):
+                    raise
+        page = self.list_memories(prefix=prefix, memory_type=memory_type, cursor=cursor, limit=1, values="none")
+        entries = page.get("entries")
+        if isinstance(entries, list):
+            page["entries"] = [{**entry, "valueOmitted": True} for entry in entries if isinstance(entry, dict)]
+        return page
 
     def snapshot(
         self,

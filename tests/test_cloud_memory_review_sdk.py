@@ -155,6 +155,58 @@ def test_export_pages_with_full_values():
     assert all(call["body"]["limit"] == 100 for call in transport.calls)
 
 
+def _too_large():
+    from bilinc.client import error_for_response
+
+    return error_for_response(
+        400,
+        {"error": "invalid_request", "message": "too large", "details": {"reason": "response_too_large"}},
+    )
+
+
+def test_export_retries_an_oversized_page_with_smaller_pages():
+    transport = RecordingTransport(
+        _too_large(),
+        {"entries": [{"key": "a", "value": "x" * 10}], "nextCursor": None},
+    )
+
+    exported = _client(transport).export()
+
+    assert exported["count"] == 1
+    assert [call["body"]["limit"] for call in transport.calls] == [100, 10]
+    assert "valueOmitted" not in exported["entries"][0]
+
+
+def test_export_keeps_a_value_too_large_for_one_response_as_a_marked_key():
+    transport = RecordingTransport(
+        _too_large(),
+        _too_large(),
+        _too_large(),
+        {"entries": [{"key": "huge"}], "nextCursor": None},
+    )
+
+    exported = _client(transport).export()
+
+    assert exported["entries"] == [{"key": "huge", "valueOmitted": True}]
+    assert [(call["body"]["limit"], call["body"]["values"]) for call in transport.calls] == [
+        (100, "full"),
+        (10, "full"),
+        (1, "full"),
+        (1, "none"),
+    ]
+
+
+def test_export_does_not_swallow_other_validation_errors():
+    from bilinc import BilincValidationError
+    from bilinc.client import error_for_response
+
+    transport = RecordingTransport(error_for_response(400, {"error": "invalid_request", "message": "bad cursor"}))
+
+    with pytest.raises(BilincValidationError):
+        _client(transport).export()
+    assert len(transport.calls) == 1
+
+
 def test_confirm_is_a_single_shot_write_with_optional_fields():
     transport = RecordingTransport({"success": True, "confirmed": True})
 
