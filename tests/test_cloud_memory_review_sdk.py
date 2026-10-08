@@ -324,7 +324,7 @@ def test_cli_history_prints_a_compact_timeline(cli, capsys):
     assert "team.deploy_day  (3 shown, newest first)" in out
     assert "2026-10-08 12:00:02  update    tuesday -> thursday  reason: moved  source: claude" in out
     assert "confirm" in out
-    assert "(value removed when the memory was forgotten)" in out
+    assert "(value not shown: the memory was forgotten)" in out
     assert "older changes not shown" in out
     assert FakeClient.instances[0].calls == [("history", "team.deploy_day", 3, "full")]
 

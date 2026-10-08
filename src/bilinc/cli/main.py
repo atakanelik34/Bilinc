@@ -71,7 +71,7 @@ def _print_history(payload: dict[str, Any]) -> None:
         op = str(entry.get("op", "?"))
         line = f"  {_short_time(entry.get('at'))}  {op:<8}"
         if entry.get("valuesRedacted"):
-            line += "  (value removed when the memory was forgotten)"
+            line += "  (value not shown: the memory was forgotten)"
         elif "before" in entry and "after" in entry and op != "confirm":
             line += f"  {_short_value(entry['before'], 30)} -> {_short_value(entry['after'], 30)}"
         elif "after" in entry:
