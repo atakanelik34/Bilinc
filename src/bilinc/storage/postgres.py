@@ -937,6 +937,7 @@ class PostgresBackend(StorageBackend):
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM bilinc_entries ORDER BY importance DESC, created_at DESC")
             return [self._row_to_entry(r) for r in rows]
+
     @staticmethod
     def _page_filters(
         prefix: Optional[str],

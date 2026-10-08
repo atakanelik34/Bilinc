@@ -724,6 +724,13 @@ class ProjectRuntimeManager:
         from bilinc.adaptive.agm_engine import ConflictStrategy
         from bilinc.core.models import MemoryEntry
 
+        # Validate before touching the cached belief, so a malformed request
+        # never resets it.
+        try:
+            conflict_strategy = ConflictStrategy(strategy)
+        except ValueError as exc:
+            raise ValueError("invalid_request") from exc
+
         # The backend is the source of truth. A rollback restores entries in
         # the backend only, so the in-memory belief and its entrenchment can
         # still reflect a newer, more entrenched value that would make AGM
@@ -737,11 +744,6 @@ class ProjectRuntimeManager:
         plane.agm_engine.belief_state.add_belief(MemoryEntry.from_dict(dict(previous_state)))
         if _belief_is_stale(cached, previous_state):
             plane.agm_engine.set_entrenchment(key, float(previous_state.get("importance", 0.5)))
-
-        try:
-            conflict_strategy = ConflictStrategy(strategy)
-        except ValueError as exc:
-            raise ValueError("invalid_request") from exc
 
         entry_data = dict(previous_state)
         entry_data.update(
