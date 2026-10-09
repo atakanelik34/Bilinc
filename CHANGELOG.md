@@ -2,6 +2,14 @@
 
 All notable changes to Bilinc.
 
+## [2.3.9] — 2026-10-09
+
+### Changed
+
+- Align the SDK, CLI, PyPI package, hosted website and MCP Registry release versions at 2.3.9. The SDK API, storage and protocol contracts are unchanged.
+- Hosted website: clearer page titles and descriptions, links from the home page to the comparison and guide pages, and structured data that names Bilinc's public profiles.
+- README: the stdio adapter has eleven tools.
+
 ## [2.3.8] — 2026-10-08
 
 ### Added
