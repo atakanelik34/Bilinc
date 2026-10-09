@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "canonical_repository": "https://github.com/atakanelik34/Bilinc",
-  "source_commit": "970364de0f499e646c6f406fce8121efd9bcc4d1",
-  "verified_at": "2026-10-08",
+  "source_commit": "6618f65258496b0e7c72100e570a116ee6ceb2cc",
+  "verified_at": "2026-10-09",
   "package": {
     "name": "bilinc",
-    "version": "2.3.8",
+    "version": "2.3.9",
     "requires_python": ">=3.10",
     "license": "BUSL-1.1",
     "install": "pip install bilinc",
