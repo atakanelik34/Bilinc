@@ -85,7 +85,7 @@ async def test_latest_query_returns_newest_release_entry(tmp_path):
     for query in (
         "Clawifi latest live release version",
         "Clawifi current live release version",
-        "Clawifi son live release version",
+        "Clawifi guncel live release version",
     ):
         results = await plane.recall_intelligent(query, limit=5)
         assert results[0]["key"] == newest, (query, [r["key"] for r in results])
@@ -152,7 +152,9 @@ async def test_decay_pass_handles_text_updated_at_without_last_accessed(tmp_path
     assert report["pruned"] == 0
     refreshed = await backend.load("import:text-ts")
     assert refreshed.current_strength < 1.0
-    assert isinstance(refreshed.updated_at, float)
+    # The decay pass must not rewrite the write time that recall uses for recency.
+    assert entry_epoch(refreshed.updated_at) == entry_epoch("2026-05-19T09:00:00+00:00")
+    assert refreshed.metadata["decay"]["last_run"] == now
 
 
 @pytest.mark.asyncio
@@ -173,3 +175,43 @@ async def test_scheduled_decay_job_never_prunes(tmp_path):
 
     assert report["pruned"] == 0
     assert await backend.load("ancient:weak") is not None
+
+
+@pytest.mark.asyncio
+async def test_latest_order_survives_a_decay_pass(tmp_path):
+    plane, backend = await _plane(tmp_path, "latest-after-decay.sqlite")
+    await _seed_release_history(backend)
+    await plane.apply_decay_pass(prune=False)
+
+    results = await plane.recall_intelligent("Clawifi latest live release version", limit=5)
+
+    assert results[0]["key"] == "project:clawifi:release-1.3.0-live:2026-10-13"
+
+
+@pytest.mark.asyncio
+async def test_repeated_decay_passes_do_not_compound(tmp_path):
+    plane, backend = await _plane(tmp_path, "decay-twice.sqlite")
+    now = time.time()
+    entry = MemoryEntry(key="note:x", value="x", memory_type=MemoryType.SEMANTIC,
+                        created_at=now - 86400 * 10, updated_at=now - 86400 * 10, last_accessed=0.0)
+    entry.current_strength = 1.0
+    await backend.restore(entry)
+    await plane.apply_decay_pass(now=now, prune=False)
+    once = (await backend.load("note:x")).current_strength
+    await plane.apply_decay_pass(now=now, prune=False)
+    assert (await backend.load("note:x")).current_strength == once
+
+
+@pytest.mark.asyncio
+async def test_english_son_is_not_a_latest_marker(tmp_path):
+    plane, backend = await _plane(tmp_path, "family.sqlite")
+    now = time.time()
+    for key, value, age in (("family:son:name", "My son's name is Deniz.", 86400 * 30),
+                            ("family:daughter:name", "My daughter's name is Ada.", 3600)):
+        await backend.restore(MemoryEntry(key=key, value=value, memory_type=MemoryType.SEMANTIC,
+                                          created_at=now - age, updated_at=now - age))
+
+    keys = [r["key"] for r in await plane.recall_intelligent("what is my son's name", limit=5)]
+
+    assert "family:son:name" in keys
+    assert keys[0] == "family:son:name"

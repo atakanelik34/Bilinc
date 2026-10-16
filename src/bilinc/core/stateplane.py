@@ -142,8 +142,8 @@ class StatePlane:
             "present",
             "presently",
             "active",
-            # Turkish "son" (latest) and ASCII-folded "guncel" (current).
-            "son",
+            # ASCII-folded Turkish "guncel" (current). Turkish "son" is left out on purpose: it is
+            # also the English word "son" and would collapse unrelated family entries.
             "guncel",
         }
     )
@@ -1387,6 +1387,11 @@ class StatePlane:
             )
             if last_touch is None:
                 continue
+            # Decay already applied up to the previous run: count only the time since then.
+            # The pass never rewrites updated_at, which is the write time recall uses for recency.
+            previous_run = entry_epoch((entry.metadata or {}).get("decay", {}).get("last_run")) if isinstance(entry.metadata, dict) else None
+            if previous_run is not None and previous_run > last_touch:
+                last_touch = previous_run
             elapsed_days = max(0.0, (now - last_touch) / 86400.0)
             if elapsed_days <= 0:
                 continue
@@ -1409,7 +1414,6 @@ class StatePlane:
                 "phase": decay_meta.get("phase", "none"),
                 "ltp": decay_meta.get("ltp", "none"),
             }
-            entry.updated_at = now
 
             if prune and should_prune(new_strength, entry.memory_type.value):
                 removed = await self.backend.delete(entry.key)
