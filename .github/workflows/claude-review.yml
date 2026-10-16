@@ -38,7 +38,7 @@ jobs:
         if: steps.key.outputs.ready == 'true'
         uses: actions/checkout@v6
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Claude review
         if: steps.key.outputs.ready == 'true'
@@ -50,6 +50,10 @@ jobs:
             PR NUMBER: ${{ github.event.pull_request.number }}
 
             Review this pull request. The PR branch is checked out in the working directory.
+
+            Scope: the changes are exactly the output of `gh pr diff ${{ github.event.pull_request.number }}`.
+            Read that diff first and review only those changed lines, using the surrounding
+            code for context. Do not review files the diff does not touch.
 
             Report only real problems: bugs, security issues, data loss, broken API or data
             contracts, and changed behaviour without a test. Skip style and wording nits.
