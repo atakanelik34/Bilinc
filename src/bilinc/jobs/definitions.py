@@ -13,7 +13,9 @@ async def background_consolidation_job(plane: StatePlane) -> Dict[str, Any]:
 
 
 async def decay_pass_job(plane: StatePlane) -> Dict[str, Any]:
-    return await plane.apply_decay_pass(prune=True)
+    # Scheduled decay only updates strength. Pruning deletes memories from a
+    # shared store, so it stays an explicit owner decision, never a timer.
+    return await plane.apply_decay_pass(prune=False)
 
 
 async def kg_maintenance_job(plane: StatePlane) -> Dict[str, Any]:
