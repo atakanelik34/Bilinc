@@ -48,6 +48,24 @@ class PersistenceWriteError(RuntimeError):
     """Raised when a logical memory operation cannot be durably persisted."""
 
 
+def entry_epoch(value: Any) -> Optional[float]:
+    """Convert a stored timestamp (epoch number or ISO text) to epoch seconds.
+
+    Imported or synced rows may carry ISO-8601 text in REAL columns. Empty,
+    zero, and unparseable values are treated as absent.
+    """
+    parsed = parse_temporal_timestamp(value)
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed
+
+
+def _entry_recency(entry: MemoryEntry) -> float:
+    """Return the newest known write time of an entry, or 0.0."""
+    stamps = [entry_epoch(entry.updated_at), entry_epoch(entry.created_at)]
+    return max((stamp for stamp in stamps if stamp is not None), default=0.0)
+
+
 class StatePlane:
     """Phase 2: Full brain-inspired agent memory with verification."""
     AUTO_RECALL_IMPORTANCE_THRESHOLD = 0.7
@@ -115,7 +133,19 @@ class StatePlane:
     LEXICAL_NORMALIZED_MATCH_WEIGHT = 0.10
     LEXICAL_NORMALIZED_SPECIFICITY_WEIGHT = 0.05
     CURRENT_STATE_QUERY_MARKERS = frozenset(
-        {"current", "currently", "now", "latest", "newest", "present", "presently", "active"}
+        {
+            "current",
+            "currently",
+            "now",
+            "latest",
+            "newest",
+            "present",
+            "presently",
+            "active",
+            # Turkish "son" (latest) and ASCII-folded "guncel" (current).
+            "son",
+            "guncel",
+        }
     )
     CURRENT_STATE_QUERY_PREDICATES = frozenset(
         {
@@ -887,6 +917,7 @@ class StatePlane:
                 bucket["entity"] = boost
 
             self._apply_current_state_boost(query, fused_scores, candidates)
+            self._apply_latest_family_order(query, fused_scores, candidates)
             ranked_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]]
             claims_by_key = await self._active_claims_by_memory_key(ranked_keys) if explain else {}
             results = []
@@ -1349,7 +1380,13 @@ class StatePlane:
 
         for entry in entries:
             scanned += 1
-            last_touch = entry.last_accessed or entry.updated_at or entry.created_at
+            last_touch = (
+                entry_epoch(entry.last_accessed)
+                or entry_epoch(entry.updated_at)
+                or entry_epoch(entry.created_at)
+            )
+            if last_touch is None:
+                continue
             elapsed_days = max(0.0, (now - last_touch) / 86400.0)
             if elapsed_days <= 0:
                 continue
@@ -1816,12 +1853,6 @@ class StatePlane:
         }
         collapsed: set[str] = set()
 
-        def timestamp(entry: MemoryEntry) -> float:
-            try:
-                return max(float(entry.updated_at or 0.0), float(entry.created_at or 0.0))
-            except (TypeError, ValueError):
-                return 0.0
-
         for token in sorted(query_tokens):
             normalized_token = self._normalize_lexical_token(token)
             group = {
@@ -1852,7 +1883,7 @@ class StatePlane:
                     ):
                         expanded.add(key)
                         changed = True
-            newest_key = max(expanded, key=lambda key: (timestamp(candidates[key]), key))
+            newest_key = max(expanded, key=lambda key: (_entry_recency(candidates[key]), key))
             collapsed.update(expanded - {newest_key})
 
         if not collapsed:
@@ -2236,7 +2267,7 @@ class StatePlane:
             return
 
         timestamps = {
-            key: max(float(entry.updated_at or 0.0), float(entry.created_at or 0.0))
+            key: _entry_recency(entry)
             for key, entry in candidates.items()
             if key in fused_scores
         }
@@ -2271,6 +2302,69 @@ class StatePlane:
             future_dated = valid_at is not None and valid_at > now
             if explicitly_stale or future_dated:
                 fused_scores[key] -= 0.04
+
+    def _apply_latest_family_order(
+        self,
+        query: str,
+        fused_scores: Dict[str, float],
+        candidates: Dict[str, MemoryEntry],
+    ) -> None:
+        """Order one key family newest-first for multi-topic "latest" queries.
+
+        Queries such as "X latest live release version" name several topic
+        terms, so they skip the singular collapse and the small recency boost.
+        Versioned records (``...:release-1.2.0-live`` then
+        ``...:release-1.3.0-live``) then rank by lexical overlap and the
+        newest one can sink below older siblings. The family is anchored on
+        the topic terms found in the best-scoring hit's key; every candidate
+        in the full pool whose key and content both match the query, and
+        whose surface covers the anchor terms and at least half of the query
+        topics, joins it. Scores are permuted inside the family only, so
+        other memories keep their positions and no evidence is dropped.
+        """
+        if not fused_scores or not self._is_current_state_query(query):
+            return
+        if self._is_singular_current_state_query(query):
+            return
+        topics = {
+            self._normalize_lexical_token(token)
+            for token in self._current_state_topic_tokens(query)
+        }
+        if len(topics) < 2:
+            return
+
+        def matched(text: str) -> set[str]:
+            return topics & self._normalized_lexical_tokens(text)
+
+        top_key = max(fused_scores, key=lambda key: (fused_scores[key], key))
+        top_entry = candidates.get(top_key)
+        if top_entry is None:
+            return
+        anchor = matched(str(top_entry.key or ""))
+        if not anchor:
+            anchor = matched(self._retrieval_surface_text(top_entry))
+        if not anchor:
+            return
+        min_coverage = max(len(anchor), math.ceil(len(topics) / 2))
+
+        family = []
+        for key, entry in candidates.items():
+            if not matched(str(entry.key or "")) or not matched(str(entry.value or "")):
+                continue
+            surface = matched(self._retrieval_surface_text(entry))
+            if anchor <= surface and len(surface) >= min_coverage:
+                family.append(key)
+        if len(family) < 2:
+            return
+
+        scores = sorted((fused_scores.get(key, 0.0) for key in family), reverse=True)
+        newest_first = sorted(
+            family,
+            key=lambda key: (_entry_recency(candidates[key]), key),
+            reverse=True,
+        )
+        for key, score in zip(newest_first, scores):
+            fused_scores[key] = score
 
     def _compute_entity_boosts(
         self,
