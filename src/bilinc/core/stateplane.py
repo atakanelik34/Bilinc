@@ -1389,7 +1389,8 @@ class StatePlane:
                 continue
             # Decay already applied up to the previous run: count only the time since then.
             # The pass never rewrites updated_at, which is the write time recall uses for recency.
-            previous_run = entry_epoch((entry.metadata or {}).get("decay", {}).get("last_run")) if isinstance(entry.metadata, dict) else None
+            decay_state = entry.metadata.get("decay") if isinstance(entry.metadata, dict) else None
+            previous_run = entry_epoch(decay_state.get("last_run")) if isinstance(decay_state, dict) else None
             if previous_run is not None and previous_run > last_touch:
                 last_touch = previous_run
             elapsed_days = max(0.0, (now - last_touch) / 86400.0)

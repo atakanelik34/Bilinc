@@ -215,3 +215,16 @@ async def test_english_son_is_not_a_latest_marker(tmp_path):
 
     assert "family:son:name" in keys
     assert keys[0] == "family:son:name"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["x", None, [1], 5])
+async def test_decay_pass_tolerates_malformed_decay_metadata(tmp_path, bad):
+    plane, backend = await _plane(tmp_path, "decay-bad-meta.sqlite")
+    now = time.time()
+    entry = MemoryEntry(key="note:bad", value="x", memory_type=MemoryType.SEMANTIC,
+                        created_at=now - 86400 * 5, updated_at=now - 86400 * 5, last_accessed=0.0,
+                        metadata={"decay": bad})
+    await backend.restore(entry)
+    report = await plane.apply_decay_pass(now=now, prune=False)
+    assert report["scanned"] == 1
