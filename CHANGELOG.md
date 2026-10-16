@@ -2,6 +2,14 @@
 
 All notable changes to Bilinc.
 
+## [2.3.10] — 2026-10-16
+
+### Fixed
+
+- Align the SDK, CLI, PyPI package, hosted website and MCP Registry release versions at 2.3.10. The public SDK API and protocol contracts are unchanged.
+- Internal runtime: "latest/current" recall now returns the newest entry of a key family instead of an older sibling or a stale status entry.
+- Internal runtime: the decay pass no longer crashes on ISO text timestamps or malformed decay metadata, no longer rewrites `updated_at`, and counts elapsed time from its previous run. The scheduled decay job no longer prunes.
+
 ## [2.3.9] — 2026-10-09
 
 ### Changed
