@@ -2,6 +2,13 @@
 
 All notable changes to Bilinc.
 
+## [2.3.11] — 2026-10-16
+
+### Fixed
+
+- Align the SDK, CLI, PyPI package, hosted website and MCP Registry release versions at 2.3.11. The public SDK API and protocol contracts are unchanged.
+- Internal runtime: keyword recall sends every distinct question term to FTS5 (up to 64) instead of only the first ten, so questions that open with conversational filler still match on their content words.
+
 ## [2.3.10] — 2026-10-16
 
 ### Fixed
