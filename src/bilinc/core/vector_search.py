@@ -21,6 +21,9 @@ from threading import RLock
 import time
 from typing import Dict, List, Optional, Tuple
 
+# Upper bound on OR-ed terms in one FTS5 MATCH query.
+FTS_MAX_QUERY_TERMS = 64
+
 
 def serialize_float32(vector: List[float]) -> bytes:
     return struct.pack(f"{len(vector)}f", *vector)
@@ -417,8 +420,11 @@ class HybridSearch:
             # FTS5 treats punctuation and words such as ``OR`` as query
             # syntax. Tokenize and quote terms so normal user questions can
             # never turn a valid retrieval request into a parser error.
-            terms = re.findall(r"[\w]+", expanded, flags=re.UNICODE)
-            fts_query = " OR ".join(f'"{term}"' for term in terms[:10])
+            # Keep every distinct term (bounded): conversational questions open
+            # with filler ("I wanted to follow up on our previous conversation
+            # about ..."), so a short prefix cap dropped all content words.
+            terms = list(dict.fromkeys(re.findall(r"[\w]+", expanded, flags=re.UNICODE)))
+            fts_query = " OR ".join(f'"{term}"' for term in terms[:FTS_MAX_QUERY_TERMS])
             if not fts_query:
                 return []
             if allowed_rowids is None:

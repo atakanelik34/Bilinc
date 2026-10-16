@@ -50,6 +50,41 @@ def test_hybrid_search_handles_natural_question_punctuation(tmp_path):
     asyncio.run(scenario())
 
 
+def test_keyword_search_uses_content_words_after_a_long_conversational_preamble(tmp_path):
+    async def scenario():
+        backend = SQLiteBackend(str(tmp_path / "fts-preamble.sqlite"))
+        await backend.init()
+        # Filler sessions share the question's preamble words; the relevant one
+        # shares only its content words.
+        for i in range(5):
+            await backend.restore(
+                MemoryEntry(
+                    key=f"memory:filler{i}",
+                    value=f"I wanted to check back on our previous conversation, topic {i}.",
+                    memory_type=MemoryType.EPISODIC,
+                )
+            )
+        await backend.restore(
+            MemoryEntry(
+                key="memory:netflix",
+                value="Netflix documentary series covering binaural beats.",
+                memory_type=MemoryType.EPISODIC,
+            )
+        )
+        search = HybridSearch(backend._get_conn(), VectorStore(backend._get_conn()))
+        query = (
+            "I wanted to check back on our previous conversation about the Netflix "
+            "documentary on binaural beats you recommended?"
+        )
+        results = search.keyword_search(query, top_k=10)
+        ids = dict(backend._get_conn().execute("SELECT rowid, key FROM memories").fetchall())
+
+        assert "memory:netflix" in {ids[rowid] for rowid, _ in results}
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
 def test_semantic_search_reuses_corpus_matrix_and_invalidates_on_text_change(monkeypatch, tmp_path):
     np = pytest.importorskip("numpy")
     calls = {"documents": 0, "queries": 0}
