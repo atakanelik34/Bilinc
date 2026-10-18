@@ -111,16 +111,12 @@ def test_reranked_results_carry_scores_in_result_order(monkeypatch, tmp_path):
     assert results[0]["key"] == "m2" and scores == sorted(scores, reverse=True)
 
 
-def test_rerank_scores_raw_logits_and_caps_work_by_limit(monkeypatch):
-    import torch
-
+def test_rerank_caps_work_by_limit(monkeypatch):
     monkeypatch.setenv("BILINC_RERANK_MODEL", "fake/cross-encoder")
     model = KeywordCrossEncoder()
     monkeypatch.setattr(rerank, "_load_rerank_model", _loaded(model))
     keys = [f"k{i}" for i in range(100)]
     order, scores = rerank.rerank_keys("q", keys, lambda k: k, limit=1)
-    # a model whose config names no activation would otherwise get a sigmoid
-    assert isinstance(model.kwargs["activation_fct"], torch.nn.Identity)
     assert len(scores) == rerank.MIN_HEAD and order[rerank.MIN_HEAD:] == keys[rerank.MIN_HEAD:]
     order, scores = rerank.rerank_keys("q", keys, lambda k: k, limit=10)
     assert len(scores) == 10 * rerank.HEAD_PER_RESULT
@@ -146,3 +142,13 @@ def test_one_model_scores_one_batch_at_a_time(monkeypatch):
     for t in threads:
         t.join()
     assert peak[0] == 1
+
+
+def test_rerank_asks_for_raw_logits(monkeypatch):
+    torch = pytest.importorskip("torch")
+    monkeypatch.setenv("BILINC_RERANK_MODEL", "fake/cross-encoder")
+    model = KeywordCrossEncoder()
+    monkeypatch.setattr(rerank, "_load_rerank_model", _loaded(model))
+    rerank.rerank_keys("q", ["a", "b"], lambda k: k, limit=1)
+    # a model whose config names no activation would otherwise get a sigmoid
+    assert isinstance(model.kwargs["activation_fct"], torch.nn.Identity)

@@ -75,6 +75,15 @@ def _load_rerank_model(model_name: str, device: str, revision: str) -> Optional[
         return model, _predict_locks[cache_key]
 
 
+def _raw_logits() -> Dict[str, object]:
+    """predict() arguments that return raw logits instead of the config's activation."""
+    try:
+        import torch
+    except ImportError:  # a real CrossEncoder cannot load without torch; test doubles can
+        return {}
+    return {"activation_fct": torch.nn.Identity()}
+
+
 def _clear_model_cache() -> None:
     with _lock:
         _models.clear()
@@ -120,11 +129,9 @@ def rerank_keys(
     model, predict_lock = loaded
     head = ordered_keys[: min(depth, max(MIN_HEAD, HEAD_PER_RESULT * max(1, int(limit))))]
     try:
-        import torch
-
         pairs = [(query, (text_of(key) or "")[:_MAX_DOCUMENT_CHARS]) for key in head]
         with predict_lock:
-            raw = model.predict(pairs, batch_size=32, show_progress_bar=False, activation_fct=torch.nn.Identity())
+            raw = model.predict(pairs, batch_size=32, show_progress_bar=False, **_raw_logits())
         scores = {key: float(score) for key, score in zip(head, raw)}
     except Exception as exc:  # noqa: BLE001 - scoring failure falls back to the fused order
         logger.warning("bilinc rerank scoring failed (%s); recall keeps the fused order", exc)
