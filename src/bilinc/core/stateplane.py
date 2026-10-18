@@ -30,6 +30,7 @@ from bilinc.core.dual_process import System1Engine, System2Engine, Arbiter
 from bilinc.core.verifier import StateVerifier
 from bilinc.core.audit import AuditTrail, OpType
 from bilinc.core.decay import compute_new_strength, should_prune
+from bilinc.core.rerank import rerank_config, rerank_keys
 from bilinc.core.temporal import (
     classify_temporal_query,
     entry_event_timestamp,
@@ -645,7 +646,15 @@ class StatePlane:
         try:
             from bilinc.core.entities import Entity, entity_from_raw, extract_entities_from_entry
 
-            if hasattr(self.backend, "delete_entity_mentions_for_memory_key"):
+            # Prune the entities this memory used to mention only after its new mentions
+            # are saved, so rewriting a memory keeps an entity it still mentions (with
+            # its aliases and metadata) instead of deleting and recreating it.
+            touched: List[str] = []
+            deferred_prune = hasattr(self.backend, "prune_orphan_entities")
+            if deferred_prune:
+                touched = await self.backend.entity_ids_for_memory_key(entry.key)
+                await self.backend.delete_entity_mentions_for_memory_key(entry.key, prune=False)
+            elif hasattr(self.backend, "delete_entity_mentions_for_memory_key"):
                 await self.backend.delete_entity_mentions_for_memory_key(entry.key)
 
             mentions = extract_entities_from_entry(entry)
@@ -657,10 +666,14 @@ class StatePlane:
                 if entity:
                     explicit_by_id[entity.id] = entity
 
-            for mention in mentions:
-                entity = explicit_by_id.get(mention.entity_id) or Entity(canonical_name=mention.mention_text)
-                await self.backend.save_entity(entity)
-                await self.backend.save_entity_mention(mention)
+            try:
+                for mention in mentions:
+                    entity = explicit_by_id.get(mention.entity_id) or Entity(canonical_name=mention.mention_text)
+                    await self.backend.save_entity(entity)
+                    await self.backend.save_entity_mention(mention)
+            finally:
+                if touched:
+                    await self.backend.prune_orphan_entities(touched)
         except Exception:
             logger.debug("entity projection failed", exc_info=True)
 
@@ -916,9 +929,44 @@ class StatePlane:
                 )
                 bucket["entity"] = boost
 
+            use_recency = valid_as_of is not None and self._recency_fusion_enabled()
+            rerank_cfg = rerank_config()
+            rerank_scores: Dict[str, float] = {}
+            relevance_scores: Dict[str, float] = {}
+            reordered_by: List[str] = []
+            if use_recency or rerank_cfg is not None:
+                # Optional reorderings work on the relevance order. If they change it, the
+                # fused scores are handed out again in the new order (same values, same
+                # gaps), so the current-state and latest-family preferences below keep
+                # their usual weight and each result's score matches its place. Results then
+                # report their own fused score as signals["fused"] and what moved them in
+                # "reordered_by", so the score and its signals can still be audited. If
+                # nothing changes (rerank off or failed, no ties), scores stay as they were.
+                base_order = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)]
+                new_order = base_order
+                if rerank_cfg is not None:
+                    new_order, rerank_scores = await asyncio.to_thread(
+                        rerank_keys,
+                        query,
+                        new_order,
+                        lambda key: self._rerank_text(candidates.get(key)),
+                        limit,
+                        rerank_cfg,
+                    )
+                if rerank_scores and new_order != base_order:
+                    reordered_by.append("rerank")
+                if use_recency:
+                    before_recency = new_order
+                    new_order = self._fuse_recency(new_order, candidates, valid_as_of, fused_scores, rerank_scores)
+                    if new_order != before_recency:
+                        reordered_by.append("recency")
+                if new_order != base_order:
+                    relevance_scores = dict(fused_scores)
+                    fused_scores = dict(zip(new_order, (fused_scores[key] for key in base_order)))
             self._apply_current_state_boost(query, fused_scores, candidates)
             self._apply_latest_family_order(query, fused_scores, candidates)
-            ranked_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]]
+            ordered_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)]
+            ranked_keys = ordered_keys[:limit]
             claims_by_key = await self._active_claims_by_memory_key(ranked_keys) if explain else {}
             results = []
             for key in ranked_keys:
@@ -952,6 +1000,13 @@ class StatePlane:
                         "entity": round(entry_signals.get("entity", 0.0), 6),
                     },
                 }
+                if key in rerank_scores:
+                    result["rerank_score"] = round(rerank_scores[key], 6)
+                if relevance_scores:
+                    result["signals"]["fused"] = round(relevance_scores.get(key, 0.0), 6)
+                    result["reordered_by"] = list(reordered_by)
+                if isinstance(entry.metadata, dict) and entry.metadata.get("source_key"):
+                    result["source_key"] = str(entry.metadata["source_key"])
                 if explain:
                     result.update(
                         self._recall_explain_envelope(
@@ -1256,6 +1311,118 @@ class StatePlane:
             return {str(k): self._redact_recall_explain_value(v, key_hint=str(k)) for k, v in value.items()}
         return value
 
+    RECENCY_FUSION_DEPTH = 200
+    RECENCY_TIE_TOLERANCE = 0.05  # fused scores within 5% count as an equally good match
+    RECENCY_LOGIT_TOLERANCE = 0.5  # cross-encoder logits within 0.5 count as an equally good match
+
+    @staticmethod
+    def _recency_fusion_enabled() -> bool:
+        """Opt-in (BILINC_RECALL_RECENCY_FUSION=1): as-of recall prefers what was current at that moment."""
+        return os.environ.get("BILINC_RECALL_RECENCY_FUSION", "").strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _rerank_text(entry: Any) -> str:
+        """The memory's own content for the cross-encoder (no key or metadata noise)."""
+        if entry is None:
+            return ""
+        value = entry.value
+        return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+
+    def _fuse_recency(
+        self,
+        ordered_keys: List[str],
+        candidates: Dict[str, Any],
+        as_of,
+        fused: Optional[Dict[str, float]] = None,
+        reranked: Optional[Dict[str, float]] = None,
+    ) -> List[str]:
+        """Let recency break ties among equally good matches, never override relevance.
+
+        The top RECENCY_FUSION_DEPTH results are split into groups of near-equal
+        relevance; groups keep their relevance order. Cross-encoder scores (unbounded
+        logits) tie within RECENCY_LOGIT_TOLERANCE of the group's first, fused scores
+        within RECENCY_TIE_TOLERANCE of it, and a result never ties across the two
+        kinds, so results past the rerank depth keep their fused relevance order.
+        Inside a group, results with an event time
+        at or before ``as_of`` come newest first, so a question asked at a moment sees
+        the value that was current then; results without an event time follow in
+        their original order. A weak match can never move above a better one.
+        """
+        head = ordered_keys[: self.RECENCY_FUSION_DEPTH]
+        if not head:
+            return ordered_keys
+        fused_scores, rerank_scores = fused or {}, reranked or {}
+
+        def tied(first: str, key: str) -> bool:
+            if (first in rerank_scores) != (key in rerank_scores):
+                return False
+            if key in rerank_scores:
+                return abs(rerank_scores[first] - rerank_scores[key]) <= self.RECENCY_LOGIT_TOLERANCE
+            lead = float(fused_scores.get(first, 0.0))
+            return abs(lead - float(fused_scores.get(key, 0.0))) <= self.RECENCY_TIE_TOLERANCE * abs(lead)
+
+        out: List[str] = []
+        group: List[str] = []
+
+        def flush() -> None:
+            dated, undated = [], []
+            for position, key in enumerate(group):
+                entry = candidates.get(key)
+                event_time = entry_event_timestamp(entry) if entry is not None else None
+                if event_time is not None and event_time <= as_of:
+                    dated.append((event_time, position, key))
+                else:
+                    undated.append(key)
+            out.extend(key for _, _, key in sorted(dated, key=lambda item: (-item[0], item[1])))
+            out.extend(undated)
+
+        for key in head:
+            if group and not tied(group[0], key):
+                flush()
+                group = []
+            group.append(key)
+        flush()
+        return out + ordered_keys[len(head):]
+
+    async def _load_any(self, key: str) -> Optional[MemoryEntry]:
+        entry = self.working_memory.get(key)
+        if entry is None and self.backend:
+            entry = await self.backend.load(key)
+        return entry
+
+    async def _attach_sources(self, results: List[Dict[str, Any]], query_timestamp: Optional[str] = None) -> None:
+        """Add {"key", "value"} of the memory named by each result's ``source_key``.
+
+        A source is attached only if this recall could have returned it itself: it
+        still exists (a forgotten source is gone), is recallable (not invalidated,
+        expired or superseded) and, for an as-of recall, is visible at that time.
+        Each source is loaded once per call.
+        """
+        cache: Dict[str, Optional[MemoryEntry]] = {}
+        # Same rule as recall: a timestamp that does not parse means a current recall.
+        as_of = query_timestamp if parse_temporal_timestamp(query_timestamp) is not None else None
+
+        async def visible(key: str) -> Optional[MemoryEntry]:
+            if key not in cache:
+                entry = await self._load_any(key)
+                if entry is not None and as_of is None and not self._is_recallable_entry(entry):
+                    entry = None
+                if entry is not None and as_of is not None:
+                    entry = self._filter_candidates_as_of({key: entry}, as_of).get(key)
+                cache[key] = entry
+            return cache[key]
+
+        seen: set[str] = set()
+        for result in results:
+            source_key = str(result.get("source_key") or "")  # set by recall from the recalled version
+            if not source_key or source_key == result.get("key"):
+                continue
+            source = await visible(source_key)
+            if source is None:
+                continue
+            result["source"] = {"key": source.key, "value": source.value, "repeated": source_key in seen}
+            seen.add(source_key)
+
     async def recall_reflective(
         self,
         query: str,
@@ -1265,8 +1432,13 @@ class StatePlane:
         memory_types: Optional[List[MemoryType]] = None,
         explain: bool = False,
         query_timestamp: Optional[str] = None,
+        expand_sources: bool = False,
     ) -> Dict[str, Any]:
         """
+        ``expand_sources=True`` attaches the source memory of each result that
+        names one in ``metadata["source_key"]`` (for example facts written by
+        ``bilinc.integrations.distill``), as ``result["source"]``.
+
         Reflection loop:
         1) run intelligent recall
         2) evaluate adequacy
@@ -1319,6 +1491,8 @@ class StatePlane:
                     results = next_results
                     adequacy = next_adequacy
 
+            if expand_sources:
+                await self._attach_sources(results, query_timestamp)
             payload = {
                 "query": query,
                 "final_query": current_query,
@@ -2747,10 +2921,8 @@ class StatePlane:
                 await self._restore_backend_entry(restored_entry)
                 if hasattr(self.backend, "delete_claims_for_memory_key"):
                     await self.backend.delete_claims_for_memory_key(key)
-                if hasattr(self.backend, "delete_entity_mentions_for_memory_key"):
-                    await self.backend.delete_entity_mentions_for_memory_key(key)
                 await self._project_claims_for_entry(restored_entry)
-                await self._project_entities_for_entry(restored_entry)
+                await self._project_entities_for_entry(restored_entry)  # replaces the mentions itself
                 self.working_memory.remove(key)
 
                 if self.enable_audit and self.audit:
