@@ -15,7 +15,11 @@ HEADERS = {"X-Bilinc-Sidecar-Token": "secret"}
 
 @pytest.fixture()
 def sidecar(tmp_path):
-    return TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+    # One client context keeps every request on the same portal thread; without it each
+    # request gets a new thread and the audit trail's SQLite connection may be used from
+    # a thread other than the one that opened it.
+    with TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret")) as client:
+        yield client
 
 
 def _commit(client, project, key, value, **extra):
