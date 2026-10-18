@@ -326,27 +326,57 @@ class SQLiteBackend(StorageBackend):
     async def delete(self, key: str) -> bool:
         conn = self._get_conn()
         conn.execute("DELETE FROM claims WHERE memory_key = ?", (key,))
+        touched = self._entity_ids_for_memory_key(conn, key)
         conn.execute("DELETE FROM entity_mentions WHERE memory_key = ?", (key,))
-        self._prune_orphan_entities(conn)
+        self._prune_orphan_entities(conn, touched)
         r = conn.execute("DELETE FROM memories WHERE key = ?", (key,))
         conn.commit()
         return r.rowcount > 0
 
     async def delete_entity_mentions_for_memory_key(self, memory_key: str) -> int:
         conn = self._get_conn()
+        touched = self._entity_ids_for_memory_key(conn, memory_key)
         cursor = conn.execute("DELETE FROM entity_mentions WHERE memory_key = ?", (memory_key,))
-        self._prune_orphan_entities(conn)
+        self._prune_orphan_entities(conn, touched)
         conn.commit()
         return cursor.rowcount
 
-    def _prune_orphan_entities(self, conn) -> int:
-        cursor = conn.execute(
-            """
-            DELETE FROM entities
-            WHERE id NOT IN (SELECT DISTINCT entity_id FROM entity_mentions)
-            """
-        )
-        return cursor.rowcount
+    @staticmethod
+    def _entity_ids_for_memory_key(conn, memory_key: str) -> list:
+        return [row[0] for row in conn.execute(
+            "SELECT DISTINCT entity_id FROM entity_mentions WHERE memory_key = ?", (memory_key,)
+        )]
+
+    def _prune_orphan_entities(self, conn, entity_ids=None) -> int:
+        """Delete entities with no remaining mentions.
+
+        With ``entity_ids`` only those candidates are checked (indexed lookups),
+        which keeps a write O(mentions of that memory) instead of a scan of every
+        entity and mention; without it the whole table is swept.
+        """
+        if entity_ids is None:
+            cursor = conn.execute(
+                """
+                DELETE FROM entities
+                WHERE id NOT IN (SELECT DISTINCT entity_id FROM entity_mentions)
+                """
+            )
+            return cursor.rowcount
+        removed = 0
+        ids = list(dict.fromkeys(entity_ids))
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            marks = ",".join("?" * len(chunk))
+            cursor = conn.execute(
+                f"""
+                DELETE FROM entities
+                WHERE id IN ({marks})
+                  AND NOT EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = entities.id)
+                """,
+                chunk,
+            )
+            removed += cursor.rowcount
+        return removed
 
     async def save_entity(self, entity) -> bool:
         from bilinc.core.entities import Entity
