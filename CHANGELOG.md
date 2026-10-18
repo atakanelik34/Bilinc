@@ -2,6 +2,19 @@
 
 All notable changes to Bilinc.
 
+## [2.4.0] — 2026-10-19
+
+### Added
+
+- Internal runtime: `bilinc.integrations.distill.commit_distilled` stores an exchange as an episodic source and each fact an agent distils from it as its own semantic memory that points back to the source, with the same timestamp. `recall_reflective(expand_sources=True)` attaches that source to each fact result. Searching distilled facts fits far more of a long conversation into a fixed recall budget while keeping the original wording one step away.
+- Internal runtime: opt-in recency fusion for as-of recall. With `BILINC_RECALL_RECENCY_FUSION=1`, a recall that carries a `query_timestamp` fuses its relevance order with how close each memory's event time is to that moment, so a question asked at a point in time sees the value that was current then. Off by default.
+- Internal runtime: opt-in cross-encoder reranking. `BILINC_RERANK_MODEL` names a local Sentence Transformers cross-encoder; the top `BILINC_RERANK_DEPTH` results (default 100) are rescored against the query. `BILINC_RERANK_DEVICE` and `BILINC_RERANK_MODEL_REVISION` are optional. Off by default; recall falls back to the fused order if the model cannot be loaded.
+
+### Fixed
+
+- Align the SDK, CLI, PyPI package, hosted website and MCP Registry release versions at 2.4.0. The public SDK API and protocol contracts are unchanged; the PyPI package still ships only the cloud SDK, CLI and MCP adapter.
+- Internal runtime (SQLite): removing a memory's entity mentions no longer sweeps every entity against every mention to find orphans. Only the entities those mentions pointed at are checked, so writes stay constant-time as a store grows instead of slowing ingest quadratically.
+
 ## [2.3.11] — 2026-10-16
 
 ### Fixed
