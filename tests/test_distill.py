@@ -93,6 +93,9 @@ def test_invalidated_source_is_not_attached(tmp_path):
 
     hits = _source_case(tmp_path, "i.sqlite", invalidate)
     assert hits and "source" not in hits[0]
+    for unparseable in ("", "garbage"):  # recall treats these as a current recall, and so do sources
+        hits = _source_case(tmp_path, f"i{len(unparseable)}.sqlite", invalidate, query_timestamp=unparseable)
+        assert hits and "source" not in hits[0]
 
 
 def test_source_after_the_as_of_time_is_not_attached(tmp_path):

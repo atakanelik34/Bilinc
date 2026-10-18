@@ -1399,14 +1399,16 @@ class StatePlane:
         Each source is loaded once per call.
         """
         cache: Dict[str, Optional[MemoryEntry]] = {}
+        # Same rule as recall: a timestamp that does not parse means a current recall.
+        as_of = query_timestamp if parse_temporal_timestamp(query_timestamp) is not None else None
 
         async def visible(key: str) -> Optional[MemoryEntry]:
             if key not in cache:
                 entry = await self._load_any(key)
-                if entry is not None and query_timestamp is None and not self._is_recallable_entry(entry):
+                if entry is not None and as_of is None and not self._is_recallable_entry(entry):
                     entry = None
-                if entry is not None and query_timestamp is not None:
-                    entry = self._filter_candidates_as_of({key: entry}, query_timestamp).get(key)
+                if entry is not None and as_of is not None:
+                    entry = self._filter_candidates_as_of({key: entry}, as_of).get(key)
                 cache[key] = entry
             return cache[key]
 
