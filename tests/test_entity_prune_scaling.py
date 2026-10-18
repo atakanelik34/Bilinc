@@ -92,7 +92,7 @@ def test_store_open_sweeps_once_and_keeps_recent_entities(tmp_path):
         await first.init()
         conn = first._get_conn()
         conn.execute("INSERT INTO entities (id, canonical_name, created_at, updated_at) VALUES ('old', 'Old', 0, 0)")
-        conn.execute("INSERT INTO entities (id, canonical_name, created_at, updated_at) VALUES ('new', 'New', strftime('%s','now'), 0)")
+        conn.execute("INSERT INTO entities (id, canonical_name, created_at, updated_at) VALUES ('new', 'New', 0, strftime('%s','now'))")
         conn.execute("DELETE FROM maintenance")  # as if this database predates the sweep
         conn.commit()
         second = SQLiteBackend(path)
@@ -108,3 +108,40 @@ def test_store_open_sweeps_once_and_keeps_recent_entities(tmp_path):
     after_first_sweep, after_reopen = asyncio.run(go())
     assert after_first_sweep == {"new"}  # the old orphan went; one another process may still link stayed
     assert "old2" in after_reopen  # later opens do not sweep again
+
+
+def test_entity_being_relinked_survives_a_sweep(tmp_path):
+    async def go():
+        plane = _plane(tmp_path, "r.sqlite")
+        await plane.init()
+        await plane.commit("a", "Charles Babbage designed the Analytical Engine.", MemoryType.SEMANTIC)
+        conn = plane.backend._get_conn()
+        conn.execute("UPDATE entities SET created_at = 0, updated_at = 0")  # saved long ago
+        conn.commit()
+        # another process is mid-rewrite: mentions removed, not yet re-added
+        await plane.backend.delete_entity_mentions_for_memory_key("a", prune=False)
+        removed = await plane.backend.sweep_orphan_entities()
+        return removed, conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+
+    removed, left = asyncio.run(go())
+    assert removed == 0 and left > 0
+
+
+def test_rollback_keeps_entity_aliases(tmp_path):
+    async def go():
+        plane = StatePlane(backend=SQLiteBackend(str(tmp_path / "b.sqlite")), enable_verification=False, enable_audit=True)
+        await plane.init()
+        await plane.commit("a", "Charles Babbage designed the Analytical Engine.", MemoryType.SEMANTIC)
+        import time as _t
+        mark = _t.time()
+        _t.sleep(0.01)
+        await plane.commit("a", "Charles Babbage designed the Analytical Engine in London.", MemoryType.SEMANTIC)
+        conn = plane.backend._get_conn()
+        ids = [r[0] for r in conn.execute("SELECT id FROM entities WHERE canonical_name LIKE '%Babbage%'")]
+        await plane.backend.add_entity_alias(ids[0], "the engine man")
+        await plane.rollback(mark)
+        row = conn.execute("SELECT aliases FROM entities WHERE id = ?", (ids[0],)).fetchone()
+        return row
+
+    row = asyncio.run(go())
+    assert row is not None and "the engine man" in row[0]

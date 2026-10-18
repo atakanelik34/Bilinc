@@ -30,8 +30,8 @@ class SQLiteBackend(StorageBackend):
     """
 
     SCHEMA_VERSION = 1
-    # A full sweep leaves recent entities alone: another process may have saved one
-    # and not yet linked its mention.
+    # A full sweep leaves recently saved or relinked entities alone (by updated_at):
+    # another process may be about to link a mention to one.
     ORPHAN_SWEEP_MIN_AGE_SECONDS = 3600.0
 
     def __init__(self, db_path: str = "bilinc.db"):
@@ -348,11 +348,24 @@ class SQLiteBackend(StorageBackend):
         return r.rowcount > 0
 
     async def delete_entity_mentions_for_memory_key(self, memory_key: str, prune: bool = True) -> int:
-        """Delete a memory's mentions; ``prune=False`` leaves orphaned entities for the caller."""
+        """Delete a memory's mentions; ``prune=False`` leaves orphaned entities for the caller.
+
+        With ``prune=False`` the entities lose their last mention while the caller
+        re-adds it, so they are marked as just updated: the age-guarded full sweep
+        leaves them alone in the meantime.
+        """
         conn = self._get_conn()
-        touched = self._entity_ids_for_memory_key(conn, memory_key) if prune else []
+        touched = self._entity_ids_for_memory_key(conn, memory_key)
         cursor = conn.execute("DELETE FROM entity_mentions WHERE memory_key = ?", (memory_key,))
-        self._prune_orphan_entities(conn, touched)
+        if prune:
+            self._prune_orphan_entities(conn, touched)
+        else:
+            now = time.time()
+            for start in range(0, len(touched), 500):
+                chunk = touched[start:start + 500]
+                conn.execute(
+                    f"UPDATE entities SET updated_at = ? WHERE id IN ({','.join('?' * len(chunk))})", [now, *chunk]
+                )
         conn.commit()
         return cursor.rowcount
 
@@ -377,7 +390,7 @@ class SQLiteBackend(StorageBackend):
 
         Normal writes prune only the entities they touched, and ``init`` sweeps a
         database once; run this to clear orphans left by interrupted writes since.
-        Entities newer than ``older_than`` seconds (default
+        Entities saved or relinked within ``older_than`` seconds (default
         ORPHAN_SWEEP_MIN_AGE_SECONDS) are kept, since another process may be
         about to link them.
         """
@@ -394,13 +407,13 @@ class SQLiteBackend(StorageBackend):
         With ``entity_ids`` only those candidates are checked (indexed lookups),
         which keeps a write O(mentions of that memory) instead of a scan of every
         entity and mention; without it the whole table is swept, skipping entities
-        created in the last ``older_than`` seconds.
+        saved or relinked in the last ``older_than`` seconds.
         """
         if entity_ids is None:
             cursor = conn.execute(
                 """
                 DELETE FROM entities
-                WHERE created_at < ?
+                WHERE updated_at < ?
                   AND NOT EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = entities.id)
                 """,
                 (time.time() - older_than,),

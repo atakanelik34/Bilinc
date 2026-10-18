@@ -13,7 +13,7 @@ All notable changes to Bilinc.
 ### Fixed
 
 - Align the SDK, CLI, PyPI package, hosted website and MCP Registry release versions at 2.4.0. The public SDK API and protocol contracts are unchanged; the PyPI package still ships only the cloud SDK, CLI and MCP adapter.
-- Internal runtime (SQLite): removing a memory's entity mentions no longer sweeps every entity against every mention to find orphans. Only the entities those mentions pointed at are checked, so writes stay constant-time as a store grows instead of slowing ingest quadratically. Rewriting a memory keeps the entities it still mentions, with their aliases. Each database is swept once for orphans left by older versions (entities from the last hour are kept, since another process may be linking them); `SQLiteBackend.sweep_orphan_entities()` runs the sweep again on demand.
+- Internal runtime (SQLite): removing a memory's entity mentions no longer sweeps every entity against every mention to find orphans. Only the entities those mentions pointed at are checked, so writes stay constant-time as a store grows instead of slowing ingest quadratically. Rewriting a memory keeps the entities it still mentions, with their aliases. Each database is swept once for orphans left by older versions (entities saved or relinked in the last hour are kept, since another process may be linking them); rollback and snapshot restore keep entity aliases too; `SQLiteBackend.sweep_orphan_entities()` runs the sweep again on demand.
 
 ## [2.3.11] — 2026-10-16
 

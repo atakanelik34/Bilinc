@@ -1096,10 +1096,8 @@ class ProjectRuntimeManager:
             await plane._restore_backend_entry(restored)
             if hasattr(plane.backend, "delete_claims_for_memory_key"):
                 await plane.backend.delete_claims_for_memory_key(key)
-            if hasattr(plane.backend, "delete_entity_mentions_for_memory_key"):
-                await plane.backend.delete_entity_mentions_for_memory_key(key)
             await plane._project_claims_for_entry(restored)
-            await plane._project_entities_for_entry(restored)
+            await plane._project_entities_for_entry(restored)  # replaces the mentions itself
             plane.working_memory.remove(key)
 
             if plane.enable_audit and plane.audit:

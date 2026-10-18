@@ -2919,10 +2919,8 @@ class StatePlane:
                 await self._restore_backend_entry(restored_entry)
                 if hasattr(self.backend, "delete_claims_for_memory_key"):
                     await self.backend.delete_claims_for_memory_key(key)
-                if hasattr(self.backend, "delete_entity_mentions_for_memory_key"):
-                    await self.backend.delete_entity_mentions_for_memory_key(key)
                 await self._project_claims_for_entry(restored_entry)
-                await self._project_entities_for_entry(restored_entry)
+                await self._project_entities_for_entry(restored_entry)  # replaces the mentions itself
                 self.working_memory.remove(key)
 
                 if self.enable_audit and self.audit:
