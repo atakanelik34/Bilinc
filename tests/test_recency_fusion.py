@@ -33,3 +33,25 @@ def test_recency_fusion_prefers_the_value_current_at_query_time(tmp_path, monkey
 def test_recency_fusion_is_off_by_default(tmp_path, monkeypatch):
     keys = _recall(tmp_path, monkeypatch, enabled=False)
     assert "q3" not in keys and set(keys) == {"q0", "q1", "q2"}
+
+
+def test_recency_never_lifts_unrelated_memories_over_a_match(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILINC_RECALL_RECENCY_FUSION", "1")
+
+    async def go():
+        plane = StatePlane(backend=SQLiteBackend(str(tmp_path / "w.sqlite")), enable_verification=False, enable_audit=False)
+        await plane.init()
+        await plane.commit("best", "The parallelogram law quiz score was 79 percent after extra study.", MemoryType.EPISODIC,
+                           metadata={"source_timestamp": "2024-03-01T12:00:00+00:00"})
+        for i in range(30):
+            await plane.commit(f"noise{i}", f"Weekly grocery list item {i}: apples and bread.", MemoryType.EPISODIC,
+                               metadata={"source_timestamp": f"2024-03-{i % 18 + 2:02d}T12:00:00+00:00"})
+        await plane.commit("weak", "A quiz is planned at some point.", MemoryType.EPISODIC,
+                           metadata={"source_timestamp": "2024-03-19T12:00:00+00:00"})
+        res = await plane.recall_intelligent("What was my parallelogram law quiz score?", limit=5,
+                                             query_timestamp="2024-03-20T00:00:00+00:00")
+        return [r["key"] for r in res]
+
+    keys = asyncio.run(go())
+    # Newer but unrelated memories stay below both matches; recency only reorders near-equal ones.
+    assert set(keys[:2]) == {"best", "weak"}

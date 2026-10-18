@@ -347,6 +347,17 @@ class SQLiteBackend(StorageBackend):
             "SELECT DISTINCT entity_id FROM entity_mentions WHERE memory_key = ?", (memory_key,)
         )]
 
+    async def sweep_orphan_entities(self) -> int:
+        """Maintenance: delete every entity with no mentions (one full scan).
+
+        Normal writes prune only the entities they touched; run this once to clear
+        orphans left by older versions or interrupted writes.
+        """
+        conn = self._get_conn()
+        removed = self._prune_orphan_entities(conn)
+        conn.commit()
+        return removed
+
     def _prune_orphan_entities(self, conn, entity_ids=None) -> int:
         """Delete entities with no remaining mentions.
 

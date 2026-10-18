@@ -7,28 +7,60 @@ Off unless ``BILINC_RERANK_MODEL`` names a Sentence Transformers cross-encoder
 query and reordered; everything below that depth keeps its fused order. The
 model runs locally (``BILINC_RERANK_DEVICE``, default ``cpu``) and
 ``BILINC_RERANK_MODEL_REVISION`` can pin a repository revision. If the model
-cannot be loaded or scoring fails, recall falls back to the fused order.
+cannot be loaded or scoring fails, recall falls back to the fused order, logs a
+warning, and tries to load the model again after ``RETRY_AFTER_SECONDS``.
 """
 
 from __future__ import annotations
 
+import logging
 import os
-from functools import lru_cache
+import threading
+import time
 from typing import Callable, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_DEPTH = 100
 _MAX_DOCUMENT_CHARS = 2000  # cross-encoders read ~512 tokens; longer text is truncated
+RETRY_AFTER_SECONDS = 300.0
+
+_models: Dict[Tuple[str, str, str], object] = {}
+_failed_at: Dict[Tuple[str, str, str], float] = {}
+_lock = threading.Lock()
 
 
-@lru_cache(maxsize=2)
 def _load_rerank_model(model_name: str, device: str, revision: str):
-    """Load an explicitly configured local cross-encoder, if available."""
-    try:
-        from sentence_transformers import CrossEncoder
+    """Load an explicitly configured local cross-encoder, caching successes only.
 
-        return CrossEncoder(model_name, device=device, revision=revision or None, max_length=512)
-    except Exception:
-        return None
+    A failed load is remembered for RETRY_AFTER_SECONDS so recall does not retry
+    on every call, but a transient error (a dropped download, say) does not turn
+    rerank off for the life of the process.
+    """
+    cache_key = (model_name, device, revision)
+    with _lock:
+        if cache_key in _models:
+            return _models[cache_key]
+        failed = _failed_at.get(cache_key)
+        if failed is not None and time.monotonic() - failed < RETRY_AFTER_SECONDS:
+            return None
+        try:
+            from sentence_transformers import CrossEncoder
+
+            model = CrossEncoder(model_name, device=device, revision=revision or None, max_length=512)
+        except Exception as exc:  # noqa: BLE001 - any load failure falls back to the fused order
+            _failed_at[cache_key] = time.monotonic()
+            logger.warning("bilinc rerank model %r could not be loaded (%s); recall keeps the fused order", model_name, exc)
+            return None
+        _failed_at.pop(cache_key, None)
+        _models[cache_key] = model
+        return model
+
+
+def _clear_model_cache() -> None:
+    with _lock:
+        _models.clear()
+        _failed_at.clear()
 
 
 def rerank_config() -> Optional[Tuple[str, str, str, int]]:
@@ -53,8 +85,9 @@ def rerank_keys(
 ) -> Tuple[List[str], Dict[str, float]]:
     """Reorder the head of ``ordered_keys`` by cross-encoder score.
 
-    Returns the new order and the scores of the reranked keys. The order is
-    unchanged when reranking is off, the model is unavailable, or scoring fails.
+    Synchronous and CPU-bound; async callers run it in a worker thread. Returns
+    the new order and the scores of the reranked keys. The order is unchanged
+    when reranking is off, the model is unavailable, or scoring fails.
     """
     config = rerank_config()
     if config is None or not ordered_keys:
@@ -71,7 +104,8 @@ def rerank_keys(
             show_progress_bar=False,
         )
         scores = {key: float(score) for key, score in zip(head, raw)}
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - scoring failure falls back to the fused order
+        logger.warning("bilinc rerank scoring failed (%s); recall keeps the fused order", exc)
         return ordered_keys, {}
     position = {key: index for index, key in enumerate(head)}
     reranked = sorted(head, key=lambda key: (-scores[key], position[key]))

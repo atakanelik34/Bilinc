@@ -26,6 +26,32 @@ Set either:
 - SQLite/PostgreSQL configuration is supplied by the internal runtime launcher;
   the public `bilinc` CLI has no local `--db` mode.
 
+### Recall options (optional)
+
+These are internal runtime features; they are not in the PyPI package and are
+off unless configured.
+
+- **Distilled facts.** `bilinc.integrations.distill.commit_distilled(plane, key, text, extract)`
+  stores the exchange as an episodic source and each fact `extract` returns as a
+  semantic memory pointing back to it, with the same timestamp.
+  `recall_reflective(..., memory_types=[MemoryType.SEMANTIC], expand_sources=True)`
+  searches the facts and returns each fact's source with it.
+- **Recency tie-breaking.** With `BILINC_RECALL_RECENCY_FUSION=1`, a recall that
+  carries a `query_timestamp` orders near-equal matches newest first, so it
+  returns the value that was current then; clearly better matches keep their place.
+- **Cross-encoder rerank.** `BILINC_RERANK_MODEL` names a local Sentence
+  Transformers cross-encoder (needs the `semantic` extra); the top
+  `BILINC_RERANK_DEPTH` results are rescored against the query. Recall keeps the
+  fused order if the model does not load.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BILINC_RECALL_RECENCY_FUSION` | off | As-of recall orders near-equal matches newest first |
+| `BILINC_RERANK_MODEL` | unset | Cross-encoder model name; setting it enables rerank |
+| `BILINC_RERANK_DEPTH` | `100` | How many results are rescored |
+| `BILINC_RERANK_DEVICE` | `cpu` | Torch device for the cross-encoder |
+| `BILINC_RERANK_MODEL_REVISION` | unset | Pinned model revision |
+
 ## HTTP Deployment
 
 Minimal example:

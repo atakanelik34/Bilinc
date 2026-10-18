@@ -38,7 +38,9 @@ async def commit_distilled(
     """Commit ``text`` under ``source_key`` and each extracted fact as ``<source_key>#f<n>``.
 
     Facts go in as ``fact_type`` and the source as ``source_type`` so recall can
-    search facts only and fetch sources through ``expand_sources``. Returns the
+    search facts only and fetch sources through ``expand_sources``. Committing the
+    same ``source_key`` again replaces its facts: earlier facts beyond the new
+    count are forgotten, so none keep pointing at the rewritten source. Returns the
     fact keys.
     """
     base_meta = dict(metadata or {})
@@ -48,9 +50,14 @@ async def commit_distilled(
     facts = extract(text)
     if inspect.isawaitable(facts):
         facts = await facts
+    if isinstance(facts, str):  # one fact, not a sequence of characters
+        facts = [facts]
     keys: List[str] = []
-    for index, fact in enumerate([f.strip() for f in facts or [] if f and f.strip()][:max_facts]):
+    for index, fact in enumerate([str(f).strip() for f in facts or [] if f and str(f).strip()][:max_facts]):
         key = f"{source_key}#f{index:02d}"
         await plane.commit(key, fact, fact_type, metadata={**base_meta, "source_key": source_key, "distilled": True})
         keys.append(key)
+    stale = len(keys)
+    while stale < max_facts and await plane.forget(f"{source_key}#f{stale:02d}"):
+        stale += 1
     return keys

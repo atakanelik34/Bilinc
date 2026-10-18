@@ -30,7 +30,7 @@ from bilinc.core.dual_process import System1Engine, System2Engine, Arbiter
 from bilinc.core.verifier import StateVerifier
 from bilinc.core.audit import AuditTrail, OpType
 from bilinc.core.decay import compute_new_strength, should_prune
-from bilinc.core.rerank import rerank_keys
+from bilinc.core.rerank import rerank_config, rerank_keys
 from bilinc.core.temporal import (
     classify_temporal_query,
     entry_event_timestamp,
@@ -917,17 +917,28 @@ class StatePlane:
                 )
                 bucket["entity"] = boost
 
+            use_recency = valid_as_of is not None and self._recency_fusion_enabled()
+            rerank_scores: Dict[str, float] = {}
+            if use_recency or rerank_config() is not None:
+                # Optional reorderings work on the relevance order; the current-state and
+                # latest-family preferences are applied afterwards on rank scores of the
+                # same scale, so neither is lost and each result's score matches its place.
+                ordered_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)]
+                ordered_keys, rerank_scores = await asyncio.to_thread(
+                    rerank_keys,
+                    query,
+                    ordered_keys,
+                    lambda key: self._rerank_text(candidates.get(key)),
+                    limit,
+                )
+                if use_recency:
+                    ordered_keys = self._fuse_recency(
+                        ordered_keys, candidates, valid_as_of, rerank_scores or fused_scores
+                    )
+                fused_scores = {key: 1.0 / (60 + index + 1) for index, key in enumerate(ordered_keys)}
             self._apply_current_state_boost(query, fused_scores, candidates)
             self._apply_latest_family_order(query, fused_scores, candidates)
             ordered_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)]
-            if valid_as_of is not None and self._recency_fusion_enabled():
-                ordered_keys = self._fuse_recency(ordered_keys, candidates, valid_as_of)
-            ordered_keys, rerank_scores = rerank_keys(
-                query,
-                ordered_keys,
-                lambda key: self._retrieval_surface_text(candidates[key]) if key in candidates else "",
-                limit,
-            )
             ranked_keys = ordered_keys[:limit]
             claims_by_key = await self._active_claims_by_memory_key(ranked_keys) if explain else {}
             results = []
@@ -1269,59 +1280,103 @@ class StatePlane:
         return value
 
     RECENCY_FUSION_DEPTH = 200
-    RECENCY_FUSION_RRF_K = 60
+    RECENCY_TIE_TOLERANCE = 0.05  # relevance scores within 5% count as an equally good match
 
     @staticmethod
     def _recency_fusion_enabled() -> bool:
         """Opt-in (BILINC_RECALL_RECENCY_FUSION=1): as-of recall prefers what was current at that moment."""
         return os.environ.get("BILINC_RECALL_RECENCY_FUSION", "").strip().lower() in {"1", "true", "yes", "on"}
 
-    def _event_time(self, entry: Any):
-        metadata = entry.metadata or {}
-        for field in self.LEXICAL_RECALL_METADATA_FIELDS:
-            parsed = parse_temporal_timestamp(metadata.get(field))
-            if parsed is not None:
-                return parsed
-        return None
+    @staticmethod
+    def _rerank_text(entry: Any) -> str:
+        """The memory's own content for the cross-encoder (no key or metadata noise)."""
+        if entry is None:
+            return ""
+        value = entry.value
+        return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
 
-    def _fuse_recency(self, ordered_keys: List[str], candidates: Dict[str, Any], as_of) -> List[str]:
-        """Reciprocal-rank fusion of the relevance order with closeness in time to ``as_of``.
+    def _fuse_recency(
+        self,
+        ordered_keys: List[str],
+        candidates: Dict[str, Any],
+        as_of,
+        relevance: Optional[Dict[str, float]] = None,
+    ) -> List[str]:
+        """Let recency break ties among equally good matches, never override relevance.
 
-        Among the top RECENCY_FUSION_DEPTH results that have an event time at or
-        before ``as_of``, the most recent ones move up, so a query asked at a
-        moment sees the value that was current then rather than an older one that
-        matches equally well. Results without an event time keep their place below.
+        The top RECENCY_FUSION_DEPTH results are split into groups of near-equal
+        relevance (each score within RECENCY_TIE_TOLERANCE of the group's first);
+        groups keep their relevance order. Inside a group, results with an event time
+        at or before ``as_of`` come newest first, so a question asked at a moment sees
+        the value that was current then; results without an event time follow in
+        their original order. A weak match can never move above a better one.
         """
         head = ordered_keys[: self.RECENCY_FUSION_DEPTH]
-        timed = []
-        for key in head:
-            entry = candidates.get(key)
-            event_time = self._event_time(entry) if entry is not None else None
-            if event_time is not None and event_time <= as_of:
-                timed.append((key, event_time))
-        if not timed:
+        if not head:
             return ordered_keys
-        by_recency = [key for key, _ in sorted(timed, key=lambda kv: kv[1], reverse=True)]
-        score: Dict[str, float] = {}
-        for ranking in (head, by_recency):
-            for index, key in enumerate(ranking):
-                score[key] = score.get(key, 0.0) + 1.0 / (self.RECENCY_FUSION_RRF_K + index + 1)
-        recency_rank = {key: index for index, key in enumerate(by_recency)}
-        # Equal fused scores (relevance ties) break toward the more recent memory.
-        fused = sorted(score, key=lambda key: (-score[key], recency_rank.get(key, len(by_recency))))
+        scores = relevance or {}
+        fused: List[str] = []
+        group: List[str] = []
+        leader = None
+
+        def flush() -> None:
+            dated, undated = [], []
+            for position, key in enumerate(group):
+                entry = candidates.get(key)
+                event_time = entry_event_timestamp(entry) if entry is not None else None
+                if event_time is not None and event_time <= as_of:
+                    dated.append((event_time, position, key))
+                else:
+                    undated.append(key)
+            fused.extend(key for _, _, key in sorted(dated, key=lambda item: (-item[0], item[1])))
+            fused.extend(undated)
+
+        for key in head:
+            value = float(scores.get(key, 0.0))
+            if leader is not None and abs(leader - value) > self.RECENCY_TIE_TOLERANCE * abs(leader):
+                flush()
+                group = []
+                leader = None
+            if leader is None:
+                leader = value
+            group.append(key)
+        flush()
         return fused + ordered_keys[len(head):]
 
-    async def _attach_sources(self, results: List[Dict[str, Any]]) -> None:
-        """Add {"key", "value"} of each result's metadata["source_key"] memory, once per source."""
-        if not self.backend:
-            return
+    async def _load_any(self, key: str) -> Optional[MemoryEntry]:
+        entry = self.working_memory.get(key)
+        if entry is None and self.backend:
+            entry = await self.backend.load(key)
+        return entry
+
+    async def _attach_sources(self, results: List[Dict[str, Any]], query_timestamp: Optional[str] = None) -> None:
+        """Add {"key", "value"} of each result's metadata["source_key"] memory.
+
+        A source is attached only if this recall could have returned it itself: it
+        still exists (a forgotten source is gone), is recallable (not invalidated,
+        expired or superseded) and, for an as-of recall, is visible at that time.
+        Each source is loaded once per call.
+        """
+        cache: Dict[str, Optional[MemoryEntry]] = {}
+
+        async def visible(key: str) -> Optional[MemoryEntry]:
+            if key not in cache:
+                entry = await self._load_any(key)
+                if entry is not None and query_timestamp is None and not self._is_recallable_entry(entry):
+                    entry = None
+                if entry is not None and query_timestamp is not None:
+                    entry = self._filter_candidates_as_of({key: entry}, query_timestamp).get(key)
+                cache[key] = entry
+            return cache[key]
+
         seen: set[str] = set()
         for result in results:
-            entry = await self.backend.load(result.get("key", ""))
-            source_key = str(((entry.metadata or {}) if entry else {}).get("source_key") or "")
+            hit = await self._load_any(result.get("key", ""))
+            metadata = hit.metadata if hit is not None and isinstance(hit.metadata, dict) else {}
+            source_key = str(metadata.get("source_key") or "")
             if not source_key or source_key == result.get("key"):
                 continue
-            source = await self.backend.load(source_key)
+            source = await visible(source_key)
             if source is None:
                 continue
             result["source"] = {"key": source.key, "value": source.value, "repeated": source_key in seen}
@@ -1396,7 +1451,7 @@ class StatePlane:
                     adequacy = next_adequacy
 
             if expand_sources:
-                await self._attach_sources(results)
+                await self._attach_sources(results, query_timestamp)
             payload = {
                 "query": query,
                 "final_query": current_query,
