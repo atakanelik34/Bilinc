@@ -41,14 +41,15 @@ off unless configured.
   returns the value that was current then; clearly better matches keep their place.
 - **Cross-encoder rerank.** `BILINC_RERANK_MODEL` names a local Sentence
   Transformers cross-encoder (needs the `semantic` extra); the top
-  `BILINC_RERANK_DEPTH` results are rescored against the query. Recall keeps the
-  fused order if the model does not load.
+  `BILINC_RERANK_DEPTH` results, and no more than five per requested result, are
+  rescored against the query. Recall keeps the fused order if the model does not
+  load; the first recall after start waits for the model to load.
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `BILINC_RECALL_RECENCY_FUSION` | off | As-of recall orders near-equal matches newest first |
 | `BILINC_RERANK_MODEL` | unset | Cross-encoder model name; setting it enables rerank |
-| `BILINC_RERANK_DEPTH` | `100` | How many results are rescored |
+| `BILINC_RERANK_DEPTH` | `100` | Most results rescored per recall (also capped at 5 × limit, min 20) |
 | `BILINC_RERANK_DEVICE` | `cpu` | Torch device for the cross-encoder |
 | `BILINC_RERANK_MODEL_REVISION` | unset | Pinned model revision |
 

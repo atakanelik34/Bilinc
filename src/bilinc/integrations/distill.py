@@ -16,18 +16,14 @@ exact timestamp, so time-scoped recall and ``expand_sources`` keep working::
 from __future__ import annotations
 
 import inspect
+import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from bilinc.core.models import MemoryType
 
 Extractor = Callable[[str], Union[List[str], Awaitable[List[str]]]]
 
-
-async def _stored(plane: Any, key: str):
-    entry = plane.working_memory.get(key) if getattr(plane, "working_memory", None) else None
-    if entry is None and getattr(plane, "backend", None) is not None:
-        entry = await plane.backend.load(key)
-    return entry
+_FACT_SUFFIX = re.compile(r"#f\d+$")
 
 
 async def commit_distilled(
@@ -46,10 +42,15 @@ async def commit_distilled(
 
     Facts go in as ``fact_type`` and the source as ``source_type`` so recall can
     search facts only and fetch sources through ``expand_sources``. The extractor
-    runs before anything is written. The source records how many facts it has, so
-    committing the same ``source_key`` again replaces its facts and forgets the
-    earlier ones beyond the new count. Returns the fact keys.
+    runs before anything is written. Committing the same ``source_key`` again
+    replaces its facts and forgets any earlier ones beyond the new count. The stored
+    source always names at least as many facts as exist (it is updated before facts
+    are added and after extra ones are forgotten), so a retry after a failed write
+    cleans up. Returns the fact keys.
+    A ``source_key`` may not itself end in ``#f<n>``: that is the fact key space.
     """
+    if _FACT_SUFFIX.search(source_key):
+        raise ValueError(f"source_key {source_key!r} ends like a distilled fact key (#f<n>)")
     base_meta = dict(metadata or {})
     if timestamp:
         base_meta["source_timestamp"] = timestamp
@@ -60,9 +61,12 @@ async def commit_distilled(
         facts = [facts]
     facts = [str(f).strip() for f in facts or [] if f and str(f).strip()][:max_facts]
 
-    previous = await _stored(plane, source_key)
+    previous = await plane._load_any(source_key)
     previous_count = int(((previous.metadata or {}) if previous is not None else {}).get("distilled_facts") or 0)
-    await plane.commit(source_key, text, source_type, metadata={**base_meta, "distilled_facts": len(facts)})
+    if len(facts) > previous_count:
+        # Record the larger count before writing more facts, so a failure partway
+        # through cannot leave facts the source does not account for.
+        await plane.commit(source_key, text, source_type, metadata={**base_meta, "distilled_facts": len(facts)})
     keys: List[str] = []
     for index, fact in enumerate(facts):
         key = f"{source_key}#f{index:02d}"
@@ -70,6 +74,7 @@ async def commit_distilled(
         keys.append(key)
     for index in range(len(facts), previous_count):  # facts the earlier version had beyond the new count
         key = f"{source_key}#f{index:02d}"
-        if await _stored(plane, key) is not None:
+        if await plane._load_any(key) is not None:
             await plane.forget(key)
+    await plane.commit(source_key, text, source_type, metadata={**base_meta, "distilled_facts": len(facts)})
     return keys

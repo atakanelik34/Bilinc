@@ -646,7 +646,15 @@ class StatePlane:
         try:
             from bilinc.core.entities import Entity, entity_from_raw, extract_entities_from_entry
 
-            if hasattr(self.backend, "delete_entity_mentions_for_memory_key"):
+            # Prune the entities this memory used to mention only after its new mentions
+            # are saved, so rewriting a memory keeps an entity it still mentions (with
+            # its aliases and metadata) instead of deleting and recreating it.
+            touched: List[str] = []
+            deferred_prune = hasattr(self.backend, "prune_orphan_entities")
+            if deferred_prune:
+                touched = await self.backend.entity_ids_for_memory_key(entry.key)
+                await self.backend.delete_entity_mentions_for_memory_key(entry.key, prune=False)
+            elif hasattr(self.backend, "delete_entity_mentions_for_memory_key"):
                 await self.backend.delete_entity_mentions_for_memory_key(entry.key)
 
             mentions = extract_entities_from_entry(entry)
@@ -658,10 +666,14 @@ class StatePlane:
                 if entity:
                     explicit_by_id[entity.id] = entity
 
-            for mention in mentions:
-                entity = explicit_by_id.get(mention.entity_id) or Entity(canonical_name=mention.mention_text)
-                await self.backend.save_entity(entity)
-                await self.backend.save_entity_mention(mention)
+            try:
+                for mention in mentions:
+                    entity = explicit_by_id.get(mention.entity_id) or Entity(canonical_name=mention.mention_text)
+                    await self.backend.save_entity(entity)
+                    await self.backend.save_entity_mention(mention)
+            finally:
+                if touched:
+                    await self.backend.prune_orphan_entities(touched)
         except Exception:
             logger.debug("entity projection failed", exc_info=True)
 
@@ -920,12 +932,16 @@ class StatePlane:
             use_recency = valid_as_of is not None and self._recency_fusion_enabled()
             rerank_cfg = rerank_config()
             rerank_scores: Dict[str, float] = {}
+            relevance_scores: Dict[str, float] = {}
+            reordered_by: List[str] = []
             if use_recency or rerank_cfg is not None:
                 # Optional reorderings work on the relevance order. If they change it, the
                 # fused scores are handed out again in the new order (same values, same
                 # gaps), so the current-state and latest-family preferences below keep
-                # their usual weight and each result's score matches its place. If nothing
-                # changes (rerank off or failed, no ties), scores stay exactly as they were.
+                # their usual weight and each result's score matches its place. Results then
+                # report their own fused score as signals["fused"] and what moved them in
+                # "reordered_by", so the score and its signals can still be audited. If
+                # nothing changes (rerank off or failed, no ties), scores stay as they were.
                 base_order = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)]
                 new_order = base_order
                 if rerank_cfg is not None:
@@ -937,9 +953,15 @@ class StatePlane:
                         limit,
                         rerank_cfg,
                     )
+                if rerank_scores and new_order != base_order:
+                    reordered_by.append("rerank")
                 if use_recency:
+                    before_recency = new_order
                     new_order = self._fuse_recency(new_order, candidates, valid_as_of, fused_scores, rerank_scores)
+                    if new_order != before_recency:
+                        reordered_by.append("recency")
                 if new_order != base_order:
+                    relevance_scores = dict(fused_scores)
                     fused_scores = dict(zip(new_order, (fused_scores[key] for key in base_order)))
             self._apply_current_state_boost(query, fused_scores, candidates)
             self._apply_latest_family_order(query, fused_scores, candidates)
@@ -980,6 +1002,9 @@ class StatePlane:
                 }
                 if key in rerank_scores:
                     result["rerank_score"] = round(rerank_scores[key], 6)
+                if relevance_scores:
+                    result["signals"]["fused"] = round(relevance_scores.get(key, 0.0), 6)
+                    result["reordered_by"] = list(reordered_by)
                 if isinstance(entry.metadata, dict) and entry.metadata.get("source_key"):
                     result["source_key"] = str(entry.metadata["source_key"])
                 if explain:

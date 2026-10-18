@@ -30,6 +30,9 @@ class SQLiteBackend(StorageBackend):
     """
 
     SCHEMA_VERSION = 1
+    # A full sweep leaves recent entities alone: another process may have saved one
+    # and not yet linked its mention.
+    ORPHAN_SWEEP_MIN_AGE_SECONDS = 3600.0
 
     def __init__(self, db_path: str = "bilinc.db"):
         self.db_path = Path(db_path).expanduser()
@@ -245,9 +248,17 @@ class SQLiteBackend(StorageBackend):
                 (self.SCHEMA_VERSION, time.time())
             )
 
-        # Writes prune only the entities they touch; one sweep per open clears
-        # orphans left by older versions or interrupted writes.
-        self._prune_orphan_entities(self._conn)
+        # Writes prune only the entities they touch. Orphans left by older versions
+        # are swept once per database, not on every open: many short-lived processes
+        # share one file, and a full sweep on each open would contend for the lock.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS maintenance (name TEXT PRIMARY KEY, done_at REAL NOT NULL)"
+        )
+        if self._conn.execute("SELECT 1 FROM maintenance WHERE name = 'orphan_entity_sweep'").fetchone() is None:
+            self._prune_orphan_entities(self._conn, older_than=self.ORPHAN_SWEEP_MIN_AGE_SECONDS)
+            self._conn.execute(
+                "INSERT OR IGNORE INTO maintenance (name, done_at) VALUES ('orphan_entity_sweep', ?)", (time.time(),)
+            )
         self._conn.commit()
     
     async def save(self, entry: MemoryEntry) -> bool:
@@ -336,13 +347,24 @@ class SQLiteBackend(StorageBackend):
         conn.commit()
         return r.rowcount > 0
 
-    async def delete_entity_mentions_for_memory_key(self, memory_key: str) -> int:
+    async def delete_entity_mentions_for_memory_key(self, memory_key: str, prune: bool = True) -> int:
+        """Delete a memory's mentions; ``prune=False`` leaves orphaned entities for the caller."""
         conn = self._get_conn()
-        touched = self._entity_ids_for_memory_key(conn, memory_key)
+        touched = self._entity_ids_for_memory_key(conn, memory_key) if prune else []
         cursor = conn.execute("DELETE FROM entity_mentions WHERE memory_key = ?", (memory_key,))
         self._prune_orphan_entities(conn, touched)
         conn.commit()
         return cursor.rowcount
+
+    async def entity_ids_for_memory_key(self, memory_key: str) -> list:
+        return self._entity_ids_for_memory_key(self._get_conn(), memory_key)
+
+    async def prune_orphan_entities(self, entity_ids) -> int:
+        """Delete those of ``entity_ids`` that no longer have any mention."""
+        conn = self._get_conn()
+        removed = self._prune_orphan_entities(conn, entity_ids)
+        conn.commit()
+        return removed
 
     @staticmethod
     def _entity_ids_for_memory_key(conn, memory_key: str) -> list:
@@ -350,30 +372,38 @@ class SQLiteBackend(StorageBackend):
             "SELECT DISTINCT entity_id FROM entity_mentions WHERE memory_key = ?", (memory_key,)
         )]
 
-    async def sweep_orphan_entities(self) -> int:
+    async def sweep_orphan_entities(self, older_than: Optional[float] = None) -> int:
         """Maintenance: delete every entity with no mentions (one full scan).
 
-        Normal writes prune only the entities they touched; run this once to clear
-        orphans left by older versions or interrupted writes.
+        Normal writes prune only the entities they touched, and ``init`` sweeps a
+        database once; run this to clear orphans left by interrupted writes since.
+        Entities newer than ``older_than`` seconds (default
+        ORPHAN_SWEEP_MIN_AGE_SECONDS) are kept, since another process may be
+        about to link them.
         """
         conn = self._get_conn()
-        removed = self._prune_orphan_entities(conn)
+        removed = self._prune_orphan_entities(
+            conn, older_than=self.ORPHAN_SWEEP_MIN_AGE_SECONDS if older_than is None else older_than
+        )
         conn.commit()
         return removed
 
-    def _prune_orphan_entities(self, conn, entity_ids=None) -> int:
+    def _prune_orphan_entities(self, conn, entity_ids=None, older_than: float = 0.0) -> int:
         """Delete entities with no remaining mentions.
 
         With ``entity_ids`` only those candidates are checked (indexed lookups),
         which keeps a write O(mentions of that memory) instead of a scan of every
-        entity and mention; without it the whole table is swept.
+        entity and mention; without it the whole table is swept, skipping entities
+        created in the last ``older_than`` seconds.
         """
         if entity_ids is None:
             cursor = conn.execute(
                 """
                 DELETE FROM entities
-                WHERE id NOT IN (SELECT DISTINCT entity_id FROM entity_mentions)
-                """
+                WHERE created_at < ?
+                  AND NOT EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = entities.id)
+                """,
+                (time.time() - older_than,),
             )
             return cursor.rowcount
         removed = 0

@@ -108,3 +108,39 @@ def test_source_after_the_as_of_time_is_not_attached(tmp_path):
 def test_visible_source_is_attached_for_as_of_recall(tmp_path):
     hits = _source_case(tmp_path, "k.sqlite", _noop, query_timestamp="2024-05-10T00:00:00+00:00")
     assert hits and hits[0]["source"]["key"] == "s1"
+
+
+def test_failed_fact_write_is_cleaned_up_by_a_retry(tmp_path):
+    async def go():
+        plane = StatePlane(backend=SQLiteBackend(str(tmp_path / "h.sqlite")), enable_verification=False, enable_audit=False)
+        await plane.init()
+        await commit_distilled(plane, "t5", "v1", lambda t: ["one fact"])
+        real_commit = plane.commit
+
+        async def failing(key, *args, **kwargs):
+            if key == "t5#f03":
+                raise RuntimeError("backend write failed")
+            return await real_commit(key, *args, **kwargs)
+
+        plane.commit = failing
+        try:
+            await commit_distilled(plane, "t5", "v2", lambda t: ["a", "b", "c", "d", "e"])
+        except RuntimeError:
+            pass
+        plane.commit = real_commit
+        await commit_distilled(plane, "t5", "v3", lambda t: ["only fact"])
+        return [k for k in (f"t5#f{i:02d}" for i in range(5)) if await plane.backend.load(k) is not None]
+
+    assert asyncio.run(go()) == ["t5#f00"]
+
+
+def test_source_key_in_the_fact_key_space_is_rejected(tmp_path):
+    import pytest
+
+    async def go():
+        plane = StatePlane(backend=SQLiteBackend(str(tmp_path / "i.sqlite")), enable_verification=False, enable_audit=False)
+        await plane.init()
+        await commit_distilled(plane, "chat#f00", "x", lambda t: ["a fact"])
+
+    with pytest.raises(ValueError):
+        asyncio.run(go())
