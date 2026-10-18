@@ -30,6 +30,7 @@ from bilinc.core.dual_process import System1Engine, System2Engine, Arbiter
 from bilinc.core.verifier import StateVerifier
 from bilinc.core.audit import AuditTrail, OpType
 from bilinc.core.decay import compute_new_strength, should_prune
+from bilinc.core.rerank import rerank_keys
 from bilinc.core.temporal import (
     classify_temporal_query,
     entry_event_timestamp,
@@ -918,7 +919,14 @@ class StatePlane:
 
             self._apply_current_state_boost(query, fused_scores, candidates)
             self._apply_latest_family_order(query, fused_scores, candidates)
-            ranked_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]]
+            ordered_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)]
+            ordered_keys, rerank_scores = rerank_keys(
+                query,
+                ordered_keys,
+                lambda key: self._retrieval_surface_text(candidates[key]) if key in candidates else "",
+                limit,
+            )
+            ranked_keys = ordered_keys[:limit]
             claims_by_key = await self._active_claims_by_memory_key(ranked_keys) if explain else {}
             results = []
             for key in ranked_keys:
@@ -952,6 +960,8 @@ class StatePlane:
                         "entity": round(entry_signals.get("entity", 0.0), 6),
                     },
                 }
+                if key in rerank_scores:
+                    result["rerank_score"] = round(rerank_scores[key], 6)
                 if explain:
                     result.update(
                         self._recall_explain_envelope(
