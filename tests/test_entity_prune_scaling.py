@@ -42,6 +42,7 @@ def test_writes_prune_only_touched_entities(tmp_path, monkeypatch):
     async def go():
         plane = _plane(tmp_path, "s.sqlite")
         await plane.init()
+        calls.clear()  # opening a store runs one full sweep on purpose; writes after it must not
         for n in range(30):
             await plane.commit(f"m{n}", f"Project Orion{n} uses Postgres{n} in Berlin{n}.", MemoryType.SEMANTIC)
             await plane.commit(f"m{n}", f"Project Orion{n} moved to Redis{n} in Paris{n}.", MemoryType.SEMANTIC)

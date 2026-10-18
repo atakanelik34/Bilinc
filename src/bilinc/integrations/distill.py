@@ -23,6 +23,13 @@ from bilinc.core.models import MemoryType
 Extractor = Callable[[str], Union[List[str], Awaitable[List[str]]]]
 
 
+async def _stored(plane: Any, key: str):
+    entry = plane.working_memory.get(key) if getattr(plane, "working_memory", None) else None
+    if entry is None and getattr(plane, "backend", None) is not None:
+        entry = await plane.backend.load(key)
+    return entry
+
+
 async def commit_distilled(
     plane: Any,
     source_key: str,
@@ -38,26 +45,31 @@ async def commit_distilled(
     """Commit ``text`` under ``source_key`` and each extracted fact as ``<source_key>#f<n>``.
 
     Facts go in as ``fact_type`` and the source as ``source_type`` so recall can
-    search facts only and fetch sources through ``expand_sources``. Committing the
-    same ``source_key`` again replaces its facts: earlier facts beyond the new
-    count are forgotten, so none keep pointing at the rewritten source. Returns the
-    fact keys.
+    search facts only and fetch sources through ``expand_sources``. The extractor
+    runs before anything is written. The source records how many facts it has, so
+    committing the same ``source_key`` again replaces its facts and forgets the
+    earlier ones beyond the new count. Returns the fact keys.
     """
     base_meta = dict(metadata or {})
     if timestamp:
         base_meta["source_timestamp"] = timestamp
-    await plane.commit(source_key, text, source_type, metadata=dict(base_meta))
-    facts = extract(text)
+    facts = extract(text)  # before any write: a failing extractor leaves the stored source and facts intact
     if inspect.isawaitable(facts):
         facts = await facts
     if isinstance(facts, str):  # one fact, not a sequence of characters
         facts = [facts]
+    facts = [str(f).strip() for f in facts or [] if f and str(f).strip()][:max_facts]
+
+    previous = await _stored(plane, source_key)
+    previous_count = int(((previous.metadata or {}) if previous is not None else {}).get("distilled_facts") or 0)
+    await plane.commit(source_key, text, source_type, metadata={**base_meta, "distilled_facts": len(facts)})
     keys: List[str] = []
-    for index, fact in enumerate([str(f).strip() for f in facts or [] if f and str(f).strip()][:max_facts]):
+    for index, fact in enumerate(facts):
         key = f"{source_key}#f{index:02d}"
         await plane.commit(key, fact, fact_type, metadata={**base_meta, "source_key": source_key, "distilled": True})
         keys.append(key)
-    stale = len(keys)
-    while stale < max_facts and await plane.forget(f"{source_key}#f{stale:02d}"):
-        stale += 1
+    for index in range(len(facts), previous_count):  # facts the earlier version had beyond the new count
+        key = f"{source_key}#f{index:02d}"
+        if await _stored(plane, key) is not None:
+            await plane.forget(key)
     return keys

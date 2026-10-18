@@ -245,6 +245,9 @@ class SQLiteBackend(StorageBackend):
                 (self.SCHEMA_VERSION, time.time())
             )
 
+        # Writes prune only the entities they touch; one sweep per open clears
+        # orphans left by older versions or interrupted writes.
+        self._prune_orphan_entities(self._conn)
         self._conn.commit()
     
     async def save(self, entry: MemoryEntry) -> bool:
@@ -448,6 +451,7 @@ class SQLiteBackend(StorageBackend):
         if not isinstance(mention, EntityMention):
             raise TypeError("mention must be EntityMention")
         conn = self._get_conn()
+        previous = conn.execute("SELECT entity_id FROM entity_mentions WHERE id = ?", (mention.id,)).fetchone()
         conn.execute(
             """
             INSERT INTO entity_mentions (id, entity_id, memory_key, mention_text, source, confidence, created_at)
@@ -461,6 +465,8 @@ class SQLiteBackend(StorageBackend):
             """,
             (mention.id, mention.entity_id, mention.memory_key, mention.mention_text, mention.source, mention.confidence, mention.created_at),
         )
+        if previous is not None and previous[0] != mention.entity_id:
+            self._prune_orphan_entities(conn, [previous[0]])  # the mention moved; its old entity may be orphaned
         conn.commit()
         return True
 

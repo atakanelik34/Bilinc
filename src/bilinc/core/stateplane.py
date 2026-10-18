@@ -918,24 +918,29 @@ class StatePlane:
                 bucket["entity"] = boost
 
             use_recency = valid_as_of is not None and self._recency_fusion_enabled()
+            rerank_cfg = rerank_config()
             rerank_scores: Dict[str, float] = {}
-            if use_recency or rerank_config() is not None:
-                # Optional reorderings work on the relevance order; the current-state and
-                # latest-family preferences are applied afterwards on rank scores of the
-                # same scale, so neither is lost and each result's score matches its place.
-                ordered_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)]
-                ordered_keys, rerank_scores = await asyncio.to_thread(
-                    rerank_keys,
-                    query,
-                    ordered_keys,
-                    lambda key: self._rerank_text(candidates.get(key)),
-                    limit,
-                )
-                if use_recency:
-                    ordered_keys = self._fuse_recency(
-                        ordered_keys, candidates, valid_as_of, rerank_scores or fused_scores
+            if use_recency or rerank_cfg is not None:
+                # Optional reorderings work on the relevance order. If they change it, the
+                # fused scores are handed out again in the new order (same values, same
+                # gaps), so the current-state and latest-family preferences below keep
+                # their usual weight and each result's score matches its place. If nothing
+                # changes (rerank off or failed, no ties), scores stay exactly as they were.
+                base_order = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)]
+                new_order = base_order
+                if rerank_cfg is not None:
+                    new_order, rerank_scores = await asyncio.to_thread(
+                        rerank_keys,
+                        query,
+                        new_order,
+                        lambda key: self._rerank_text(candidates.get(key)),
+                        limit,
+                        rerank_cfg,
                     )
-                fused_scores = {key: 1.0 / (60 + index + 1) for index, key in enumerate(ordered_keys)}
+                if use_recency:
+                    new_order = self._fuse_recency(new_order, candidates, valid_as_of, fused_scores, rerank_scores)
+                if new_order != base_order:
+                    fused_scores = dict(zip(new_order, (fused_scores[key] for key in base_order)))
             self._apply_current_state_boost(query, fused_scores, candidates)
             self._apply_latest_family_order(query, fused_scores, candidates)
             ordered_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)]
@@ -975,6 +980,8 @@ class StatePlane:
                 }
                 if key in rerank_scores:
                     result["rerank_score"] = round(rerank_scores[key], 6)
+                if isinstance(entry.metadata, dict) and entry.metadata.get("source_key"):
+                    result["source_key"] = str(entry.metadata["source_key"])
                 if explain:
                     result.update(
                         self._recall_explain_envelope(
@@ -1280,7 +1287,8 @@ class StatePlane:
         return value
 
     RECENCY_FUSION_DEPTH = 200
-    RECENCY_TIE_TOLERANCE = 0.05  # relevance scores within 5% count as an equally good match
+    RECENCY_TIE_TOLERANCE = 0.05  # fused scores within 5% count as an equally good match
+    RECENCY_LOGIT_TOLERANCE = 0.5  # cross-encoder logits within 0.5 count as an equally good match
 
     @staticmethod
     def _recency_fusion_enabled() -> bool:
@@ -1300,13 +1308,17 @@ class StatePlane:
         ordered_keys: List[str],
         candidates: Dict[str, Any],
         as_of,
-        relevance: Optional[Dict[str, float]] = None,
+        fused: Optional[Dict[str, float]] = None,
+        reranked: Optional[Dict[str, float]] = None,
     ) -> List[str]:
         """Let recency break ties among equally good matches, never override relevance.
 
         The top RECENCY_FUSION_DEPTH results are split into groups of near-equal
-        relevance (each score within RECENCY_TIE_TOLERANCE of the group's first);
-        groups keep their relevance order. Inside a group, results with an event time
+        relevance; groups keep their relevance order. Cross-encoder scores (unbounded
+        logits) tie within RECENCY_LOGIT_TOLERANCE of the group's first, fused scores
+        within RECENCY_TIE_TOLERANCE of it, and a result never ties across the two
+        kinds, so results past the rerank depth keep their fused relevance order.
+        Inside a group, results with an event time
         at or before ``as_of`` come newest first, so a question asked at a moment sees
         the value that was current then; results without an event time follow in
         their original order. A weak match can never move above a better one.
@@ -1314,10 +1326,18 @@ class StatePlane:
         head = ordered_keys[: self.RECENCY_FUSION_DEPTH]
         if not head:
             return ordered_keys
-        scores = relevance or {}
-        fused: List[str] = []
+        fused_scores, rerank_scores = fused or {}, reranked or {}
+
+        def tied(first: str, key: str) -> bool:
+            if (first in rerank_scores) != (key in rerank_scores):
+                return False
+            if key in rerank_scores:
+                return abs(rerank_scores[first] - rerank_scores[key]) <= self.RECENCY_LOGIT_TOLERANCE
+            lead = float(fused_scores.get(first, 0.0))
+            return abs(lead - float(fused_scores.get(key, 0.0))) <= self.RECENCY_TIE_TOLERANCE * abs(lead)
+
+        out: List[str] = []
         group: List[str] = []
-        leader = None
 
         def flush() -> None:
             dated, undated = [], []
@@ -1328,20 +1348,16 @@ class StatePlane:
                     dated.append((event_time, position, key))
                 else:
                     undated.append(key)
-            fused.extend(key for _, _, key in sorted(dated, key=lambda item: (-item[0], item[1])))
-            fused.extend(undated)
+            out.extend(key for _, _, key in sorted(dated, key=lambda item: (-item[0], item[1])))
+            out.extend(undated)
 
         for key in head:
-            value = float(scores.get(key, 0.0))
-            if leader is not None and abs(leader - value) > self.RECENCY_TIE_TOLERANCE * abs(leader):
+            if group and not tied(group[0], key):
                 flush()
                 group = []
-                leader = None
-            if leader is None:
-                leader = value
             group.append(key)
         flush()
-        return fused + ordered_keys[len(head):]
+        return out + ordered_keys[len(head):]
 
     async def _load_any(self, key: str) -> Optional[MemoryEntry]:
         entry = self.working_memory.get(key)
@@ -1350,7 +1366,7 @@ class StatePlane:
         return entry
 
     async def _attach_sources(self, results: List[Dict[str, Any]], query_timestamp: Optional[str] = None) -> None:
-        """Add {"key", "value"} of each result's metadata["source_key"] memory.
+        """Add {"key", "value"} of the memory named by each result's ``source_key``.
 
         A source is attached only if this recall could have returned it itself: it
         still exists (a forgotten source is gone), is recallable (not invalidated,
@@ -1371,9 +1387,7 @@ class StatePlane:
 
         seen: set[str] = set()
         for result in results:
-            hit = await self._load_any(result.get("key", ""))
-            metadata = hit.metadata if hit is not None and isinstance(hit.metadata, dict) else {}
-            source_key = str(metadata.get("source_key") or "")
+            source_key = str(result.get("source_key") or "")  # set by recall from the recalled version
             if not source_key or source_key == result.get("key"):
                 continue
             source = await visible(source_key)
