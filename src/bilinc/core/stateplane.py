@@ -1266,6 +1266,22 @@ class StatePlane:
             return {str(k): self._redact_recall_explain_value(v, key_hint=str(k)) for k, v in value.items()}
         return value
 
+    async def _attach_sources(self, results: List[Dict[str, Any]]) -> None:
+        """Add {"key", "value"} of each result's metadata["source_key"] memory, once per source."""
+        if not self.backend:
+            return
+        seen: set[str] = set()
+        for result in results:
+            entry = await self.backend.load(result.get("key", ""))
+            source_key = str(((entry.metadata or {}) if entry else {}).get("source_key") or "")
+            if not source_key or source_key == result.get("key"):
+                continue
+            source = await self.backend.load(source_key)
+            if source is None:
+                continue
+            result["source"] = {"key": source.key, "value": source.value, "repeated": source_key in seen}
+            seen.add(source_key)
+
     async def recall_reflective(
         self,
         query: str,
@@ -1275,8 +1291,13 @@ class StatePlane:
         memory_types: Optional[List[MemoryType]] = None,
         explain: bool = False,
         query_timestamp: Optional[str] = None,
+        expand_sources: bool = False,
     ) -> Dict[str, Any]:
         """
+        ``expand_sources=True`` attaches the source memory of each result that
+        names one in ``metadata["source_key"]`` (for example facts written by
+        ``bilinc.integrations.distill``), as ``result["source"]``.
+
         Reflection loop:
         1) run intelligent recall
         2) evaluate adequacy
@@ -1329,6 +1350,8 @@ class StatePlane:
                     results = next_results
                     adequacy = next_adequacy
 
+            if expand_sources:
+                await self._attach_sources(results)
             payload = {
                 "query": query,
                 "final_query": current_query,
