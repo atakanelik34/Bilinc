@@ -263,9 +263,7 @@ def history_records(rows: list[Any], *, values: str) -> list[dict[str, Any]]:
 
         before = _audit_json(row.before_value)
         after = _audit_json(row.after_value)
-        source = None
-        if isinstance(after, dict):
-            source = after.get("source") or (after.get("metadata") or {}).get("source")
+        source = _effective_source(after) if isinstance(after, dict) else None
 
         record: dict[str, Any] = {
             "op": "confirm" if metadata.get("confirmed") else op,
@@ -474,7 +472,7 @@ class ProjectRuntimeManager:
                 continue
             state = entry.to_dict()
             item["entry_version"] = entry_version(state)
-            item["source"] = state.get("source") or (state.get("metadata") or {}).get("source")
+            item["source"] = _effective_source(state)
             item["created_at"] = state.get("created_at")
             item["updated_at"] = state.get("updated_at")
 
