@@ -296,7 +296,7 @@ def test_list_without_sources_is_unchanged(sidecar):
 
 @pytest.mark.parametrize(
     "sources",
-    [[], [f"s{index}" for index in range(21)], ["x" * 257]],
+    [[], [f"s{index}" for index in range(21)], ["x" * 257], ["a\x00b"]],
 )
 def test_list_rejects_out_of_bounds_source_filters(sidecar, sources):
     response = _post(sidecar, str(uuid4()), "memories", {"sources": sources})
@@ -629,3 +629,13 @@ def test_agm_judges_a_revision_against_the_persisted_entry(tmp_path):
 
     assert revised.status_code == 200
     assert seen["cached_created_at"] == pytest.approx(persisted_created_at)
+
+
+def test_list_reports_the_same_source_the_filter_matches():
+    from bilinc.cloud.runtime import _effective_source
+
+    assert _effective_source({"source": "mcp:Claude", "metadata": {"source": "x"}}) == "mcp:Claude"
+    assert _effective_source({"source": "", "metadata": {"source": "agent"}}) == "agent"
+    # A non-string metadata.source is no source, exactly as the backends' filter treats it.
+    assert _effective_source({"source": "", "metadata": {"source": 5}}) is None
+    assert _effective_source({"source": None, "metadata": None}) is None

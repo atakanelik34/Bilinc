@@ -998,6 +998,9 @@ class SQLiteBackend(StorageBackend):
             # The effective source mirrors what the hosted list returns:
             # the source column, else a string metadata.source, else none
             # (''), so the token '' selects entries with no source at all.
+            # Metadata written with NaN or Infinity is not valid SQLite JSON, so
+            # such a row counts as having no metadata source here while the list
+            # reports it. Local SQLite only; hosted projects run on PostgreSQL.
             clauses.append(
                 "COALESCE(NULLIF(source, ''), CASE WHEN json_valid(metadata) "
                 "AND json_type(metadata, '$.source') = 'text' "

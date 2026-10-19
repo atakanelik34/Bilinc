@@ -94,8 +94,9 @@ class ListRequest(BaseModel):
     memory_type: str | None = Field(default=None, max_length=32)
     updated_after: float | None = None
     updated_before: float | None = None
-    #: Exact match on the effective source ("" = no source). Bounds are
-    #: enforced by the runtime so every bad filter is a 400 invalid_request.
+    #: Exact match on the effective source ("" = no source). A wrong type is a
+    #: 422 from validation; empty, too many, too long or NUL-containing values
+    #: are a 400 invalid_request from the runtime.
     sources: list[str] | None = None
     cursor: str | None = Field(default=None, max_length=MAX_CURSOR_LENGTH)
     limit: int = Field(default=50, ge=1, le=MAX_LIST_LIMIT)

@@ -88,6 +88,20 @@ def _supported_recall_kwargs(plane_type: type) -> frozenset[str]:
         return frozenset()
 
 
+def _effective_source(state: dict[str, Any]) -> str | None:
+    """The source a list entry reports, and the one the ``sources`` filter matches.
+
+    The top-level source when it is a non-empty string, else ``metadata.source`` when that is a
+    non-empty string, else ``None``. Both storage backends compute the same value in SQL.
+    """
+    top = state.get("source")
+    if isinstance(top, str) and top:
+        return top
+    meta = state.get("metadata") or {}
+    nested = meta.get("source") if isinstance(meta, dict) else None
+    return nested if isinstance(nested, str) and nested else None
+
+
 def _coerce_memory_types(names: list[str] | None) -> list[MemoryType] | None:
     """Map public memory-type names onto the enum, rejecting unknown names."""
     if not names:
@@ -578,7 +592,10 @@ class ProjectRuntimeManager:
             if (
                 not sources
                 or len(sources) > MAX_LIST_SOURCES
-                or any(not isinstance(item, str) or len(item) > MAX_SOURCE_LENGTH for item in sources)
+                or any(
+                    not isinstance(item, str) or len(item) > MAX_SOURCE_LENGTH or "\x00" in item
+                    for item in sources
+                )
             ):
                 raise ValueError("invalid_request")
             sources = sorted(set(sources))
@@ -611,7 +628,7 @@ class ProjectRuntimeManager:
                 "key": entry.key,
                 "memory_type": state.get("memory_type"),
                 "importance": entry.importance,
-                "source": state.get("source") or (state.get("metadata") or {}).get("source") or None,
+                "source": _effective_source(state),
                 "created_at": entry.created_at,
                 "updated_at": entry.updated_at,
                 "entry_version": entry_version(state),
