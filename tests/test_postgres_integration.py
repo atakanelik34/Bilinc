@@ -110,3 +110,33 @@ async def test_postgres_persistence_across_backend_instances():
     assert loaded.key == "cross_backend"
     await _truncate(backend_b)
     await backend_b.close()
+
+
+@pytest.mark.asyncio
+async def test_postgres_list_page_filters_by_effective_source(backend: PostgresBackend):
+    rows = [
+        ("a.1", "claude", {}),
+        ("a.2", "", {"source": "codex"}),  # legacy: only metadata.source
+        ("a.3", "", {}),  # no source at all
+        ("a.4", "claude", {}),
+        ("a.5", "bilinc_cloud", {}),
+        ("a.6", "hermes", {"source": "codex"}),  # the column wins
+        ("a.7", "", {"source": 5}),  # a non-string metadata.source is no source
+    ]
+    for key, source, metadata in rows:
+        await backend.save(MemoryEntry(key=key, value=key, source=source, metadata=metadata))
+
+    async def keys(**kwargs):
+        return [entry.key for entry in await backend.list_page(**kwargs)]
+
+    assert await keys(limit=50) == [f"a.{index}" for index in range(1, 8)]
+    assert await backend.count_filtered() == 7
+    assert await keys(sources=["claude", "codex"], limit=50) == ["a.1", "a.2", "a.4"]
+    assert await backend.count_filtered(sources=["claude", "codex"]) == 3
+    assert await keys(sources=["claude", "codex"], limit=2) == ["a.1", "a.2"]
+    assert await keys(sources=["claude", "codex"], after_key="a.2", limit=2) == ["a.4"]
+    assert await keys(sources=["hermes"], limit=50) == ["a.6"]
+    assert await keys(sources=[""], limit=50) == ["a.3", "a.7"]
+    assert await backend.count_filtered(sources=[""]) == 2
+    assert await keys(sources=["bilinc_cloud"], prefix="a.", limit=50) == ["a.5"]
+    assert await keys(sources=["nobody"], limit=50) == []

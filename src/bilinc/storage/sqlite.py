@@ -976,6 +976,7 @@ class SQLiteBackend(StorageBackend):
         memory_type: Optional[str],
         updated_after: Optional[float],
         updated_before: Optional[float],
+        sources: Optional[List[str]] = None,
     ) -> tuple[list[str], list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -993,6 +994,17 @@ class SQLiteBackend(StorageBackend):
         if updated_before is not None:
             clauses.append("updated_at < ?")
             params.append(float(updated_before))
+        if sources is not None:
+            # The effective source mirrors what the hosted list returns:
+            # the source column, else a string metadata.source, else none
+            # (''), so the token '' selects entries with no source at all.
+            clauses.append(
+                "COALESCE(NULLIF(source, ''), CASE WHEN json_valid(metadata) "
+                "AND json_type(metadata, '$.source') = 'text' "
+                "THEN NULLIF(json_extract(metadata, '$.source'), '') END, '') "
+                f"IN ({', '.join('?' for _ in sources)})"
+            )
+            params.extend(sources)
         return clauses, params
 
     async def list_page(
@@ -1002,6 +1014,7 @@ class SQLiteBackend(StorageBackend):
         memory_type: Optional[str] = None,
         updated_after: Optional[float] = None,
         updated_before: Optional[float] = None,
+        sources: Optional[List[str]] = None,
         after_key: Optional[str] = None,
         limit: int = 50,
     ) -> List[MemoryEntry]:
@@ -1009,8 +1022,10 @@ class SQLiteBackend(StorageBackend):
 
         Ordered by key so a cursor (the last key seen) stays stable while other
         writes land: new keys appear in their sorted place, never shift a page.
+        ``sources`` keeps only entries whose effective source (the source
+        column, else metadata.source, else '') is one of the given strings.
         """
-        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before)
+        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before, sources)
         if after_key is not None:
             clauses.append("key > ?")
             params.append(after_key)
@@ -1028,8 +1043,9 @@ class SQLiteBackend(StorageBackend):
         memory_type: Optional[str] = None,
         updated_after: Optional[float] = None,
         updated_before: Optional[float] = None,
+        sources: Optional[List[str]] = None,
     ) -> int:
-        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before)
+        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before, sources)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         row = self._get_conn().execute(f"SELECT COUNT(*) AS cnt FROM memories {where}", params).fetchone()
         return int(row["cnt"])

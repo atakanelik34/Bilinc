@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from bilinc.cloud.runtime import decode_cursor, encode_cursor, value_preview  # noqa: E402
 from bilinc.cloud.service import create_app  # noqa: E402
+from bilinc.core.models import MemoryEntry  # noqa: E402
 
 HEADERS = {"X-Bilinc-Sidecar-Token": "secret"}
 
@@ -38,7 +39,13 @@ def _post(client, project, path, body):
 
 def test_health_advertises_the_memory_review_capabilities(sidecar):
     capabilities = sidecar.get("/health", headers=HEADERS).json()["capabilities"]
-    assert {"commit_if_absent", "memory_history", "memory_list", "memory_confirm"} <= set(capabilities)
+    assert {
+        "commit_if_absent",
+        "memory_history",
+        "memory_list",
+        "memory_confirm",
+        "memory_list_source",
+    } <= set(capabilities)
 
 
 def test_new_routes_require_the_sidecar_token(sidecar):
@@ -232,6 +239,127 @@ def test_list_is_project_isolated(sidecar):
     listing = _post(sidecar, project_b, "memories", {}).json()
 
     assert listing["entries"] == [] and listing["total"] == 0
+
+
+def test_list_filters_by_source_before_paging(sidecar):
+    project = str(uuid4())
+    for index in range(5):
+        _commit(sidecar, project, f"k.{index}", index, source="claude" if index % 2 == 0 else "codex")
+    _commit(sidecar, project, "k.5", 5)  # no source: stored as "bilinc_cloud"
+    _commit(sidecar, project, "k.6", 6, source="hermes")
+
+    first = _post(sidecar, project, "memories", {"sources": ["claude"], "limit": 2}).json()
+    assert [entry["key"] for entry in first["entries"]] == ["k.0", "k.2"]
+    assert {entry["source"] for entry in first["entries"]} == {"claude"}
+    assert first["total"] == 3
+    assert first["next_cursor"]
+
+    # A matching write that sorts before the cursor must not shift the next page.
+    _commit(sidecar, project, "a.first", "new", source="claude")
+    second = _post(
+        sidecar, project, "memories", {"sources": ["claude"], "limit": 2, "cursor": first["next_cursor"]}
+    ).json()
+    assert [entry["key"] for entry in second["entries"]] == ["k.4"]
+    assert second["next_cursor"] is None
+    assert second["total"] == 4
+
+    several = _post(sidecar, project, "memories", {"sources": ["codex", "hermes"]}).json()
+    assert [entry["key"] for entry in several["entries"]] == ["k.1", "k.3", "k.6"]
+    assert several["total"] == 3
+
+    default = _post(sidecar, project, "memories", {"sources": ["bilinc_cloud"]}).json()
+    assert [entry["key"] for entry in default["entries"]] == ["k.5"]
+    assert default["entries"][0]["source"] == "bilinc_cloud"
+
+    combined = _post(sidecar, project, "memories", {"sources": ["claude"], "prefix": "k."}).json()
+    assert [entry["key"] for entry in combined["entries"]] == ["k.0", "k.2", "k.4"]
+    assert combined["total"] == 3
+
+    # Exact match: no prefix, case or wildcard semantics.
+    for near_miss in (["claud"], ["Claude"], ["claude%"], ["unknown"], [""]):
+        listing = _post(sidecar, project, "memories", {"sources": near_miss}).json()
+        assert listing["entries"] == [] and listing["total"] == 0
+
+
+def test_list_without_sources_is_unchanged(sidecar):
+    project = str(uuid4())
+    _commit(sidecar, project, "a", 1, source="claude")
+    _commit(sidecar, project, "b", 2)
+
+    omitted = _post(sidecar, project, "memories", {}).json()
+    assert omitted == _post(sidecar, project, "memories", {"sources": None}).json()
+    # Unknown fields are still ignored, so old and new clients see the same list.
+    assert omitted == _post(sidecar, project, "memories", {"not_a_field": ["x"]}).json()
+    assert [entry["key"] for entry in omitted["entries"]] == ["a", "b"]
+    assert omitted["total"] == 2
+
+
+@pytest.mark.parametrize(
+    "sources",
+    [[], [f"s{index}" for index in range(21)], ["x" * 257]],
+)
+def test_list_rejects_out_of_bounds_source_filters(sidecar, sources):
+    response = _post(sidecar, str(uuid4()), "memories", {"sources": sources})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_request"
+
+
+def test_list_accepts_source_filters_at_the_bounds(sidecar):
+    project = str(uuid4())
+    _commit(sidecar, project, "edge", 1, source="x" * 256)
+    at_bounds = [f"s{index}" for index in range(19)] + ["x" * 256]
+    listing = _post(sidecar, project, "memories", {"sources": at_bounds}).json()
+    assert [entry["key"] for entry in listing["entries"]] == ["edge"]
+
+
+def _seed_source_rows(backend, run):
+    """Rows covering every way a source can be stored."""
+    rows = [
+        ("a.1", "claude", {}),
+        ("a.2", "", {"source": "codex"}),  # legacy: only metadata.source
+        ("a.3", "", {}),  # no source at all
+        ("a.4", "claude", {}),
+        ("a.5", "bilinc_cloud", {}),
+        ("a.6", "hermes", {"source": "codex"}),  # the column wins
+        ("a.7", "", {"source": 5}),  # a non-string metadata.source is no source
+    ]
+    for key, source, metadata in rows:
+        run(backend.save(MemoryEntry(key=key, value=key, source=source, metadata=metadata)))
+
+
+def _assert_source_filter_contract(backend, run):
+    async def keys(**kwargs):
+        return [entry.key for entry in await backend.list_page(**kwargs)]
+
+    everything = run(keys(limit=50))
+    assert everything == [f"a.{index}" for index in range(1, 8)]
+    assert run(backend.count_filtered()) == 7
+
+    assert run(keys(sources=["claude", "codex"], limit=50)) == ["a.1", "a.2", "a.4"]
+    assert run(backend.count_filtered(sources=["claude", "codex"])) == 3
+    assert run(keys(sources=["claude", "codex"], limit=2)) == ["a.1", "a.2"]
+    assert run(keys(sources=["claude", "codex"], after_key="a.2", limit=2)) == ["a.4"]
+    assert run(keys(sources=["hermes"], limit=50)) == ["a.6"]
+    assert run(keys(sources=[""], limit=50)) == ["a.3", "a.7"]
+    assert run(backend.count_filtered(sources=[""])) == 2
+    assert run(keys(sources=["bilinc_cloud"], prefix="a.", limit=50)) == ["a.5"]
+    assert run(keys(sources=["nobody"], limit=50)) == []
+
+
+def test_sqlite_list_page_filters_by_effective_source(tmp_path):
+    import asyncio
+
+    from bilinc.storage.sqlite import SQLiteBackend
+
+    loop = asyncio.new_event_loop()
+    try:
+        backend = SQLiteBackend(db_path=str(tmp_path / "sources.db"))
+        loop.run_until_complete(backend.init())
+        _seed_source_rows(backend, loop.run_until_complete)
+        _assert_source_filter_contract(backend, loop.run_until_complete)
+        loop.run_until_complete(backend.close())
+    finally:
+        loop.close()
 
 
 # --- confirm -----------------------------------------------------------------

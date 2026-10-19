@@ -166,6 +166,10 @@ VALUE_PREVIEW_CHARS = 200
 #: Same ceiling as a value-bearing diff, for the same reason.
 MAX_HISTORY_RESPONSE_BYTES = MAX_DIFF_RESPONSE_BYTES
 MAX_LIST_RESPONSE_BYTES = MAX_DIFF_RESPONSE_BYTES
+#: Bounds for the list ``sources`` filter. Out-of-bounds filters (and an
+#: empty list) are rejected as ``invalid_request`` rather than truncated.
+MAX_LIST_SOURCES = 20
+MAX_SOURCE_LENGTH = 256
 
 
 def value_preview(value: Any) -> str:
@@ -548,6 +552,7 @@ class ProjectRuntimeManager:
         memory_type: str | None = None,
         updated_after: float | None = None,
         updated_before: float | None = None,
+        sources: list[str] | None = None,
         cursor: str | None = None,
         limit: int = 50,
         values: str = "preview",
@@ -556,11 +561,27 @@ class ProjectRuntimeManager:
 
         Paging is by key, so a cursor stays valid while other writes land.
         ``total`` counts every entry matching the filters, not just this page.
+
+        ``sources`` keeps only entries whose effective source -- the value
+        returned as ``source`` below -- equals one of the given strings
+        exactly. ``""`` selects entries with no source (returned as ``None``).
+        Hosted commits without a source are stored as ``"bilinc_cloud"`` and
+        match that string. The filter runs inside the backend query, so the
+        page, ``total`` and ``next_cursor`` all respect it; reuse a cursor
+        with the same filters it was issued under.
         """
         if values not in VALUE_MODES:
             raise ValueError("invalid_request")
         if memory_type is not None:
             _coerce_memory_types([memory_type])
+        if sources is not None:
+            if (
+                not sources
+                or len(sources) > MAX_LIST_SOURCES
+                or any(not isinstance(item, str) or len(item) > MAX_SOURCE_LENGTH for item in sources)
+            ):
+                raise ValueError("invalid_request")
+            sources = sorted(set(sources))
         plane = await self.get_plane(project_id)
         backend = plane.backend
         if backend is None or not hasattr(backend, "list_page"):
@@ -575,6 +596,10 @@ class ProjectRuntimeManager:
             "updated_after": updated_after,
             "updated_before": updated_before,
         }
+        if sources is not None:
+            # Only passed when set, so an unfiltered list calls the backend
+            # exactly as before.
+            filters["sources"] = sources
         page = await backend.list_page(**filters, after_key=after_key, limit=bound + 1)
         has_more = len(page) > bound
         page = page[:bound]
