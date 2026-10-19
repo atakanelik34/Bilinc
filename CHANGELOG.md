@@ -2,6 +2,17 @@
 
 All notable changes to Bilinc.
 
+## [2.4.1] — 2026-10-19
+
+### Added
+
+- Internal runtime: the hosted memory list (`POST /v1/projects/{project_id}/memories`) takes an optional `sources` filter, so the Bilinc Cloud dashboard can show only the memories a given app or source saved. It matches the effective source exactly (the stored source, else a string `metadata.source`; `""` selects memories with no source), runs inside the storage query on SQLite and PostgreSQL so the page, `total` and `next_cursor` all respect it, and accepts 1–20 values of at most 256 characters. The runtime advertises it as the `memory_list_source` capability.
+
+### Fixed
+
+- Align the SDK, CLI, PyPI package, hosted website and MCP Registry release versions at 2.4.1. The public SDK API and protocol contracts are unchanged; the PyPI package still ships only the cloud SDK, CLI and MCP adapter.
+- Internal runtime: the memory list, history and recall report the same effective source the new filter matches; a `metadata.source` that is not a string now reads as no source instead of being passed through.
+
 ## [2.4.0] — 2026-10-19
 
 ### Added

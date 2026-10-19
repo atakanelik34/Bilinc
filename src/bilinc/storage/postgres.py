@@ -944,6 +944,7 @@ class PostgresBackend(StorageBackend):
         memory_type: Optional[str],
         updated_after: Optional[float],
         updated_before: Optional[float],
+        sources: Optional[List[str]] = None,
     ) -> tuple[list[str], list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -961,6 +962,14 @@ class PostgresBackend(StorageBackend):
             clauses.append(f"updated_at > {bind(float(updated_after))}")
         if updated_before is not None:
             clauses.append(f"updated_at < {bind(float(updated_before))}")
+        if sources is not None:
+            # Same effective source as SQLiteBackend._page_filters: the source
+            # column, else a string metadata.source, else '' (no source).
+            clauses.append(
+                "COALESCE(NULLIF(source, ''), CASE WHEN jsonb_typeof(metadata -> 'source') = 'string' "
+                "THEN NULLIF(metadata ->> 'source', '') END, '') "
+                f"= ANY({bind(list(sources))}::text[])"
+            )
         return clauses, params
 
     async def list_page(
@@ -970,13 +979,14 @@ class PostgresBackend(StorageBackend):
         memory_type: Optional[str] = None,
         updated_after: Optional[float] = None,
         updated_before: Optional[float] = None,
+        sources: Optional[List[str]] = None,
         after_key: Optional[str] = None,
         limit: int = 50,
     ) -> List[MemoryEntry]:
         """Return one key-ordered page of entries (see SQLiteBackend.list_page)."""
         if not self._initialized:
             await self.init()
-        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before)
+        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before, sources)
         # COLLATE "C" (byte order) on both the cursor comparison and ORDER BY,
         # so paging agrees with SQLite regardless of the database's locale.
         if after_key is not None:
@@ -999,10 +1009,11 @@ class PostgresBackend(StorageBackend):
         memory_type: Optional[str] = None,
         updated_after: Optional[float] = None,
         updated_before: Optional[float] = None,
+        sources: Optional[List[str]] = None,
     ) -> int:
         if not self._initialized:
             await self.init()
-        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before)
+        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before, sources)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         async with self.pool.acquire() as conn:
             return int(await conn.fetchval(f"SELECT COUNT(*) FROM bilinc_entries {where}", *params))

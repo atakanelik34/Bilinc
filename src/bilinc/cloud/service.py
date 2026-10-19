@@ -28,7 +28,15 @@ MAX_CURSOR_LENGTH = 4096
 
 #: Feature flags the control plane checks before routing a request here. An
 #: older sidecar without a route would 404, which must not read as "no memory".
-SIDECAR_CAPABILITIES = ["commit_if_absent", "memory_history", "memory_list", "memory_confirm"]
+SIDECAR_CAPABILITIES = [
+    "commit_if_absent",
+    "memory_history",
+    "memory_list",
+    "memory_confirm",
+    # ListRequest.sources: an older sidecar would silently ignore the filter
+    # and return every memory, so the control plane must check for this.
+    "memory_list_source",
+]
 
 
 class CommitRequest(BaseModel):
@@ -86,6 +94,10 @@ class ListRequest(BaseModel):
     memory_type: str | None = Field(default=None, max_length=32)
     updated_after: float | None = None
     updated_before: float | None = None
+    #: Exact match on the effective source ("" = no source). A wrong type is a
+    #: 422 from validation; empty, too many, too long or NUL-containing values
+    #: are a 400 invalid_request from the runtime.
+    sources: list[str] | None = None
     cursor: str | None = Field(default=None, max_length=MAX_CURSOR_LENGTH)
     limit: int = Field(default=50, ge=1, le=MAX_LIST_LIMIT)
     values: Literal["full", "preview", "none"] = "preview"
