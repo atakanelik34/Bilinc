@@ -6,8 +6,6 @@
 [![Python](https://img.shields.io/pypi/pyversions/bilinc.svg)](https://pypi.org/project/bilinc/)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-server-purple.svg)](https://bilinc.space/for/mcp)
-[![Release](https://img.shields.io/github/v/release/atakanelik34/Bilinc?display_name=tag&sort=semver)](https://github.com/atakanelik34/Bilinc/releases)
-[![CI](https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/atakanelik34/Bilinc/actions/workflows/ci.yml)
 <a href="https://pepy.tech/project/bilinc"><img src="https://static.pepy.tech/badge/bilinc" alt="Downloads"></a>
 
 **Hosted memory infrastructure for AI agents: commit, recall, and inspect agent state through one API key, with verification, provenance, and recovery around every write.**
@@ -330,7 +328,7 @@ For the engineering rationale, read [Why vector search is not enough for agent m
 
 ## Contributing
 
-Start with [CONTRIBUTING.md](CONTRIBUTING.md). Use [Discussions](https://github.com/atakanelik34/Bilinc/discussions)
+Start with [CONTRIBUTING.md](CONTRIBUTING.md). Use [Issues](https://github.com/ReARCLabs/bilinc-python/issues)
 for design questions and roadmap feedback; use an issue for a reproducible bug or a scoped implementation task.
 
 Security reports should follow [SECURITY.md](SECURITY.md). Please do not include private memory values, API keys, or
