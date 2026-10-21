@@ -2,11 +2,22 @@
 
 All notable changes to Bilinc.
 
-## [Unreleased]
+## [2.5.0] — 2026-10-21
+
+### Added
+
+- `forget(..., purge=True)` (SDK), `bilinc forget --purge` (CLI) and `"purge": true` on the hosted forget route remove a memory and also remove its stored values from the audit trail and from every snapshot of the workspace. This also works on a memory that was forgotten earlier and cannot be undone. The audit hash chain keeps verifying: a new PURGE receipt in the chain lists every emptied row, and verification accepts an emptied row only when a later receipt names it. Key names and value hashes remain, so this is removal from storage and history, not cryptographic erasure. The SDK raises if the server does not confirm a requested purge.
+- Internal runtime: `DELETE /v1/projects/{project_id}` removes a workspace's schema or database, snapshots and files for the control plane's deletion schedule. It is refused unless `BILINC_PURGE_ENABLED` is on and supports `?dry_run=true`. Capabilities `memory_purge` and `project_purge`.
+
+### Security
+
+- Hosted writes are scanned for secrets before anything is stored. A `commit` or `revise` whose key, value, metadata, source, session ID or reason contains a provider-shaped credential (AWS, GitHub, GitLab, Slack, Stripe live, Anthropic, OpenAI, Google API, PyPI and Bilinc keys, JWTs, PEM private keys) is rejected with `secret_detected` (HTTP 422), and the response never echoes the value. Credential fields whose value looks generated (`password=…` or `Authorization: Bearer …` followed by letters mixed with digits, or a long mixed-case string; a dict key such as `api_key`) are replaced with `[REDACTED]` and reported in a `warnings` list; a plain-word value is left as written. Operator notes (the reasons given to `forget`, `confirm` and `rollback`, and snapshot labels and metadata) are masked the same way but never refused, so a memory can always be removed or restored. Documentation examples, placeholders, paths and prose are left alone. The runtime advertises this as the `secret_scan` capability; `BILINC_SECRET_SCAN=off` turns it off.
 
 ### Fixed
 
+- Hosted recall (PostgreSQL backend) now ranks with full-text search. Each entry keeps a `tsv` column built from its decoded key, value and allowlisted metadata, so Turkish and other non-ASCII words are found even though values are stored as escaped JSON. Queries OR their content words, as the local FTS5 path does, and the best match comes first; the old `fts_search` ordered matches worst-first and was never called. The ranking fills the existing hybrid slot of `recall_intelligent`, so the fusion weights and the `explain` fields are unchanged. Schema version 2 adds the nullable column and a GIN index without rewriting the table, and fills existing rows once, in batches, the first time each tenant loads.
 - Local full-text recall no longer splits words that start with the Turkish dotted capital I: `İstanbul` was searched as `i` and `stanbul`.
+- The audit trail is described as what it is, a linear SHA-256 hash chain, not a Merkle chain.
 
 ## [2.4.1] — 2026-10-19
 

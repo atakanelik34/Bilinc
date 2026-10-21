@@ -15,9 +15,10 @@ Schema:
 """
 from __future__ import annotations
 import json
+import re
 import time
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 try:
     import asyncpg
 except ImportError:
@@ -33,9 +34,70 @@ from bilinc.storage.backend import StorageBackend
 from bilinc.storage.postgres_tenancy import TENANT_TABLES, quoted, search_path_setting, validate_schema_name
 logger = logging.getLogger(__name__)
 
+# Full-text search document. It is built in Python from the decoded value,
+# because ``value`` is stored as JSON text with ``\uXXXX`` escapes for every
+# non-ASCII character: a tsvector computed in SQL would index ``u015fimci``
+# instead of ``girişimci``. The metadata allowlist matches
+# StatePlane.LEXICAL_RECALL_METADATA_FIELDS, so arbitrary metadata never
+# becomes searchable by accident.
+FTS_METADATA_FIELDS = (
+    "source_timestamp",
+    "source_date_time",
+    "event_timestamp",
+    "occurred_at",
+    "timestamp",
+)
+FTS_DOCUMENT_MAX_CHARS = 65536
+FTS_MAX_QUERY_TERMS = 64
+FTS_BACKFILL_BATCH = 500
+_FTS_TERM = re.compile(r"[^\W_]+", flags=re.UNICODE)
+
+
+def _fts_strings(value: Any) -> Iterable[str]:
+    if value is None:
+        return
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item_key, item in value.items():
+            yield str(item_key)
+            yield from _fts_strings(item)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _fts_strings(item)
+    else:
+        yield str(value)
+
+
+def fts_document(key: str, value: Any, metadata: Optional[Dict[str, Any]]) -> str:
+    """Plain text that the ``tsv`` column indexes: key, value and allowlisted metadata."""
+    parts = [str(key or "")]
+    parts.extend(_fts_strings(value))
+    if isinstance(metadata, dict):
+        for field in FTS_METADATA_FIELDS:
+            item = metadata.get(field)
+            if item is not None and not isinstance(item, (dict, list, tuple, set)):
+                parts.append(str(item))
+    return " ".join(parts)[:FTS_DOCUMENT_MAX_CHARS]
+
+
+def fts_or_query(query: str) -> str:
+    """OR every distinct term, like the local FTS5 path; terms carry no tsquery syntax."""
+    terms = list(dict.fromkeys(_FTS_TERM.findall(str(query or ""))))
+    return " | ".join(terms[:FTS_MAX_QUERY_TERMS])
+
+
+def _decode_json_text(raw: Any) -> Any:
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+
 
 class PostgresBackend(StorageBackend):
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(
         self,
@@ -243,6 +305,17 @@ class PostgresBackend(StorageBackend):
                     COALESCE(metadata::text, '')
                 ))
             """)
+            # Schema v2: an app-maintained tsvector. Nullable columns without a
+            # default are catalog-only changes, so existing tenants are not
+            # rewritten. ``tsv_at`` records the ``updated_at`` that ``tsv`` was
+            # built from: a row saved by an older runtime (after a rollback)
+            # has a newer ``updated_at`` and is rebuilt by the backfill.
+            await conn.execute("""
+                ALTER TABLE bilinc_entries ADD COLUMN IF NOT EXISTS tsv tsvector;
+                ALTER TABLE bilinc_entries ADD COLUMN IF NOT EXISTS tsv_at DOUBLE PRECISION;
+                CREATE INDEX IF NOT EXISTS idx_bilinc_tsv ON bilinc_entries USING GIN (tsv);
+            """)
+            await self._backfill_fts(conn)
             current = await conn.fetchrow("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
             if current is None or current["version"] < self.SCHEMA_VERSION:
                 await conn.execute(
@@ -552,23 +625,60 @@ class PostgresBackend(StorageBackend):
             "created_at": row["created_at"],
         })
 
+    async def _backfill_fts(self, conn) -> int:
+        """Build ``tsv`` for rows without a current one (pre-v2 or saved by an older runtime), in batches."""
+        started = time.perf_counter()
+        filled = 0
+        while True:
+            rows = await conn.fetch(
+                "SELECT key, value, metadata, updated_at FROM bilinc_entries "
+                "WHERE tsv IS NULL OR tsv_at IS DISTINCT FROM updated_at LIMIT $1",
+                FTS_BACKFILL_BATCH,
+            )
+            if not rows:
+                break
+            await conn.executemany(
+                "UPDATE bilinc_entries SET tsv = to_tsvector('simple', $2), tsv_at = $3 WHERE key = $1",
+                [
+                    (
+                        row["key"],
+                        fts_document(row["key"], _decode_json_text(row["value"]), _decode_json_text(row["metadata"])),
+                        row["updated_at"],
+                    )
+                    for row in rows
+                ],
+            )
+            filled += len(rows)
+        if filled:
+            logger.info(
+                "Backfilled full-text search for %d entries in %s (%.0f ms)",
+                filled,
+                self.schema or "public",
+                (time.perf_counter() - started) * 1000,
+            )
+        return filled
+
     def fts_rebuild(self):
-        """PostgreSQL uses a maintained expression index; rebuild is a no-op."""
+        """PostgreSQL keeps ``tsv`` current on every save; rebuild is a no-op."""
         return True
 
-    async def fts_search(self, query: str, limit: int = 10):
+    async def fts_search(self, query: str, limit: int = 10, allowed_keys: Optional[Iterable[str]] = None):
+        """Rank entries by full-text match, best first: ``[(id, key, rank), ...]``."""
         if not self._initialized:
             await self.init()
-        vector = (
-            "to_tsvector('simple', COALESCE(key, '') || ' ' || "
-            "COALESCE(value::text, '') || ' ' || COALESCE(metadata::text, ''))"
-        )
+        tsquery = fts_or_query(query)
+        if not tsquery:
+            return []
         sql = (
-            "SELECT id, key, ts_rank(" + vector + ", plainto_tsquery('simple', $1)) AS rank "
-            "FROM bilinc_entries WHERE " + vector + " @@ plainto_tsquery('simple', $1) "
-            "ORDER BY rank LIMIT $2"
+            "SELECT id, key, ts_rank(tsv, q) AS rank "
+            "FROM bilinc_entries, to_tsquery('simple', $1) AS q WHERE tsv @@ q"
         )
-        rows = await self.pool.fetch(sql, str(query), int(limit))
+        params: list[Any] = [tsquery, int(limit)]
+        if allowed_keys is not None:
+            sql += " AND key = ANY($3::text[])"
+            params.append(list(allowed_keys))
+        sql += " ORDER BY rank DESC, key LIMIT $2"
+        rows = await self.pool.fetch(sql, *params)
         return [(row["id"], row["key"], float(row["rank"])) for row in rows]
 
     async def save(self, entry: MemoryEntry) -> bool:
@@ -588,10 +698,10 @@ class PostgresBackend(StorageBackend):
                         last_accessed, access_count, valid_at, invalid_at, ttl,
                         is_verified, verification_score, verification_method,
                         importance, decay_rate, current_strength,
-                        conflict_id, superseded_by
+                        conflict_id, superseded_by, tsv, tsv_at
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                               $11, $12, $13, $14, $15, $16, $17, $18,
-                              $19, $20, $21, $22, $23)
+                              $19, $20, $21, $22, $23, to_tsvector('simple', $24), $10)
                     ON CONFLICT (key) DO UPDATE SET
                         id = EXCLUDED.id,
                         memory_type = EXCLUDED.memory_type,
@@ -611,7 +721,9 @@ class PostgresBackend(StorageBackend):
                         decay_rate = EXCLUDED.decay_rate,
                         current_strength = EXCLUDED.current_strength,
                         conflict_id = EXCLUDED.conflict_id,
-                        superseded_by = EXCLUDED.superseded_by
+                        superseded_by = EXCLUDED.superseded_by,
+                        tsv = EXCLUDED.tsv,
+                        tsv_at = EXCLUDED.tsv_at
                 """,
                     entry.id, entry.key, entry.memory_type.value,
                     value_json, json.dumps(entry.metadata or {}), ccs_json,
@@ -620,6 +732,7 @@ class PostgresBackend(StorageBackend):
                     entry.is_verified, entry.verification_score, entry.verification_method,
                     entry.importance, entry.decay_rate, entry.current_strength,
                     entry.conflict_id, entry.superseded_by,
+                    fts_document(entry.key, entry.value, entry.metadata),
                 )
                 return True
         except Exception as e:
