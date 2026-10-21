@@ -195,6 +195,24 @@ def test_purge_is_refused_before_anything_changes_when_the_audit_trail_cannot_pu
     _run(scenario())
 
 
+def test_an_unreadable_snapshot_blocks_the_purge_before_anything_changes(tmp_path):
+    manager = _manager(tmp_path)
+    project = str(uuid.uuid4())
+
+    async def scenario():
+        await manager.commit(project, key="plan", value=PRIVATE)
+        await manager.create_snapshot(project, label="s")
+        (manager.snapshot_dir(project) / "broken.json").write_text('{"snapshot": {"entries": {"plan": "' + PRIVATE)
+        with pytest.raises(ValueError, match="purge_blocked"):
+            await manager.forget(project, key="plan", reason="erasure", purge=True)
+        plane = await manager.get_plane(project)
+        assert (await plane.backend.load("plan")).value == PRIVATE
+        assert not plane.audit.verify_integrity().get("purged_rows")
+        await manager.close()
+
+    _run(scenario())
+
+
 def test_purge_without_an_audit_trail_still_scrubs_snapshots(tmp_path):
     manager = _manager(tmp_path)
     project = str(uuid.uuid4())

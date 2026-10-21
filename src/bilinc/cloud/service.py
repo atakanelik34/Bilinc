@@ -150,6 +150,7 @@ _PUBLIC_RUNTIME_ERRORS = frozenset(
         "response_too_large",
         "purge_disabled",
         "purge_unsupported",
+        "purge_blocked",
     }
 )
 
@@ -162,6 +163,7 @@ _ERROR_STATUS = {
     "state_changed_since_preview": 409,
     "purge_disabled": 403,
     "purge_unsupported": 501,
+    "purge_blocked": 409,
 }
 
 

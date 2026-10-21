@@ -895,12 +895,17 @@ class ProjectRuntimeManager:
             # Refuse before anything changes rather than report a purge the audit trail did not do.
             raise ValueError("purge_unsupported")
 
+        # Read every snapshot before changing anything, so an unreadable one stops the purge up front.
+        snapshot_files = self._snapshot_files(normalized, strict=True) if purge else []
         existing = await plane.backend.load(key)
         if existing is None and not purge:
             raise ValueError("memory_not_found")
         if existing is not None:
             self._assert_expected_version(existing.to_dict(), expected_version)
-        elif not await self._has_purgeable_history(plane, normalized, key):
+        elif not (
+            (plane.enable_audit and plane.audit and plane.audit.has_purgeable_rows(key))
+            or any(key in _snapshot_entries(payload) for _, payload in snapshot_files)
+        ):
             raise ValueError("memory_not_found")
 
         removed = False
@@ -922,28 +927,44 @@ class ProjectRuntimeManager:
             "reason_recorded": True,
         }
         if purge:
-            response["purged"] = await self._purge_key(plane, normalized, key, reason)
+            response["purged"] = await self._purge_key(plane, key, reason, snapshot_files)
         response["state_version"] = state_version(plane)
         return response
 
-    async def _has_purgeable_history(self, plane: StatePlane, project_id: str, key: str) -> bool:
-        if plane.enable_audit and plane.audit and plane.audit.has_purgeable_rows(key):
-            return True
-        return any(key in _snapshot_entries(payload) for _, payload in self._snapshot_files(project_id))
+    def _snapshot_files(self, project_id: str, *, strict: bool = False) -> list[tuple[Path, dict[str, Any]]]:
+        """Load the project's snapshot files.
 
-    def _snapshot_files(self, project_id: str) -> list[tuple[Path, dict[str, Any]]]:
+        Lenient mode skips unreadable files. Strict mode (used before a purge
+        changes anything) refuses with ``purge_blocked`` instead, because a
+        file that cannot be read cannot be scrubbed and the purge would be
+        reported complete while the value is still on disk.
+        """
         directory = self.snapshot_dir(project_id)
         if not directory.exists():
             return []
         files = []
         for path in sorted(directory.glob("*.json")):
             try:
-                files.append((path, json.loads(path.read_text(encoding="utf-8"))))
+                payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
+                if strict:
+                    raise ValueError("purge_blocked")
                 continue
+            snapshot = payload.get("snapshot", {}) if isinstance(payload, dict) else None
+            if not isinstance(snapshot, dict) or not isinstance(snapshot.get("entries", {}), dict):
+                if strict:
+                    raise ValueError("purge_blocked")
+                continue
+            files.append((path, payload))
         return files
 
-    async def _purge_key(self, plane: StatePlane, project_id: str, key: str, reason: str) -> dict[str, int]:
+    async def _purge_key(
+        self,
+        plane: StatePlane,
+        key: str,
+        reason: str,
+        snapshot_files: list[tuple[Path, dict[str, Any]]],
+    ) -> dict[str, int]:
         """Remove one key's values from the audit trail, snapshots and entity index."""
         audit_rows = 0
         if plane.enable_audit and plane.audit:
@@ -952,7 +973,7 @@ class ProjectRuntimeManager:
         if delete_mentions is not None:
             await delete_mentions(key)
         snapshots = 0
-        for path, payload in self._snapshot_files(project_id):
+        for path, payload in snapshot_files:
             entries = payload.get("snapshot", {}).get("entries")
             if not isinstance(entries, dict) or key not in entries:
                 continue
