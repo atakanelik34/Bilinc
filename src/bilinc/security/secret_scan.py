@@ -217,7 +217,12 @@ def _mask_shapes(value: Any, path: str, findings: list[SecretFinding]) -> Any:
             value = pattern.sub(mask, value)
         return value
     if isinstance(value, dict):
-        return {item_key: _mask_shapes(item, f"{path}.{item_key}", findings) for item_key, item in value.items()}
+        masked = {}
+        for item_key, item in value.items():
+            # The path never carries the raw key: it may be the secret itself.
+            key_text = _mask_shapes(str(item_key), f"{path}.<key>", findings)
+            masked[key_text] = _mask_shapes(item, f"{path}.{key_text}", findings)
+        return masked
     if isinstance(value, (list, tuple)):
         masked = [_mask_shapes(item, f"{path}[{index}]", findings) for index, item in enumerate(value)]
         return masked if isinstance(value, list) else tuple(masked)

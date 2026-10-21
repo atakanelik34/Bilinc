@@ -255,8 +255,15 @@ def test_snapshot_label_metadata_and_rollback_reason_are_masked(tmp_path):
 
     async def scenario():
         await manager.commit(project, key="a", value="first")
-        snap = await manager.create_snapshot(project, label=f"before {secret}", metadata={"note": secret})
+        snap = await manager.create_snapshot(
+            project, label=f"before {secret}", metadata={"note": secret, secret: "as a key"}
+        )
         assert secret not in json.dumps(await manager.load_snapshot(project, snap.id))
+        assert {item["field"] for item in snap.warnings} == {"label", "metadata.note", "metadata.<key>"}
+        assert all(item["rule"] == "bilinc_key" for item in snap.warnings)
+        assert secret not in json.dumps(snap.warnings)
+        plain = await manager.create_snapshot(project, label="ordinary")
+        assert plain.warnings is None
         result = await manager.rollback_execute(
             project, snapshot_id=snap.id, reason=f"undo with {secret}", expected_current_root=None
         )

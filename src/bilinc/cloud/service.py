@@ -161,6 +161,14 @@ _ERROR_STATUS = {
 }
 
 
+def _snapshot_body(snapshot) -> dict:
+    """Snapshot fields for the response; ``warnings`` only when a label or metadata was masked."""
+    body = dict(snapshot.__dict__)
+    if not body.get("warnings"):
+        body.pop("warnings", None)
+    return body
+
+
 @contextmanager
 def _runtime_errors():
     """Translate runtime ``ValueError`` codes into stable sidecar responses."""
@@ -312,7 +320,7 @@ def create_app(
     ):
         with _runtime_errors():
             snapshots = await manager.list_snapshots(project_id, limit=limit)
-        return {"snapshots": [snapshot.__dict__ for snapshot in snapshots]}
+        return {"snapshots": [_snapshot_body(snapshot) for snapshot in snapshots]}
 
     @app.post("/v1/projects/{project_id}/snapshots")
     async def create_snapshot(
@@ -327,6 +335,6 @@ def create_app(
                 label=request.label,
                 metadata=request.metadata,
             )
-        return {"snapshot": snapshot.__dict__}
+        return {"snapshot": _snapshot_body(snapshot)}
 
     return app

@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import time
+import dataclasses
 from dataclasses import dataclass
 from functools import lru_cache, wraps
 from pathlib import Path
@@ -355,6 +356,7 @@ class ProjectSnapshot:
     root_hash: str | None
     label: str | None = None
     metadata: dict[str, Any] | None = None
+    warnings: list[dict[str, str]] | None = None
 
 
 class ProjectRuntimeManager:
@@ -977,8 +979,8 @@ class ProjectRuntimeManager:
         label: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ProjectSnapshot:
-        label, _ = _scrub_reason(label, "label")
-        metadata, _ = _scrub_reason(metadata, "metadata")
+        label, label_warnings = _scrub_reason(label, "label")
+        metadata, metadata_warnings = _scrub_reason(metadata, "metadata")
         normalized = self.normalize_project_id(project_id)
         plane = await self.get_plane(normalized)
         snapshot = await plane.snapshot()
@@ -1000,7 +1002,9 @@ class ProjectRuntimeManager:
             json.dumps(payload, sort_keys=True, default=str),
             encoding="utf-8",
         )
-        return self._snapshot_from_payload(payload)
+        created = self._snapshot_from_payload(payload)
+        warnings = label_warnings + metadata_warnings
+        return dataclasses.replace(created, warnings=warnings) if warnings else created
 
     async def list_snapshots(self, project_id: str, *, limit: int = 20) -> list[ProjectSnapshot]:
         directory = self.snapshot_dir(project_id)
