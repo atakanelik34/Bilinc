@@ -24,7 +24,7 @@ from bilinc.core.stateplane import StatePlane
 from bilinc.storage.sqlite import SQLiteBackend
 from bilinc.storage.postgres import PostgresBackend
 from bilinc.storage.postgres_tenancy import project_schema
-from bilinc.security.secret_scan import ScanResult, scan_write, scanning_enabled
+from bilinc.security.secret_scan import ScanResult, scan_write, scanning_enabled, scrub_note
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,14 @@ def _scan_write(
 
 def _redaction_warnings(scan: ScanResult) -> list[dict[str, str]]:
     return [{"code": "secret_redacted", "rule": item.rule, "field": item.field} for item in scan.redactions]
+
+
+def _scrub_reason(reason: str | None) -> tuple[str | None, list[dict[str, str]]]:
+    """Mask secrets in a forget/confirm reason; these operations are never refused."""
+    if not scanning_enabled():
+        return reason, []
+    scrubbed, findings = scrub_note(reason)
+    return scrubbed, [{"code": "secret_redacted", "rule": item.rule, "field": item.field} for item in findings]
 
 
 def build_entry_metadata(
@@ -756,6 +764,7 @@ class ProjectRuntimeManager:
         """
         from bilinc.core.models import MemoryEntry
 
+        reason, warnings = _scrub_reason(reason)
         plane = await self.get_plane(project_id)
         if not plane.backend:
             raise ValueError("invalid_request")
@@ -785,7 +794,7 @@ class ProjectRuntimeManager:
                 after_value=saved_state,
                 metadata={"reason": reason, "confirmed": True, "origin": "bilinc_cloud"},
             )
-        return {
+        response = {
             "success": True,
             "key": key,
             "confirmed": True,
@@ -793,6 +802,9 @@ class ProjectRuntimeManager:
             "entry_version": entry_version(saved_state),
             "state_version": state_version(plane),
         }
+        if warnings:
+            response["warnings"] = warnings
+        return response
 
     async def _revise_loaded(
         self,
@@ -919,6 +931,7 @@ class ProjectRuntimeManager:
         state under the existing retention policy; this is deliberately *not*
         regulatory erasure, which is a separate admin lifecycle.
         """
+        reason, warnings = _scrub_reason(reason)
         plane = await self.get_plane(project_id)
         if not plane.backend:
             raise ValueError("invalid_request")
@@ -940,13 +953,16 @@ class ProjectRuntimeManager:
                 metadata={"reason": reason, "origin": "bilinc_cloud", "deleted": bool(removed)},
             )
 
-        return {
+        response = {
             "success": bool(removed),
             "key": key,
             "removed": bool(removed),
             "reason_recorded": True,
             "state_version": state_version(plane),
         }
+        if warnings:
+            response["warnings"] = warnings
+        return response
 
     @staticmethod
     def _assert_expected_version(entry_state: dict[str, Any], expected: str | None) -> None:

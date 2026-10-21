@@ -216,6 +216,28 @@ def test_revise_redacts_value_and_reason_before_storage(tmp_path):
     _run(scenario())
 
 
+def test_forget_and_confirm_mask_secrets_in_the_reason_but_never_refuse(tmp_path):
+    manager = _manager(tmp_path)
+    project = str(uuid.uuid4())
+    secret = SHAPES["github_token"]
+
+    async def scenario():
+        await manager.commit(project, key="a", value="first")
+        await manager.commit(project, key="b", value="second")
+        confirmed = await manager.confirm(project, key="a", reason=f"checked with {secret}")
+        forgotten = await manager.forget(project, key="b", reason=f"leaked {secret}")
+        assert confirmed["success"] and forgotten["removed"]
+        for response in (confirmed, forgotten):
+            assert response["warnings"] == [{"code": "secret_redacted", "rule": "github_token", "field": "reason"}]
+        for key in ("a", "b"):
+            history = await manager.history(project, key=key)
+            assert secret not in str(history)
+            assert history["entries"][0]["reason"].endswith(REDACTED)
+        await manager.close()
+
+    _run(scenario())
+
+
 def test_scan_can_be_switched_off(tmp_path, monkeypatch):
     monkeypatch.setenv("BILINC_SECRET_SCAN", "off")
     manager = _manager(tmp_path)

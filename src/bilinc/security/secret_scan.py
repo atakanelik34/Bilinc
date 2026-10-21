@@ -201,6 +201,31 @@ def _redact(value: Any, path: str, redactions: list[SecretFinding]) -> Any:
     return value
 
 
+def scrub_note(text: Optional[str], field: str = "reason") -> tuple[Optional[str], list[SecretFinding]]:
+    """Mask secrets in a free-text note without ever refusing the operation.
+
+    Used for the reason of ``forget`` and ``confirm``: removing or confirming a
+    memory must always work, so provider-shaped matches are masked rather
+    than rejected, then credential fields are redacted as usual.
+    """
+    if not text:
+        return text, []
+    findings: list[SecretFinding] = []
+    lowered = text.lower()
+    for rule, keywords, pattern in _SHAPE_RULES:
+        if not any(keyword in lowered for keyword in keywords):
+            continue
+
+        def mask(match: re.Match, rule: str = rule) -> str:
+            if _is_documentation_value(match.group(0)):
+                return match.group(0)
+            findings.append(SecretFinding(rule, field))
+            return REDACTED
+
+        text = pattern.sub(mask, text)
+    return _redact_text(text, field, findings), findings
+
+
 def scan_write(
     *,
     key: str,
