@@ -6,7 +6,7 @@ All notable changes to Bilinc.
 
 ### Security
 
-- Hosted writes are scanned for secrets before anything is stored. A `commit` or `revise` whose key, value, metadata, source, session ID or reason contains a provider-shaped credential (AWS, GitHub, GitLab, Slack, Stripe live, Anthropic, OpenAI, Google API, PyPI and Bilinc keys, JWTs, PEM private keys) is rejected with `secret_detected` (HTTP 422), and the response never echoes the value. Credential fields (`password=…`, `Authorization: Bearer …`, a dict key such as `api_key`) are replaced with `[REDACTED]` and reported in a `warnings` list. Documentation examples, placeholders, paths and prose are left alone. The runtime advertises this as the `secret_scan` capability; `BILINC_SECRET_SCAN=off` turns it off.
+- Hosted writes are scanned for secrets before anything is stored. A `commit` or `revise` whose key, value, metadata, source, session ID or reason contains a provider-shaped credential (AWS, GitHub, GitLab, Slack, Stripe live, Anthropic, OpenAI, Google API, PyPI and Bilinc keys, JWTs, PEM private keys) is rejected with `secret_detected` (HTTP 422), and the response never echoes the value. Credential fields whose value looks generated (`password=…` or `Authorization: Bearer …` followed by letters mixed with digits, or a long mixed-case string; a dict key such as `api_key`) are replaced with `[REDACTED]` and reported in a `warnings` list; a plain-word value is left as written. Documentation examples, placeholders, paths and prose are left alone. The runtime advertises this as the `secret_scan` capability; `BILINC_SECRET_SCAN=off` turns it off.
 
 ## [2.4.1] — 2026-10-19
 
