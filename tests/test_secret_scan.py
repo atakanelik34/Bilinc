@@ -124,6 +124,15 @@ def test_credential_fields_are_redacted_with_a_finding_not_rejected():
     }
 
 
+def test_json_encoded_credentials_inside_a_string_are_redacted():
+    api_key = fake(30, seed="json") + "4"
+    text = json.dumps({"service": "mailer", "api_key": api_key})
+    result = scan_write(key="cfg", value=text)
+    assert api_key not in result.value
+    assert json.loads(result.value)["api_key"] == REDACTED
+    assert [(item.rule, item.field) for item in result.redactions] == [("credential_assignment", "value")]
+
+
 @pytest.mark.parametrize(
     "value",
     [

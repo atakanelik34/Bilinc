@@ -50,7 +50,7 @@ _SHAPE_RULES = [
 _ASSIGNMENT = re.compile(
     r"(?i)\b(password|passwd|pwd|passphrase|secret|client[_-]?secret|api[_-]?key|access[_-]?key|"
     r"access[_-]?token|auth[_-]?token|refresh[_-]?token|private[_-]?key|token)\b"
-    r"(\s*[:=]\s*)([\"']?)([^\s\"',;]{8,})"
+    r"([\"']?\s*[:=]\s*)([\"']?)([^\s\"',;]{8,})"
 )
 _AUTH_HEADER = re.compile(r"(?i)\b(bearer|basic)(\s+)([A-Za-z0-9._~+/=-]{16,})")
 _FIELD_KEYWORDS = ("pass", "secret", "key", "token", "bearer", "basic", "pwd", "credential")
