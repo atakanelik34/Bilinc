@@ -36,5 +36,5 @@ present and run the validator without `--allow-missing-raw`.
 
 ## Questions and support
 
-Use [GitHub Issues](https://github.com/ReARCLabs/bilinc-python/issues) for architecture and roadmap questions.
+Use [GitHub Issues](https://github.com/ReARCLabs/bilinc/issues) for architecture and roadmap questions.
 Use an issue for a reproducible bug or a narrowly scoped feature request.

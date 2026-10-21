@@ -39,9 +39,9 @@ dependencies = [
 [project.urls]
 Homepage = "https://bilinc.space"
 Documentation = "https://bilinc.space/docs"
-Repository = "https://github.com/ReARCLabs/bilinc-python"
+Repository = "https://github.com/ReARCLabs/bilinc"
 Changelog = "https://bilinc.space/changelog"
-Issues = "https://github.com/ReARCLabs/bilinc-python/issues"
+Issues = "https://github.com/ReARCLabs/bilinc/issues"
 
 [project.optional-dependencies]
 dev = [

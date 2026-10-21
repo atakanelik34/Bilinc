@@ -5,7 +5,7 @@
 - Python: `>=3.10`
 - License: `BUSL-1.1`
 - Install: `pip install bilinc`
-- Canonical repository: https://github.com/atakanelik34/Bilinc
+- Canonical repository: https://github.com/ReARCLabs/bilinc
 - Verified: `2026-10-21`
 
 ## Public surface
