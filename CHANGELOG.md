@@ -2,6 +2,17 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Added
+
+- `forget(..., purge=True)` (SDK), `bilinc forget --purge` (CLI) and `"purge": true` on the hosted forget route remove a memory and also remove its stored values from the audit trail and from every snapshot of the workspace. This also works on a memory that was forgotten earlier and cannot be undone. The audit hash chain keeps verifying: a new PURGE receipt in the chain lists every emptied row, and verification accepts an emptied row only when a later receipt names it. Key names and value hashes remain, so this is removal from storage and history, not cryptographic erasure. The SDK raises if the server does not confirm a requested purge.
+- Internal runtime: `DELETE /v1/projects/{project_id}` removes a workspace's schema or database, snapshots and files for the control plane's deletion schedule. It is refused unless `BILINC_PURGE_ENABLED` is on and supports `?dry_run=true`. Capabilities `memory_purge` and `project_purge`.
+
+### Fixed
+
+- The audit trail is described as what it is, a linear SHA-256 hash chain, not a Merkle chain.
+
 ## [2.4.1] — 2026-10-19
 
 ### Added
