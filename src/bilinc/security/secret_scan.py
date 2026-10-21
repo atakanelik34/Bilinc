@@ -201,29 +201,42 @@ def _redact(value: Any, path: str, redactions: list[SecretFinding]) -> Any:
     return value
 
 
-def scrub_note(text: Optional[str], field: str = "reason") -> tuple[Optional[str], list[SecretFinding]]:
-    """Mask secrets in a free-text note without ever refusing the operation.
+def _mask_shapes(value: Any, path: str, findings: list[SecretFinding]) -> Any:
+    if isinstance(value, str):
+        lowered = value.lower()
+        for rule, keywords, pattern in _SHAPE_RULES:
+            if not any(keyword in lowered for keyword in keywords):
+                continue
 
-    Used for the reason of ``forget`` and ``confirm``: removing or confirming a
-    memory must always work, so provider-shaped matches are masked rather
-    than rejected, then credential fields are redacted as usual.
+            def mask(match: re.Match, rule: str = rule) -> str:
+                if _is_documentation_value(match.group(0)):
+                    return match.group(0)
+                findings.append(SecretFinding(rule, path))
+                return REDACTED
+
+            value = pattern.sub(mask, value)
+        return value
+    if isinstance(value, dict):
+        return {item_key: _mask_shapes(item, f"{path}.{item_key}", findings) for item_key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        masked = [_mask_shapes(item, f"{path}[{index}]", findings) for index, item in enumerate(value)]
+        return masked if isinstance(value, list) else tuple(masked)
+    return value
+
+
+def scrub_note(value: Any, field: str = "reason") -> tuple[Any, list[SecretFinding]]:
+    """Mask secrets in an operator note without ever refusing the operation.
+
+    Used for the reasons of ``forget``, ``confirm`` and ``rollback`` and for
+    snapshot labels and metadata: those operations must always work (a secret
+    must stay removable), so provider-shaped matches are masked rather than
+    rejected, then credential fields are redacted as usual.
     """
-    if not text:
-        return text, []
+    if value is None or value == "":
+        return value, []
     findings: list[SecretFinding] = []
-    lowered = text.lower()
-    for rule, keywords, pattern in _SHAPE_RULES:
-        if not any(keyword in lowered for keyword in keywords):
-            continue
-
-        def mask(match: re.Match, rule: str = rule) -> str:
-            if _is_documentation_value(match.group(0)):
-                return match.group(0)
-            findings.append(SecretFinding(rule, field))
-            return REDACTED
-
-        text = pattern.sub(mask, text)
-    return _redact_text(text, field, findings), findings
+    masked = _mask_shapes(value, field, findings)
+    return _redact(masked, field, findings), findings
 
 
 def scan_write(

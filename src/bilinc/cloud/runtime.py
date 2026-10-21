@@ -83,11 +83,11 @@ def _redaction_warnings(scan: ScanResult) -> list[dict[str, str]]:
     return [{"code": "secret_redacted", "rule": item.rule, "field": item.field} for item in scan.redactions]
 
 
-def _scrub_reason(reason: str | None) -> tuple[str | None, list[dict[str, str]]]:
-    """Mask secrets in a forget/confirm reason; these operations are never refused."""
+def _scrub_reason(reason: Any, field: str = "reason") -> tuple[Any, list[dict[str, str]]]:
+    """Mask secrets in an operator note (reason, label, snapshot metadata); never refuses."""
     if not scanning_enabled():
         return reason, []
-    scrubbed, findings = scrub_note(reason)
+    scrubbed, findings = scrub_note(reason, field)
     return scrubbed, [{"code": "secret_redacted", "rule": item.rule, "field": item.field} for item in findings]
 
 
@@ -977,6 +977,8 @@ class ProjectRuntimeManager:
         label: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ProjectSnapshot:
+        label, _ = _scrub_reason(label, "label")
+        metadata, _ = _scrub_reason(metadata, "metadata")
         normalized = self.normalize_project_id(project_id)
         plane = await self.get_plane(normalized)
         snapshot = await plane.snapshot()
@@ -1161,6 +1163,7 @@ class ProjectRuntimeManager:
         the audit trail to a timestamp: the stored checkpoint is the artifact
         the operator previewed and approved.
         """
+        reason, warnings = _scrub_reason(reason)
         normalized = self.normalize_project_id(project_id)
         payload = await self.load_snapshot(normalized, snapshot_id)
         target_state = _snapshot_entries(payload)
@@ -1232,7 +1235,7 @@ class ProjectRuntimeManager:
 
         # Counts only: a rollback response must never carry restored or
         # deleted values back to the caller.
-        return {
+        response = {
             "success": True,
             "snapshot_id": normalize_snapshot_id(snapshot_id),
             "counts": {"created": len(created), "updated": len(updated), "deleted": len(deleted)},
@@ -1240,6 +1243,9 @@ class ProjectRuntimeManager:
             "state_version": state_version(plane),
             "reason_recorded": True,
         }
+        if warnings:
+            response["warnings"] = warnings
+        return response
 
     async def close(self) -> None:
         for plane in self._planes.values():

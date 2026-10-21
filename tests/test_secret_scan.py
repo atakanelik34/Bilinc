@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import uuid
 
@@ -233,6 +234,27 @@ def test_forget_and_confirm_mask_secrets_in_the_reason_but_never_refuse(tmp_path
             history = await manager.history(project, key=key)
             assert secret not in str(history)
             assert history["entries"][0]["reason"].endswith(REDACTED)
+        await manager.close()
+
+    _run(scenario())
+
+
+def test_snapshot_label_metadata_and_rollback_reason_are_masked(tmp_path):
+    manager = _manager(tmp_path)
+    project = str(uuid.uuid4())
+    secret = SHAPES["bilinc_key"]
+
+    async def scenario():
+        await manager.commit(project, key="a", value="first")
+        snap = await manager.create_snapshot(project, label=f"before {secret}", metadata={"note": secret})
+        assert secret not in json.dumps(await manager.load_snapshot(project, snap.id))
+        result = await manager.rollback_execute(
+            project, snapshot_id=snap.id, reason=f"undo with {secret}", expected_current_root=None
+        )
+        assert result["success"] is True
+        assert result["warnings"] == [{"code": "secret_redacted", "rule": "bilinc_key", "field": "reason"}]
+        plane = await manager.get_plane(project)
+        assert secret not in json.dumps(plane.audit.get_history("__system"), default=str)
         await manager.close()
 
     _run(scenario())
