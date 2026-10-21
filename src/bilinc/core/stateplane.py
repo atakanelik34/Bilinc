@@ -242,6 +242,11 @@ class StatePlane:
             "s",
         }
     )
+    # Turkish function words, dropped from Postgres full-text queries only
+    # (the English list above already applies there too).
+    PG_FTS_EXTRA_STOPWORDS = frozenset(
+        {"ve", "veya", "ile", "bir", "bu", "şu", "o", "da", "de", "ki", "mi", "mı", "mu", "mü", "ne", "için", "gibi", "ama", "çok", "daha"}
+    )
     REFLECTION_DEFAULT_THRESHOLD = 0.55
     REFLECTION_MAX_PASSES = 3
     RECALL_EXPLAIN_SENSITIVE_KEYS = {
@@ -819,6 +824,14 @@ class StatePlane:
                 top_k=max(limit * 3, 10),
                 candidate_keys=candidate_keys,
             )
+            if not hybrid_ranked and self._get_hybrid_search() is None:
+                # Postgres mode has no local FTS5/vector index; its full-text
+                # ranking fills the same RRF slot so weights stay unchanged.
+                hybrid_ranked = await self._rank_pg_fts_keys(
+                    query,
+                    top_k=max(limit * 3, 10),
+                    candidate_keys=candidate_keys,
+                )
             semantic_ranked = self._rank_semantic_keys(
                 query,
                 top_k=max(limit * 10, 50),
@@ -1200,7 +1213,8 @@ class StatePlane:
             token_note = f" ({', '.join(matching_tokens[:5])})" if matching_tokens else ""
             reasons.append(f"lexical match{token_note}")
         if signals.get("hybrid", 0.0) > 0:
-            reasons.append("hybrid/vector rerank match")
+            # Without the local hybrid index this slot holds Postgres full-text ranking.
+            reasons.append("hybrid/vector rerank match" if self._get_hybrid_search() is not None else "full-text match")
         if signals.get("semantic", 0.0) > 0:
             reasons.append("semantic embedding match")
         if signals.get("sparse", 0.0) > 0:
@@ -2327,6 +2341,43 @@ class StatePlane:
             return [meta.get("key") for _, _, meta in results if meta.get("key")]
         except Exception:
             return []
+
+    def _pg_fts_query_text(self, query: str) -> str:
+        """Query terms for Postgres full-text ranking, in original case.
+
+        Postgres lowercases query and document with the same rules, so terms are
+        not lowercased here (Python's ``"İ".lower()`` is two code points that
+        Postgres never produces). ``ts_rank`` has no IDF, so stopwords would
+        outweigh content words; they are dropped unless nothing else is left.
+        """
+        terms = list(dict.fromkeys(re.findall(r"[^\W_]+", query or "", flags=re.UNICODE)))
+        content = [
+            term
+            for term in terms
+            if term.casefold() not in self.LEXICAL_QUERY_STOPWORDS
+            and term.casefold() not in self.PG_FTS_EXTRA_STOPWORDS
+        ]
+        return " ".join(content or terms)
+
+    async def _rank_pg_fts_keys(
+        self,
+        query: str,
+        top_k: int,
+        candidate_keys: Optional[set[str]] = None,
+    ) -> List[str]:
+        """Postgres full-text ranking (best first); ``[]`` on any other backend or error."""
+        fts_search = getattr(self.backend, "fts_search", None)
+        if fts_search is None or not asyncio.iscoroutinefunction(fts_search):
+            return []
+        text = self._pg_fts_query_text(query)
+        if not text:
+            return []
+        try:
+            rows = await fts_search(text, limit=top_k, allowed_keys=candidate_keys)
+        except Exception as exc:
+            logger.warning("Postgres full-text recall failed: %s", type(exc).__name__)
+            return []
+        return [key for _, key, _ in rows if key]
 
     def _rank_semantic_keys(
         self,

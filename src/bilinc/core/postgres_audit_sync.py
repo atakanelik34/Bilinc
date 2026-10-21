@@ -13,7 +13,7 @@ except ImportError:
     psycopg = None
     dict_row = None
 
-from bilinc.core.audit import AuditEntry, OpType
+from bilinc.core.audit import AuditEntry, OpType, verify_chain
 from bilinc.storage.postgres_tenancy import quoted, search_path_setting, validate_schema_name
 
 
@@ -127,35 +127,48 @@ class SyncPostgresAuditTrail:
         with self.conn.cursor() as cur:
             cur.execute("SELECT * FROM audit_log ORDER BY id ASC")
             rows = cur.fetchall()
+        return verify_chain(rows)
+
+    def has_purgeable_rows(self, key: str) -> bool:
+        """Whether any row for ``key`` still holds a value a purge would remove."""
+        if self.conn is None:
+            raise RuntimeError("SyncPostgresAuditTrail not initialized")
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM audit_log WHERE key = %s AND (before_value IS NOT NULL OR after_value IS NOT NULL) "
+                "AND op_type <> %s LIMIT 1",
+                (key, OpType.PURGE.value),
+            )
+            return cur.fetchone() is not None
+
+    def purge_key(self, key: str, metadata: Optional[Dict] = None) -> int:
+        """Remove the stored values of every row for ``key`` behind a PURGE receipt (see audit.verify_chain)."""
+        if self.conn is None:
+            raise RuntimeError("SyncPostgresAuditTrail not initialized")
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, data_hash FROM audit_log WHERE key = %s "
+                "AND (before_value IS NOT NULL OR after_value IS NOT NULL) AND op_type <> %s ORDER BY id",
+                (key, OpType.PURGE.value),
+            )
+            rows = cur.fetchall()
         if not rows:
-            return {"valid": True, "entries": 0, "message": "Empty audit log"}
-        current_root = "0" * 64
-        first_error = None
-        for row in rows:
-            data_hash = hashlib.sha256(
-                f"{row['op_type']}:{row['key']}:{row['timestamp']}:"
-                f"{row['before_value']}:{row['after_value']}".encode()
-            ).hexdigest()
-            expected_root = hashlib.sha256(
-                f"{current_root}:{data_hash}".encode()
-            ).hexdigest()
-            if row["data_hash"] != data_hash:
-                first_error = f"Data hash mismatch at entry {row['id']}"
-                break
-            if row["root_hash"] != expected_root:
-                first_error = f"Root hash mismatch at entry {row['id']}"
-                break
-            current_root = expected_root
-        last = rows[-1]
-        root_mismatch = last["root_hash"] != current_root
-        return {
-            "valid": first_error is None and not root_mismatch,
-            "entries": len(rows),
-            "current_root": current_root,
-            "stored_root": last["root_hash"],
-            "root_mismatch": root_mismatch,
-            "first_error": first_error,
-        }
+            return 0
+        self.log(
+            OpType.PURGE,
+            key,
+            after_value={"purged": [{"id": row["id"], "data_hash": row["data_hash"]} for row in rows]},
+            metadata=metadata,
+        )
+        with self.conn.transaction():
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE audit_log SET before_value = NULL, after_value = NULL, "
+                    "metadata = metadata || jsonb_build_object('purged_at', %s::double precision) "
+                    "WHERE id = ANY(%s)",
+                    (time.time(), [row["id"] for row in rows]),
+                )
+        return len(rows)
 
     def get_history(self, key: Optional[str] = None, limit: int = 100):
         if self.conn is None:

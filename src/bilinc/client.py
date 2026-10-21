@@ -1,6 +1,6 @@
 """Bilinc Cloud client.
 
-Bilinc 2.4.1 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
+Bilinc 2.5.0 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
 https://bilinc.space. Local self-hosted StatePlane internals are no longer
 shipped in the public package.
 """
@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-__version__ = "2.4.1"
+__version__ = "2.5.0"
 DEFAULT_BASE_URL = "https://bilinc.space"
 SIGNUP_URL = "https://bilinc.space/signup"
 ACTIVATION_CAMPAIGN = "activation_2_3_4"
@@ -624,12 +624,15 @@ class CloudClient:
         reason: str,
         expected_version: str | None = None,
         idempotency_key: str | None = None,
+        purge: bool = False,
     ) -> dict[str, Any]:
         """Remove a memory from active recall. Destructive.
 
         A reason is required and is written to the audit trail. The deleted
-        value is never echoed back. This is not regulatory erasure: the audit
-        receipt is retained under the workspace's existing retention policy.
+        value is never echoed back. By default the audit trail keeps the
+        prior state (history hides it). With ``purge=True`` the key's stored
+        values are also removed from the audit trail and from every snapshot,
+        which cannot be undone; it also works on a key forgotten earlier.
         """
 
         payload: dict[str, Any] = {
@@ -637,12 +640,21 @@ class CloudClient:
             "reason": _require_reason(reason),
         }
         _put_optional(payload, "expectedVersion", _optional_text(expected_version, "expected_version"))
+        if purge:
+            payload["purge"] = True
 
-        return self._post(
+        result = self._post(
             "/api/cloud/memory/forget",
             payload,
             idempotency_key=_optional_text(idempotency_key, "idempotency_key"),
         )
+        if purge and not (isinstance(result, dict) and isinstance(result.get("purged"), dict)):
+            # An older control plane ignores the flag; never report a purge that did not happen.
+            raise BilincCloudError(
+                "Bilinc Cloud did not confirm the purge; the memory may only have been forgotten.",
+                code="purge_not_supported",
+            )
+        return result
 
     def confirm(
         self,

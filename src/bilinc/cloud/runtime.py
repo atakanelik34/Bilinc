@@ -7,10 +7,13 @@ import base64
 import hashlib
 import inspect
 import json
+import logging
 import os
 import re
 import secrets
+import shutil
 import time
+import dataclasses
 from dataclasses import dataclass
 from functools import lru_cache, wraps
 from pathlib import Path
@@ -22,7 +25,10 @@ from bilinc.core.models import MemoryType
 from bilinc.core.stateplane import StatePlane
 from bilinc.storage.sqlite import SQLiteBackend
 from bilinc.storage.postgres import PostgresBackend
-from bilinc.storage.postgres_tenancy import project_schema
+from bilinc.storage.postgres_tenancy import project_schema, quoted
+from bilinc.security.secret_scan import ScanResult, scan_write, scanning_enabled, scrub_note
+
+logger = logging.getLogger(__name__)
 
 #: Hermes-contract fields that ride along in entry metadata rather than as
 #: first-class MemoryEntry columns. Mirrors the local MCP server's behavior so
@@ -47,6 +53,44 @@ def _serialized_project_mutation(
             return await method(self, project_id, *args, **kwargs)
 
     return wrapped
+
+
+def _scan_write(
+    *,
+    key: str,
+    value: Any,
+    metadata: Any = None,
+    reason: str | None = None,
+    labels: dict[str, Any] | None = None,
+) -> ScanResult:
+    """Reject provider-shaped secrets and redact credential fields before anything is stored.
+
+    It runs before the project plane is loaded, so a rejected write costs no
+    storage work. Logs name the rule and field, never the value.
+    """
+    if not scanning_enabled():
+        return ScanResult(value=value, metadata=metadata, reason=reason)
+    scan = scan_write(key=key, value=value, metadata=metadata, reason=reason, labels=labels)
+    if scan.rejection:
+        logger.warning(
+            "Rejected a memory write that looks like it contains a secret: rule=%s field=%s",
+            scan.rejection.rule,
+            scan.rejection.field,
+        )
+        raise ValueError("secret_detected")
+    return scan
+
+
+def _redaction_warnings(scan: ScanResult) -> list[dict[str, str]]:
+    return [{"code": "secret_redacted", "rule": item.rule, "field": item.field} for item in scan.redactions]
+
+
+def _scrub_reason(reason: Any, field: str = "reason") -> tuple[Any, list[dict[str, str]]]:
+    """Mask secrets in an operator note (reason, label, snapshot metadata); never refuses."""
+    if not scanning_enabled():
+        return reason, []
+    scrubbed, findings = scrub_note(reason, field)
+    return scrubbed, [{"code": "secret_redacted", "rule": item.rule, "field": item.field} for item in findings]
 
 
 def build_entry_metadata(
@@ -271,6 +315,14 @@ def history_records(rows: list[Any], *, values: str) -> list[dict[str, Any]]:
             "reason": metadata.get("reason"),
             "source": source or None,
         }
+        if op == OpType.PURGE.value:
+            # The receipt lists the emptied rows; it never carries values.
+            record["source"] = None
+            record["purged_rows"] = len(after.get("purged", [])) if isinstance(after, dict) else 0
+            records.append(record)
+            continue
+        if metadata.get("purged_at") is not None:
+            record["purged"] = True
         if metadata.get("rollback"):
             record["rollback_snapshot_id"] = metadata.get("snapshot_id")
         if values != "none":
@@ -313,6 +365,7 @@ class ProjectSnapshot:
     root_hash: str | None
     label: str | None = None
     metadata: dict[str, Any] | None = None
+    warnings: list[dict[str, str]] | None = None
 
 
 class ProjectRuntimeManager:
@@ -421,6 +474,13 @@ class ProjectRuntimeManager:
         the per-project mutation lock, so it cannot race another writer. It uses
         the same existence test as ``revise``, so exactly one of the two succeeds.
         """
+        scan = _scan_write(
+            key=key,
+            value=value,
+            metadata=metadata,
+            labels={"source": source, "session_id": session_id},
+        )
+        value, metadata = scan.value, scan.metadata
         plane = await self.get_plane(project_id)
         if if_absent:
             if not plane.backend:
@@ -445,7 +505,7 @@ class ProjectRuntimeManager:
             ttl=ttl,
         )
         success = bool(getattr(result, "success", False))
-        return {
+        response = {
             "success": success,
             "operation": getattr(getattr(result, "operation", None), "value", None),
             "affected_keys": list(getattr(result, "affected_keys", []) or []),
@@ -453,6 +513,9 @@ class ProjectRuntimeManager:
             "entry_version": await self._entry_version(plane, key) if success else None,
             "state_version": state_version(plane),
         }
+        if scan.redactions:
+            response["warnings"] = _redaction_warnings(scan)
+        return response
 
     @staticmethod
     async def _attach_provenance(plane: StatePlane, results: Any) -> None:
@@ -670,6 +733,7 @@ class ProjectRuntimeManager:
         that is not there is a caller mistake, not a silent insert. That is what
         makes a revision distinguishable from an accidental overwrite.
         """
+        scan = _scan_write(key=key, value=value, reason=reason)
         plane = await self.get_plane(project_id)
         if not plane.backend or not plane.agm_engine:
             raise ValueError("invalid_request")
@@ -680,15 +744,18 @@ class ProjectRuntimeManager:
 
         previous_state = previous.to_dict()
         self._assert_expected_version(previous_state, expected_version)
-        return await self._revise_loaded(
+        response = await self._revise_loaded(
             plane,
             key=key,
             previous_state=previous_state,
-            value=value,
+            value=scan.value,
             importance=importance,
             strategy=strategy,
-            audit_metadata={"reason": reason},
+            audit_metadata={"reason": scan.reason},
         )
+        if scan.redactions:
+            response["warnings"] = _redaction_warnings(scan)
+        return response
 
     @_serialized_project_mutation
     async def confirm(
@@ -708,6 +775,7 @@ class ProjectRuntimeManager:
         """
         from bilinc.core.models import MemoryEntry
 
+        reason, warnings = _scrub_reason(reason)
         plane = await self.get_plane(project_id)
         if not plane.backend:
             raise ValueError("invalid_request")
@@ -737,7 +805,7 @@ class ProjectRuntimeManager:
                 after_value=saved_state,
                 metadata={"reason": reason, "confirmed": True, "origin": "bilinc_cloud"},
             )
-        return {
+        response = {
             "success": True,
             "key": key,
             "confirmed": True,
@@ -745,6 +813,9 @@ class ProjectRuntimeManager:
             "entry_version": entry_version(saved_state),
             "state_version": state_version(plane),
         }
+        if warnings:
+            response["warnings"] = warnings
+        return response
 
     async def _revise_loaded(
         self,
@@ -864,41 +935,175 @@ class ProjectRuntimeManager:
         key: str,
         reason: str,
         expected_version: str | None = None,
+        purge: bool = False,
     ) -> dict[str, Any]:
         """Remove a memory from active recall, keeping an audit-safe receipt.
 
-        The deleted value is never returned. The audit trail keeps the prior
-        state under the existing retention policy; this is deliberately *not*
-        regulatory erasure, which is a separate admin lifecycle.
+        The deleted value is never returned. Without ``purge`` the audit trail
+        keeps the prior state (history hides it), so the change stays
+        reviewable. With ``purge`` the key's stored values are also removed
+        from the audit trail and from every snapshot of the project, behind a
+        PURGE receipt that keeps the hash chain verifiable. A purge also works
+        on a key that was forgotten earlier. It is removal from storage and
+        history, not cryptographic erasure: key names and value hashes remain.
         """
-        plane = await self.get_plane(project_id)
+        reason, warnings = _scrub_reason(reason)
+        normalized = self.normalize_project_id(project_id)
+        plane = await self.get_plane(normalized)
         if not plane.backend:
             raise ValueError("invalid_request")
+        if purge and plane.enable_audit and plane.audit and not (
+            hasattr(plane.audit, "purge_key") and hasattr(plane.audit, "has_purgeable_rows")
+        ):
+            # Refuse before anything changes rather than report a purge the audit trail did not do.
+            raise ValueError("purge_unsupported")
 
+        # Read every snapshot before changing anything, so an unreadable one stops the purge up front.
+        snapshot_files = self._snapshot_files(normalized, strict=True) if purge else []
         existing = await plane.backend.load(key)
-        if existing is None:
+        if existing is None and not purge:
+            raise ValueError("memory_not_found")
+        if existing is not None:
+            self._assert_expected_version(existing.to_dict(), expected_version)
+        elif not (
+            (plane.enable_audit and plane.audit and plane.audit.has_purgeable_rows(key))
+            or any(key in _snapshot_entries(payload) for _, payload in snapshot_files)
+        ):
             raise ValueError("memory_not_found")
 
-        previous_state = existing.to_dict()
-        self._assert_expected_version(previous_state, expected_version)
+        removed = False
+        if existing is not None:
+            removed = await plane.forget(key)
+            if plane.enable_audit and plane.audit:
+                # A second, value-free entry so the reason is auditable without
+                # duplicating the memory payload.
+                plane.audit.log(
+                    OpType.FORGET,
+                    key,
+                    metadata={"reason": reason, "origin": "bilinc_cloud", "deleted": bool(removed)},
+                )
 
-        removed = await plane.forget(key)
-        if plane.enable_audit and plane.audit:
-            # A second, value-free entry so the reason is auditable without
-            # duplicating the memory payload.
-            plane.audit.log(
-                OpType.FORGET,
-                key,
-                metadata={"reason": reason, "origin": "bilinc_cloud", "deleted": bool(removed)},
-            )
-
-        return {
-            "success": bool(removed),
+        response: dict[str, Any] = {
+            "success": bool(removed) or purge,
             "key": key,
             "removed": bool(removed),
             "reason_recorded": True,
-            "state_version": state_version(plane),
         }
+        if purge:
+            response["purged"] = await self._purge_key(plane, key, reason, snapshot_files)
+        if warnings:
+            response["warnings"] = warnings
+        response["state_version"] = state_version(plane)
+        return response
+
+    def _snapshot_files(self, project_id: str, *, strict: bool = False) -> list[tuple[Path, dict[str, Any]]]:
+        """Load the project's snapshot files.
+
+        Lenient mode skips unreadable files. Strict mode (used before a purge
+        changes anything) refuses with ``purge_blocked`` instead, because a
+        file that cannot be read cannot be scrubbed and the purge would be
+        reported complete while the value is still on disk.
+        """
+        directory = self.snapshot_dir(project_id)
+        if not directory.exists():
+            return []
+        files = []
+        for path in sorted(directory.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                if strict:
+                    raise ValueError("purge_blocked")
+                continue
+            snapshot = payload.get("snapshot", {}) if isinstance(payload, dict) else None
+            if not isinstance(snapshot, dict) or not isinstance(snapshot.get("entries", {}), dict):
+                if strict:
+                    raise ValueError("purge_blocked")
+                continue
+            files.append((path, payload))
+        return files
+
+    async def _purge_key(
+        self,
+        plane: StatePlane,
+        key: str,
+        reason: str,
+        snapshot_files: list[tuple[Path, dict[str, Any]]],
+    ) -> dict[str, int]:
+        """Remove one key's values from the audit trail, snapshots and entity index."""
+        audit_rows = 0
+        if plane.enable_audit and plane.audit:
+            audit_rows = plane.audit.purge_key(key, metadata={"reason": reason, "origin": "bilinc_cloud"})
+        delete_mentions = getattr(plane.backend, "delete_entity_mentions_for_memory_key", None)
+        if delete_mentions is not None:
+            await delete_mentions(key)
+        snapshots = 0
+        for path, payload in snapshot_files:
+            entries = payload.get("snapshot", {}).get("entries")
+            if not isinstance(entries, dict) or key not in entries:
+                continue
+            del entries[key]
+            payload["snapshot"]["total_entries"] = len(entries)
+            payload["total_entries"] = len(entries)
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(payload, sort_keys=True, default=str), encoding="utf-8")
+            os.replace(temporary, path)
+            snapshots += 1
+        return {"audit_rows": audit_rows, "snapshots": snapshots}
+
+    @_serialized_project_mutation
+    async def purge_project(self, project_id: str, *, dry_run: bool = False) -> dict[str, Any]:
+        """Delete everything the runtime holds for a project: its schema or database, snapshots and files.
+
+        Irreversible, so it refuses unless ``BILINC_PURGE_ENABLED`` is on; a
+        dry run only reports what would be removed. Purging a project that is
+        already gone succeeds with nothing removed.
+        """
+        normalized = self.normalize_project_id(project_id)
+        if not dry_run and os.getenv("BILINC_PURGE_ENABLED", "").strip().lower() not in {"1", "true", "on", "yes"}:
+            raise ValueError("purge_disabled")
+        directory = self.project_dir(normalized)
+        snapshot_count = len(list(self.snapshot_dir(normalized).glob("*.json"))) if self.snapshot_dir(normalized).exists() else 0
+        postgres = os.getenv("BILINC_STORAGE_BACKEND", "sqlite").lower() == "postgres"
+        schema = project_schema(normalized) if postgres else None
+        schema_exists = False
+        if schema:
+            import asyncpg
+
+            conn = await asyncpg.connect(dsn=os.environ["BILINC_POSTGRES_DSN"])
+            try:
+                schema_exists = bool(
+                    await conn.fetchval("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", schema)
+                )
+                if schema_exists and not dry_run:
+                    await self._evict_plane(normalized)
+                    await conn.execute(f"DROP SCHEMA IF EXISTS {quoted(schema)} CASCADE")
+            finally:
+                await conn.close()
+        receipt = {
+            "project_id": normalized,
+            "dry_run": dry_run,
+            "schema": schema_exists,
+            "files": directory.exists(),
+            "snapshots": snapshot_count,
+        }
+        if not dry_run:
+            await self._evict_plane(normalized)
+            if directory.exists():
+                shutil.rmtree(directory)
+            receipt["purged"] = True
+        return receipt
+
+    async def _evict_plane(self, project_id: str) -> None:
+        plane = self._planes.pop(project_id, None)
+        if plane is None:
+            return
+        for component in (getattr(plane, "backend", None), getattr(plane, "audit", None)):
+            close = getattr(component, "close", None)
+            if close is not None:
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
 
     @staticmethod
     def _assert_expected_version(entry_state: dict[str, Any], expected: str | None) -> None:
@@ -913,6 +1118,8 @@ class ProjectRuntimeManager:
         label: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ProjectSnapshot:
+        label, label_warnings = _scrub_reason(label, "label")
+        metadata, metadata_warnings = _scrub_reason(metadata, "metadata")
         normalized = self.normalize_project_id(project_id)
         plane = await self.get_plane(normalized)
         snapshot = await plane.snapshot()
@@ -934,7 +1141,9 @@ class ProjectRuntimeManager:
             json.dumps(payload, sort_keys=True, default=str),
             encoding="utf-8",
         )
-        return self._snapshot_from_payload(payload)
+        created = self._snapshot_from_payload(payload)
+        warnings = label_warnings + metadata_warnings
+        return dataclasses.replace(created, warnings=warnings) if warnings else created
 
     async def list_snapshots(self, project_id: str, *, limit: int = 20) -> list[ProjectSnapshot]:
         directory = self.snapshot_dir(project_id)
@@ -1097,6 +1306,7 @@ class ProjectRuntimeManager:
         the audit trail to a timestamp: the stored checkpoint is the artifact
         the operator previewed and approved.
         """
+        reason, warnings = _scrub_reason(reason)
         normalized = self.normalize_project_id(project_id)
         payload = await self.load_snapshot(normalized, snapshot_id)
         target_state = _snapshot_entries(payload)
@@ -1168,7 +1378,7 @@ class ProjectRuntimeManager:
 
         # Counts only: a rollback response must never carry restored or
         # deleted values back to the caller.
-        return {
+        response = {
             "success": True,
             "snapshot_id": normalize_snapshot_id(snapshot_id),
             "counts": {"created": len(created), "updated": len(updated), "deleted": len(deleted)},
@@ -1176,6 +1386,9 @@ class ProjectRuntimeManager:
             "state_version": state_version(plane),
             "reason_recorded": True,
         }
+        if warnings:
+            response["warnings"] = warnings
+        return response
 
     async def close(self) -> None:
         for plane in self._planes.values():

@@ -11,7 +11,7 @@ try:
 except ImportError:
     asyncpg = None
 
-from bilinc.core.audit import AuditEntry, OpType
+from bilinc.core.audit import AuditEntry, OpType, verify_chain
 
 
 class PostgresAuditTrail:
@@ -107,36 +107,7 @@ class PostgresAuditTrail:
             raise RuntimeError("PostgresAuditTrail not initialized")
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM audit_log ORDER BY id ASC")
-        if not rows:
-            return {"valid": True, "entries": 0, "message": "Empty audit log"}
-        current_root = "0" * 64
-        first_error = None
-        for row in rows:
-            data_str = (
-                f"{row['op_type']}:{row['key']}:{row['timestamp']}:"
-                f"{row['before_value']}:{row['after_value']}"
-            )
-            expected_data_hash = hashlib.sha256(data_str.encode()).hexdigest()
-            expected_root = hashlib.sha256(
-                f"{current_root}:{expected_data_hash}".encode()
-            ).hexdigest()
-            if row["data_hash"] != expected_data_hash:
-                first_error = f"Data hash mismatch at entry {row['id']}"
-                break
-            if row["root_hash"] != expected_root:
-                first_error = f"Root hash mismatch at entry {row['id']}"
-                break
-            current_root = expected_root
-        last_row = rows[-1]
-        root_mismatch = last_row["root_hash"] != current_root
-        return {
-            "valid": first_error is None and not root_mismatch,
-            "entries": len(rows),
-            "current_root": current_root,
-            "stored_root": last_row["root_hash"],
-            "root_mismatch": root_mismatch,
-            "first_error": first_error,
-        }
+        return verify_chain(rows)
 
     async def close(self) -> None:
         if self.pool is not None:
