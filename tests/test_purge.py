@@ -169,6 +169,46 @@ def test_plain_forget_keeps_the_audit_values(tmp_path):
     _run(scenario())
 
 
+def test_purge_is_refused_before_anything_changes_when_the_audit_trail_cannot_purge(tmp_path):
+    manager = _manager(tmp_path)
+    project = str(uuid.uuid4())
+
+    class AuditWithoutPurge:
+        def __init__(self, inner):
+            self.log = inner.log
+            self.get_history = inner.get_history
+            self.verify_integrity = inner.verify_integrity
+            self.get_root_hash = inner.get_root_hash
+
+    async def scenario():
+        await manager.commit(project, key="plan", value=PRIVATE)
+        plane = await manager.get_plane(project)
+        plane.audit = AuditWithoutPurge(plane.audit)
+        with pytest.raises(ValueError, match="purge_unsupported"):
+            await manager.forget(project, key="plan", reason="erasure", purge=True)
+        assert (await plane.backend.load("plan")).value == PRIVATE
+        await manager.close()
+
+    _run(scenario())
+
+
+def test_purge_without_an_audit_trail_still_scrubs_snapshots(tmp_path):
+    manager = _manager(tmp_path)
+    project = str(uuid.uuid4())
+
+    async def scenario():
+        await manager.commit(project, key="plan", value=PRIVATE)
+        await manager.create_snapshot(project, label="s")
+        plane = await manager.get_plane(project)
+        plane.enable_audit = False
+        result = await manager.forget(project, key="plan", reason="erasure", purge=True)
+        assert result["purged"] == {"audit_rows": 0, "snapshots": 1}
+        assert PRIVATE not in "".join(p.read_text() for p in manager.snapshot_dir(project).glob("*.json"))
+        await manager.close()
+
+    _run(scenario())
+
+
 def test_project_purge_is_refused_by_default_and_dry_run_changes_nothing(tmp_path, monkeypatch):
     monkeypatch.delenv("BILINC_PURGE_ENABLED", raising=False)
     manager = _manager(tmp_path)

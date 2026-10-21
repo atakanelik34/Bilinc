@@ -889,6 +889,9 @@ class ProjectRuntimeManager:
         plane = await self.get_plane(normalized)
         if not plane.backend:
             raise ValueError("invalid_request")
+        if purge and plane.enable_audit and plane.audit and not hasattr(plane.audit, "purge_key"):
+            # Refuse before anything changes rather than report a purge the audit trail did not do.
+            raise ValueError("purge_unsupported")
 
         existing = await plane.backend.load(key)
         if existing is None and not purge:
@@ -943,7 +946,7 @@ class ProjectRuntimeManager:
     async def _purge_key(self, plane: StatePlane, project_id: str, key: str, reason: str) -> dict[str, int]:
         """Remove one key's values from the audit trail, snapshots and entity index."""
         audit_rows = 0
-        if plane.enable_audit and plane.audit and hasattr(plane.audit, "purge_key"):
+        if plane.enable_audit and plane.audit:
             audit_rows = plane.audit.purge_key(key, metadata={"reason": reason, "origin": "bilinc_cloud"})
         delete_mentions = getattr(plane.backend, "delete_entity_mentions_for_memory_key", None)
         if delete_mentions is not None:
