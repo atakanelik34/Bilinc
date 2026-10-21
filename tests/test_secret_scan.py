@@ -172,6 +172,35 @@ def test_runtime_redacts_fields_and_reports_warnings(tmp_path):
     _run(scenario())
 
 
+def test_revise_redacts_value_and_reason_before_storage(tmp_path):
+    manager = _manager(tmp_path)
+    project = str(uuid.uuid4())
+    password = fake(14, seed="rotate") + "5"
+    token = fake(20, seed="reason") + "8"
+
+    async def scenario():
+        await manager.commit(project, key="ops.smtp", value="password lives in the vault")
+        response = await manager.revise(
+            project,
+            key="ops.smtp",
+            value=f"password={password}",
+            reason=f"rotated, token={token}",
+        )
+        assert response["warnings"] == [
+            {"code": "secret_redacted", "rule": "credential_assignment", "field": "value"},
+            {"code": "secret_redacted", "rule": "credential_assignment", "field": "reason"},
+        ]
+        plane = await manager.get_plane(project)
+        assert (await plane.backend.load("ops.smtp")).value == f"password={REDACTED}"
+        history = await manager.history(project, key="ops.smtp")
+        latest = history["entries"][0]
+        assert latest["reason"] == f"rotated, token={REDACTED}"
+        assert password not in str(history) and token not in str(history)
+        await manager.close()
+
+    _run(scenario())
+
+
 def test_scan_can_be_switched_off(tmp_path, monkeypatch):
     monkeypatch.setenv("BILINC_SECRET_SCAN", "off")
     manager = _manager(tmp_path)

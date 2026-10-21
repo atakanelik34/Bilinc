@@ -722,7 +722,7 @@ class ProjectRuntimeManager:
             strategy=strategy,
             audit_metadata={"reason": scan.reason},
         )
-        if scan.redactions and isinstance(response, dict):
+        if scan.redactions:
             response["warnings"] = _redaction_warnings(scan)
         return response
 
