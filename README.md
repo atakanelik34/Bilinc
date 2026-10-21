@@ -1,7 +1,7 @@
 <!-- mcp-name: io.github.atakanelik34/bilinc -->
 
 <p align="center">
-  <a href="https://bilinc.space"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc-python/main/docs/assets/readme-hero.jpg" alt="Bilinc: memory you can look back through. Hosted memory for AI agents." width="100%"></a>
+  <a href="https://bilinc.space"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc-python/9774f8a97fb16b16cea10b974e9179e6f41df826/docs/assets/readme-hero.jpg" alt="Bilinc: memory you can look back through. Hosted memory for AI agents." width="100%"></a>
 </p>
 
 # Bilinc
@@ -14,7 +14,7 @@
 
 **Hosted memory for AI agents.** Save what your agents learn, recall it before they act, see who wrote each memory and what changed, and roll back when a run goes wrong.
 
-This repository is exactly what PyPI publishes as `bilinc`: the Python SDK, the `bilinc` CLI and the stdio MCP adapter for [Bilinc Cloud](https://bilinc.space). The hosted service itself is not part of it.
+The `bilinc` package on PyPI is the Python SDK, the `bilinc` CLI and the stdio MCP adapter for [Bilinc Cloud](https://bilinc.space). Its source is [ReARCLabs/bilinc-python](https://github.com/ReARCLabs/bilinc-python); the hosted service is not part of the package.
 
 ## Start in 60 seconds
 
@@ -38,13 +38,13 @@ bilinc quicktest    # one hosted commit, one recall and a status check
 
 ## Where Bilinc sits
 
-<p align="center"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc-python/main/docs/assets/where-bilinc-sits.png" alt="Claude, ChatGPT, Codex, Cursor and Python agents connect with a sign-in or an API key to one Bilinc Cloud workspace. Operations: commit, recall, revise, forget; snapshot, diff, rollback; list, history, export, confirm. Every memory keeps who wrote it, every version, why it changed and when it was last confirmed." width="100%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc-python/9774f8a97fb16b16cea10b974e9179e6f41df826/docs/assets/where-bilinc-sits.png" alt="Claude, ChatGPT, Codex, Cursor and Python agents connect with a sign-in or an API key to one Bilinc Cloud workspace. Operations: commit, recall, revise, forget; snapshot, diff, rollback; list, history, export, confirm. Every memory keeps who wrote it, every version, why it changed and when it was last confirmed." width="100%"></p>
 
 Every write records where it came from and returns a version you can pass back, so a change is refused if the memory moved since you read it. Forget requires a reason and revise accepts one. In the remote connector, recall shows when each memory was last confirmed and marks entries past their review window as possibly outdated; nothing is hidden or deleted by that check.
 
 ## Similar is not the same as current
 
-<p align="center"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc-python/main/docs/assets/similar-vs-current.png" alt="Search over saved text returns three similar answers to 'where do we deploy?' and cannot say which is current. Bilinc recall returns the key deploy.target with value production, who wrote it, why and when it was confirmed, with its history from v1 staging to v2 production." width="100%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc-python/9774f8a97fb16b16cea10b974e9179e6f41df826/docs/assets/similar-vs-current.png" alt="Search over saved text returns three similar answers to 'where do we deploy?' and cannot say which is current. Bilinc recall returns the key deploy.target with value production, who wrote it, why and when it was confirmed, with its history from v1 staging to v2 production." width="100%"></p>
 
 Use Bilinc when:
 
@@ -142,7 +142,7 @@ The remote connector at `https://mcp.bilinc.space/mcp` has ten tools; a read-onl
 
 ## Forget and purge
 
-<p align="center"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc-python/main/docs/assets/forget-and-purge.png" alt="Comparison of forget and forget --purge. Both stop recall and hide earlier values in memory history. After forget, saved checkpoints still contain the memory and the audit trail keeps each change. After purge, the memory is removed from every checkpoint and its values are removed from the audit trail; the key name and a fingerprint of each change stay. Encrypted backups keep earlier copies until they expire in both cases." width="100%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc-python/9774f8a97fb16b16cea10b974e9179e6f41df826/docs/assets/forget-and-purge.png" alt="Comparison of forget and forget --purge. Both stop recall and hide earlier values in memory history. After forget, saved checkpoints still contain the memory and the audit trail keeps each change. After purge, the memory is removed from every checkpoint and its values are removed from the audit trail; the key name and a fingerprint of each change stay. Encrypted backups keep earlier copies until they expire in both cases." width="100%"></p>
 
 New in 2.5.0: `client.forget(key, reason=..., purge=True)`, `bilinc forget --key ... --reason ... --purge`, or `"purge": true` in the REST API also removes the memory's stored content from storage and history. It works on a memory you forgot earlier and cannot be undone. See the [privacy policy](https://bilinc.space/privacy) for what is kept and for how long.
 
