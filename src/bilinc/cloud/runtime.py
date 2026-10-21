@@ -7,10 +7,12 @@ import base64
 import hashlib
 import inspect
 import json
+import logging
 import os
 import re
 import secrets
 import time
+import dataclasses
 from dataclasses import dataclass
 from functools import lru_cache, wraps
 from pathlib import Path
@@ -23,6 +25,9 @@ from bilinc.core.stateplane import StatePlane
 from bilinc.storage.sqlite import SQLiteBackend
 from bilinc.storage.postgres import PostgresBackend
 from bilinc.storage.postgres_tenancy import project_schema
+from bilinc.security.secret_scan import ScanResult, scan_write, scanning_enabled, scrub_note
+
+logger = logging.getLogger(__name__)
 
 #: Hermes-contract fields that ride along in entry metadata rather than as
 #: first-class MemoryEntry columns. Mirrors the local MCP server's behavior so
@@ -47,6 +52,44 @@ def _serialized_project_mutation(
             return await method(self, project_id, *args, **kwargs)
 
     return wrapped
+
+
+def _scan_write(
+    *,
+    key: str,
+    value: Any,
+    metadata: Any = None,
+    reason: str | None = None,
+    labels: dict[str, Any] | None = None,
+) -> ScanResult:
+    """Reject provider-shaped secrets and redact credential fields before anything is stored.
+
+    It runs before the project plane is loaded, so a rejected write costs no
+    storage work. Logs name the rule and field, never the value.
+    """
+    if not scanning_enabled():
+        return ScanResult(value=value, metadata=metadata, reason=reason)
+    scan = scan_write(key=key, value=value, metadata=metadata, reason=reason, labels=labels)
+    if scan.rejection:
+        logger.warning(
+            "Rejected a memory write that looks like it contains a secret: rule=%s field=%s",
+            scan.rejection.rule,
+            scan.rejection.field,
+        )
+        raise ValueError("secret_detected")
+    return scan
+
+
+def _redaction_warnings(scan: ScanResult) -> list[dict[str, str]]:
+    return [{"code": "secret_redacted", "rule": item.rule, "field": item.field} for item in scan.redactions]
+
+
+def _scrub_reason(reason: Any, field: str = "reason") -> tuple[Any, list[dict[str, str]]]:
+    """Mask secrets in an operator note (reason, label, snapshot metadata); never refuses."""
+    if not scanning_enabled():
+        return reason, []
+    scrubbed, findings = scrub_note(reason, field)
+    return scrubbed, [{"code": "secret_redacted", "rule": item.rule, "field": item.field} for item in findings]
 
 
 def build_entry_metadata(
@@ -313,6 +356,7 @@ class ProjectSnapshot:
     root_hash: str | None
     label: str | None = None
     metadata: dict[str, Any] | None = None
+    warnings: list[dict[str, str]] | None = None
 
 
 class ProjectRuntimeManager:
@@ -421,6 +465,13 @@ class ProjectRuntimeManager:
         the per-project mutation lock, so it cannot race another writer. It uses
         the same existence test as ``revise``, so exactly one of the two succeeds.
         """
+        scan = _scan_write(
+            key=key,
+            value=value,
+            metadata=metadata,
+            labels={"source": source, "session_id": session_id},
+        )
+        value, metadata = scan.value, scan.metadata
         plane = await self.get_plane(project_id)
         if if_absent:
             if not plane.backend:
@@ -445,7 +496,7 @@ class ProjectRuntimeManager:
             ttl=ttl,
         )
         success = bool(getattr(result, "success", False))
-        return {
+        response = {
             "success": success,
             "operation": getattr(getattr(result, "operation", None), "value", None),
             "affected_keys": list(getattr(result, "affected_keys", []) or []),
@@ -453,6 +504,9 @@ class ProjectRuntimeManager:
             "entry_version": await self._entry_version(plane, key) if success else None,
             "state_version": state_version(plane),
         }
+        if scan.redactions:
+            response["warnings"] = _redaction_warnings(scan)
+        return response
 
     @staticmethod
     async def _attach_provenance(plane: StatePlane, results: Any) -> None:
@@ -670,6 +724,7 @@ class ProjectRuntimeManager:
         that is not there is a caller mistake, not a silent insert. That is what
         makes a revision distinguishable from an accidental overwrite.
         """
+        scan = _scan_write(key=key, value=value, reason=reason)
         plane = await self.get_plane(project_id)
         if not plane.backend or not plane.agm_engine:
             raise ValueError("invalid_request")
@@ -680,15 +735,18 @@ class ProjectRuntimeManager:
 
         previous_state = previous.to_dict()
         self._assert_expected_version(previous_state, expected_version)
-        return await self._revise_loaded(
+        response = await self._revise_loaded(
             plane,
             key=key,
             previous_state=previous_state,
-            value=value,
+            value=scan.value,
             importance=importance,
             strategy=strategy,
-            audit_metadata={"reason": reason},
+            audit_metadata={"reason": scan.reason},
         )
+        if scan.redactions:
+            response["warnings"] = _redaction_warnings(scan)
+        return response
 
     @_serialized_project_mutation
     async def confirm(
@@ -708,6 +766,7 @@ class ProjectRuntimeManager:
         """
         from bilinc.core.models import MemoryEntry
 
+        reason, warnings = _scrub_reason(reason)
         plane = await self.get_plane(project_id)
         if not plane.backend:
             raise ValueError("invalid_request")
@@ -737,7 +796,7 @@ class ProjectRuntimeManager:
                 after_value=saved_state,
                 metadata={"reason": reason, "confirmed": True, "origin": "bilinc_cloud"},
             )
-        return {
+        response = {
             "success": True,
             "key": key,
             "confirmed": True,
@@ -745,6 +804,9 @@ class ProjectRuntimeManager:
             "entry_version": entry_version(saved_state),
             "state_version": state_version(plane),
         }
+        if warnings:
+            response["warnings"] = warnings
+        return response
 
     async def _revise_loaded(
         self,
@@ -871,6 +933,7 @@ class ProjectRuntimeManager:
         state under the existing retention policy; this is deliberately *not*
         regulatory erasure, which is a separate admin lifecycle.
         """
+        reason, warnings = _scrub_reason(reason)
         plane = await self.get_plane(project_id)
         if not plane.backend:
             raise ValueError("invalid_request")
@@ -892,13 +955,16 @@ class ProjectRuntimeManager:
                 metadata={"reason": reason, "origin": "bilinc_cloud", "deleted": bool(removed)},
             )
 
-        return {
+        response = {
             "success": bool(removed),
             "key": key,
             "removed": bool(removed),
             "reason_recorded": True,
             "state_version": state_version(plane),
         }
+        if warnings:
+            response["warnings"] = warnings
+        return response
 
     @staticmethod
     def _assert_expected_version(entry_state: dict[str, Any], expected: str | None) -> None:
@@ -913,6 +979,8 @@ class ProjectRuntimeManager:
         label: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ProjectSnapshot:
+        label, label_warnings = _scrub_reason(label, "label")
+        metadata, metadata_warnings = _scrub_reason(metadata, "metadata")
         normalized = self.normalize_project_id(project_id)
         plane = await self.get_plane(normalized)
         snapshot = await plane.snapshot()
@@ -934,7 +1002,9 @@ class ProjectRuntimeManager:
             json.dumps(payload, sort_keys=True, default=str),
             encoding="utf-8",
         )
-        return self._snapshot_from_payload(payload)
+        created = self._snapshot_from_payload(payload)
+        warnings = label_warnings + metadata_warnings
+        return dataclasses.replace(created, warnings=warnings) if warnings else created
 
     async def list_snapshots(self, project_id: str, *, limit: int = 20) -> list[ProjectSnapshot]:
         directory = self.snapshot_dir(project_id)
@@ -1097,6 +1167,7 @@ class ProjectRuntimeManager:
         the audit trail to a timestamp: the stored checkpoint is the artifact
         the operator previewed and approved.
         """
+        reason, warnings = _scrub_reason(reason)
         normalized = self.normalize_project_id(project_id)
         payload = await self.load_snapshot(normalized, snapshot_id)
         target_state = _snapshot_entries(payload)
@@ -1168,7 +1239,7 @@ class ProjectRuntimeManager:
 
         # Counts only: a rollback response must never carry restored or
         # deleted values back to the caller.
-        return {
+        response = {
             "success": True,
             "snapshot_id": normalize_snapshot_id(snapshot_id),
             "counts": {"created": len(created), "updated": len(updated), "deleted": len(deleted)},
@@ -1176,6 +1247,9 @@ class ProjectRuntimeManager:
             "state_version": state_version(plane),
             "reason_recorded": True,
         }
+        if warnings:
+            response["warnings"] = warnings
+        return response
 
     async def close(self) -> None:
         for plane in self._planes.values():
