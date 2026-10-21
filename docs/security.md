@@ -101,7 +101,7 @@ HTTP error codes:
 
 ## Audit Trail
 
-When `enable_audit=True`, every operation is logged to a Merkle chain:
+When `enable_audit=True`, every operation is logged to a linear SHA-256 hash chain (each row's root hashes the previous root and the row's data hash; it is not a Merkle tree):
 
 ```python
 plane = StatePlane(enable_audit=True)
@@ -110,9 +110,18 @@ plane = StatePlane(enable_audit=True)
 
 The audit trail includes:
 - Timestamp
-- Operation type (CREATE, UPDATE, DELETE, CONSOLIDATE)
+- Operation type (CREATE, UPDATE, DELETE, CONSOLIDATE, FORGET, ROLLBACK, SNAPSHOT, PURGE)
 - Key and value diff
 - Source identifier
+
+## Forgetting and purging (hosted runtime)
+
+- **Forget** removes a memory from recall. History hides its value from then on, but the audit trail keeps the prior state so the change stays reviewable.
+- **Forget with purge** (`forget(..., purge=True)` in the SDK, `bilinc forget --purge` in the CLI, `"purge": true` on the REST route) also removes the key's stored values from every audit row and from every snapshot of the workspace. It works on a key that was forgotten earlier, and it cannot be undone.
+  - The hash chain keeps verifying: a PURGE receipt (itself part of the chain) lists the `{id, data_hash}` of every emptied row, and verification accepts an emptied row only when a later receipt names it. Emptying a row without a receipt still fails verification.
+  - It is removal from storage and history, **not cryptographic erasure**. Key names remain in the audit trail, the event ledger keeps value hashes, and a hash of a short value can be matched against a guess. Choose keys that do not themselves contain personal data.
+  - Database backups taken before the purge keep the old values until they expire under the backup retention period.
+- **Workspace purge**: the runtime's `DELETE /v1/projects/{project_id}` (control plane only) removes a workspace's schema or database, snapshots and files. It is refused unless `BILINC_PURGE_ENABLED` is on, and `?dry_run=true` reports what would be removed without removing it.
 
 ## Recommendations
 

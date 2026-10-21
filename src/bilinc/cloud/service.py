@@ -39,6 +39,10 @@ SIDECAR_CAPABILITIES = [
     # Commit and revise reject provider-shaped secrets with `secret_detected`
     # (422) and redact credential fields with a `warnings` entry.
     "secret_scan",
+    # forget(purge=true) removes a key's values from the audit trail and
+    # snapshots; DELETE /v1/projects/{id} removes a whole project.
+    "memory_purge",
+    "project_purge",
 ]
 
 
@@ -78,6 +82,7 @@ class ForgetRequest(BaseModel):
     key: str = Field(min_length=1, max_length=512)
     reason: str = Field(min_length=1, max_length=512)
     expected_version: str | None = Field(default=None, max_length=128)
+    purge: bool = False
 
 
 class ConfirmRequest(BaseModel):
@@ -147,6 +152,9 @@ _PUBLIC_RUNTIME_ERRORS = frozenset(
         "state_changed_since_preview",
         "response_too_large",
         "secret_detected",
+        "purge_disabled",
+        "purge_unsupported",
+        "purge_blocked",
     }
 )
 
@@ -158,6 +166,9 @@ _ERROR_STATUS = {
     "version_conflict": 409,
     "state_changed_since_preview": 409,
     "secret_detected": 422,
+    "purge_disabled": 403,
+    "purge_unsupported": 501,
+    "purge_blocked": 409,
 }
 
 
@@ -257,6 +268,16 @@ def create_app(
     ):
         with _runtime_errors():
             return await manager.forget(project_id, **payload.model_dump())
+
+    @app.delete("/v1/projects/{project_id}")
+    async def purge_project(
+        project_id: str,
+        dry_run: bool = False,
+        _: None = Depends(require_sidecar_token),
+    ):
+        """Irreversibly remove a project's runtime data; refused unless BILINC_PURGE_ENABLED is on."""
+        with _runtime_errors():
+            return await manager.purge_project(project_id, dry_run=dry_run)
 
     @app.post("/v1/projects/{project_id}/confirm")
     async def confirm(

@@ -289,6 +289,11 @@ def build_parser() -> argparse.ArgumentParser:
     forget.add_argument("--key", required=True)
     forget.add_argument("--reason", required=True, help="Required audit reason for the deletion")
     forget.add_argument("--expected-version", help="Fail if the memory changed since this version")
+    forget.add_argument(
+        "--purge",
+        action="store_true",
+        help="Also remove the stored values from history and snapshots (cannot be undone)",
+    )
 
     confirm = sub.add_parser("confirm", help="Record that an existing memory is still accurate")
     confirm.add_argument("key", help="Memory key")
@@ -490,6 +495,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.key,
                     reason=args.reason,
                     expected_version=args.expected_version,
+                    purge=bool(getattr(args, "purge", False)),
                 )
             )
         elif args.command == "confirm":
