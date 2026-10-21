@@ -121,6 +121,8 @@ The audit trail includes:
   - The hash chain keeps verifying: a PURGE receipt (itself part of the chain) lists the `{id, data_hash}` of every emptied row, and verification accepts an emptied row only when a later receipt names it. Emptying a row without a receipt still fails verification.
   - It is removal from storage and history, **not cryptographic erasure**. Key names remain in the audit trail, the event ledger keeps value hashes, and a hash of a short value can be matched against a guess. Choose keys that do not themselves contain personal data.
   - Database backups taken before the purge keep the old values until they expire under the backup retention period.
+  - On a key that was already forgotten there is no live entry to compare, so `expected_version` is not checked.
+  - The audit rows are emptied before the snapshot files are rewritten. If a snapshot write fails, the call returns an error with the audit values already gone; repeating the purge finishes the snapshots.
 - **Workspace purge**: the runtime's `DELETE /v1/projects/{project_id}` (control plane only) removes a workspace's schema or database, snapshots and files. It is refused unless `BILINC_PURGE_ENABLED` is on, and `?dry_run=true` reports what would be removed without removing it.
 
 ## Recommendations
