@@ -244,7 +244,7 @@ def test_sdk_refuses_to_report_a_purge_the_server_did_not_confirm():
         sent.append(json.loads(body.decode("utf-8")))
         return {"success": True, "removed": True}
 
-    client = CloudClient(api_key="test-api-key", transport=transport)
+    client = CloudClient(api_key="bil_live_example", transport=transport)
     assert client.forget("plan", reason="no longer true") == {"success": True, "removed": True}
     assert "purge" not in sent[-1]
     with pytest.raises(BilincCloudError, match="did not confirm the purge"):
