@@ -149,6 +149,7 @@ _PUBLIC_RUNTIME_ERRORS = frozenset(
         "state_changed_since_preview",
         "response_too_large",
         "purge_disabled",
+        "purge_unsupported",
     }
 )
 
@@ -160,6 +161,7 @@ _ERROR_STATUS = {
     "version_conflict": 409,
     "state_changed_since_preview": 409,
     "purge_disabled": 403,
+    "purge_unsupported": 501,
 }
 
 

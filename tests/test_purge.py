@@ -274,6 +274,28 @@ def test_sidecar_routes_and_capabilities(tmp_path, monkeypatch):
         assert {"memory_purge", "project_purge"} <= set(capabilities)
 
 
+def test_sidecar_reports_purge_unsupported_as_501(tmp_path, monkeypatch):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from bilinc.cloud.runtime import ProjectRuntimeManager
+    from bilinc.cloud.service import create_app
+
+    async def unsupported(self, project_id, **kwargs):
+        raise ValueError("purge_unsupported")
+
+    monkeypatch.setattr(ProjectRuntimeManager, "forget", unsupported)
+    headers = {"X-Bilinc-Sidecar-Token": "secret"}
+    with TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret")) as client:
+        response = client.post(
+            f"/v1/projects/{uuid.uuid4()}/forget",
+            headers=headers,
+            json={"key": "plan", "reason": "erasure", "purge": True},
+        )
+        assert response.status_code == 501
+        assert response.json()["detail"] == "purge_unsupported"
+
+
 def test_sdk_refuses_to_report_a_purge_the_server_did_not_confirm():
     from bilinc import CloudClient
     from bilinc.client import BilincCloudError
