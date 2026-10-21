@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- Hosted recall (PostgreSQL backend) now ranks with full-text search. Each entry keeps a `tsv` column built from its decoded key, value and allowlisted metadata, so Turkish and other non-ASCII words are found even though values are stored as escaped JSON. Queries OR their content words, as the local FTS5 path does, and the best match comes first; the old `fts_search` ordered matches worst-first and was never called. The ranking fills the existing hybrid slot of `recall_intelligent`, so the fusion weights and the `explain` fields are unchanged. Schema version 2 adds the nullable column and a GIN index without rewriting the table, and fills existing rows once, in batches, the first time each tenant loads.
+
 ## [2.4.1] — 2026-10-19
 
 ### Added

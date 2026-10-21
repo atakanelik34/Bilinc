@@ -42,7 +42,7 @@ async def _truncate(backend: PostgresBackend) -> None:
 @pytest.mark.asyncio
 async def test_postgres_init_records_schema_version(backend: PostgresBackend):
     stats = await backend.stats()
-    assert stats["schema_version"] == 1
+    assert stats["schema_version"] == PostgresBackend.SCHEMA_VERSION
     assert stats["dsn"].startswith("postgresql://")
     assert TEST_DSN not in stats["dsn"]
     parsed = urlparse(TEST_DSN)
@@ -83,7 +83,7 @@ async def test_postgres_stats_shape_matches_contract(backend: PostgresBackend):
     stats = await backend.stats()
 
     assert stats["total_entries"] == 2
-    assert stats["schema_version"] == 1
+    assert stats["schema_version"] == PostgresBackend.SCHEMA_VERSION
     assert stats["by_type"]["semantic"] == 1
     assert stats["by_type"]["episodic"] == 1
 
