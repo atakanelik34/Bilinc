@@ -129,6 +129,18 @@ class SyncPostgresAuditTrail:
             rows = cur.fetchall()
         return verify_chain(rows)
 
+    def has_purgeable_rows(self, key: str) -> bool:
+        """Whether any row for ``key`` still holds a value a purge would remove."""
+        if self.conn is None:
+            raise RuntimeError("SyncPostgresAuditTrail not initialized")
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM audit_log WHERE key = %s AND (before_value IS NOT NULL OR after_value IS NOT NULL) "
+                "AND op_type <> %s LIMIT 1",
+                (key, OpType.PURGE.value),
+            )
+            return cur.fetchone() is not None
+
     def purge_key(self, key: str, metadata: Optional[Dict] = None) -> int:
         """Remove the stored values of every row for ``key`` behind a PURGE receipt (see audit.verify_chain)."""
         if self.conn is None:

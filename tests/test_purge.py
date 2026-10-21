@@ -146,6 +146,9 @@ def test_purge_works_on_a_memory_forgotten_earlier(tmp_path):
 
         with pytest.raises(ValueError, match="memory_not_found"):
             await manager.forget(project, key="never-existed", reason="x", purge=True)
+        # Nothing left to purge: a repeated purge is memory_not_found, not an empty receipt.
+        with pytest.raises(ValueError, match="memory_not_found"):
+            await manager.forget(project, key="plan", reason="again", purge=True)
         with pytest.raises(ValueError, match="memory_not_found"):
             await manager.forget(project, key="plan", reason="again")
         await manager.close()

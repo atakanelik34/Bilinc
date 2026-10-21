@@ -889,7 +889,9 @@ class ProjectRuntimeManager:
         plane = await self.get_plane(normalized)
         if not plane.backend:
             raise ValueError("invalid_request")
-        if purge and plane.enable_audit and plane.audit and not hasattr(plane.audit, "purge_key"):
+        if purge and plane.enable_audit and plane.audit and not (
+            hasattr(plane.audit, "purge_key") and hasattr(plane.audit, "has_purgeable_rows")
+        ):
             # Refuse before anything changes rather than report a purge the audit trail did not do.
             raise ValueError("purge_unsupported")
 
@@ -925,10 +927,8 @@ class ProjectRuntimeManager:
         return response
 
     async def _has_purgeable_history(self, plane: StatePlane, project_id: str, key: str) -> bool:
-        if plane.enable_audit and plane.audit:
-            for row in plane.audit.get_history(key=key, limit=1000):
-                if row.before_value is not None or row.after_value is not None:
-                    return True
+        if plane.enable_audit and plane.audit and plane.audit.has_purgeable_rows(key):
+            return True
         return any(key in _snapshot_entries(payload) for _, payload in self._snapshot_files(project_id))
 
     def _snapshot_files(self, project_id: str) -> list[tuple[Path, dict[str, Any]]]:

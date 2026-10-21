@@ -230,6 +230,17 @@ class AuditTrail:
         rows = self.conn.execute("SELECT * FROM audit_log ORDER BY id ASC").fetchall()
         return verify_chain(rows)
 
+    def has_purgeable_rows(self, key: str) -> bool:
+        """Whether any row for ``key`` still holds a value a purge would remove."""
+        if self.conn is None:
+            raise RuntimeError("AuditTrail not initialized")
+        row = self.conn.execute(
+            "SELECT 1 FROM audit_log WHERE key = ? AND (before_value IS NOT NULL OR after_value IS NOT NULL) "
+            "AND op_type != ? LIMIT 1",
+            (key, OpType.PURGE.value),
+        ).fetchone()
+        return row is not None
+
     def purge_key(self, key: str, metadata: Optional[Dict] = None) -> int:
         """Remove the stored values of every row for ``key``; return how many rows were emptied.
 
