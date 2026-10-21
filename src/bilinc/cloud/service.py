@@ -36,6 +36,9 @@ SIDECAR_CAPABILITIES = [
     # ListRequest.sources: an older sidecar would silently ignore the filter
     # and return every memory, so the control plane must check for this.
     "memory_list_source",
+    # Commit and revise reject provider-shaped secrets with `secret_detected`
+    # (422) and redact credential fields with a `warnings` entry.
+    "secret_scan",
 ]
 
 
@@ -143,6 +146,7 @@ _PUBLIC_RUNTIME_ERRORS = frozenset(
         "version_conflict",
         "state_changed_since_preview",
         "response_too_large",
+        "secret_detected",
     }
 )
 
@@ -153,6 +157,7 @@ _ERROR_STATUS = {
     "snapshot_unreadable": 404,
     "version_conflict": 409,
     "state_changed_since_preview": 409,
+    "secret_detected": 422,
 }
 
 

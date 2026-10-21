@@ -7,6 +7,7 @@ import base64
 import hashlib
 import inspect
 import json
+import logging
 import os
 import re
 import secrets
@@ -23,6 +24,9 @@ from bilinc.core.stateplane import StatePlane
 from bilinc.storage.sqlite import SQLiteBackend
 from bilinc.storage.postgres import PostgresBackend
 from bilinc.storage.postgres_tenancy import project_schema
+from bilinc.security.secret_scan import ScanResult, scan_write, scanning_enabled
+
+logger = logging.getLogger(__name__)
 
 #: Hermes-contract fields that ride along in entry metadata rather than as
 #: first-class MemoryEntry columns. Mirrors the local MCP server's behavior so
@@ -47,6 +51,29 @@ def _serialized_project_mutation(
             return await method(self, project_id, *args, **kwargs)
 
     return wrapped
+
+
+def _scan_write(*, key: str, value: Any, metadata: Any = None, reason: str | None = None) -> ScanResult:
+    """Reject provider-shaped secrets and redact credential fields before anything is stored.
+
+    It runs before the project plane is loaded, so a rejected write costs no
+    storage work. Logs name the rule and field, never the value.
+    """
+    if not scanning_enabled():
+        return ScanResult(value=value, metadata=metadata, reason=reason)
+    scan = scan_write(key=key, value=value, metadata=metadata, reason=reason)
+    if scan.rejection:
+        logger.warning(
+            "Rejected a memory write that looks like it contains a secret: rule=%s field=%s",
+            scan.rejection.rule,
+            scan.rejection.field,
+        )
+        raise ValueError("secret_detected")
+    return scan
+
+
+def _redaction_warnings(scan: ScanResult) -> list[dict[str, str]]:
+    return [{"code": "secret_redacted", "rule": item.rule, "field": item.field} for item in scan.redactions]
 
 
 def build_entry_metadata(
@@ -421,6 +448,8 @@ class ProjectRuntimeManager:
         the per-project mutation lock, so it cannot race another writer. It uses
         the same existence test as ``revise``, so exactly one of the two succeeds.
         """
+        scan = _scan_write(key=key, value=value, metadata=metadata)
+        value, metadata = scan.value, scan.metadata
         plane = await self.get_plane(project_id)
         if if_absent:
             if not plane.backend:
@@ -445,7 +474,7 @@ class ProjectRuntimeManager:
             ttl=ttl,
         )
         success = bool(getattr(result, "success", False))
-        return {
+        response = {
             "success": success,
             "operation": getattr(getattr(result, "operation", None), "value", None),
             "affected_keys": list(getattr(result, "affected_keys", []) or []),
@@ -453,6 +482,9 @@ class ProjectRuntimeManager:
             "entry_version": await self._entry_version(plane, key) if success else None,
             "state_version": state_version(plane),
         }
+        if scan.redactions:
+            response["warnings"] = _redaction_warnings(scan)
+        return response
 
     @staticmethod
     async def _attach_provenance(plane: StatePlane, results: Any) -> None:
@@ -670,6 +702,7 @@ class ProjectRuntimeManager:
         that is not there is a caller mistake, not a silent insert. That is what
         makes a revision distinguishable from an accidental overwrite.
         """
+        scan = _scan_write(key=key, value=value, reason=reason)
         plane = await self.get_plane(project_id)
         if not plane.backend or not plane.agm_engine:
             raise ValueError("invalid_request")
@@ -680,15 +713,18 @@ class ProjectRuntimeManager:
 
         previous_state = previous.to_dict()
         self._assert_expected_version(previous_state, expected_version)
-        return await self._revise_loaded(
+        response = await self._revise_loaded(
             plane,
             key=key,
             previous_state=previous_state,
-            value=value,
+            value=scan.value,
             importance=importance,
             strategy=strategy,
-            audit_metadata={"reason": reason},
+            audit_metadata={"reason": scan.reason},
         )
+        if scan.redactions and isinstance(response, dict):
+            response["warnings"] = _redaction_warnings(scan)
+        return response
 
     @_serialized_project_mutation
     async def confirm(
