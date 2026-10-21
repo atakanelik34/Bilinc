@@ -82,6 +82,21 @@ def test_key_metadata_and_reason_are_scanned_too():
     assert scan_write(key="k", value="v", metadata={"note": secret}).rejection.field == "metadata.note"
     assert scan_write(key="k", value={"steps": ["ok", secret]}).rejection.field == "value.steps[1]"
     assert scan_write(key="k", value="v", reason=f"rotated {secret}").rejection.field == "reason"
+    assert scan_write(key="k", value="v", labels={"source": secret}).rejection.field == "source"
+
+
+def test_commit_rejects_secrets_in_source_and_session_id(tmp_path):
+    manager = _manager(tmp_path)
+    project = str(uuid.uuid4())
+
+    async def scenario():
+        for labels in ({"source": SHAPES["slack_token"]}, {"session_id": SHAPES["jwt"]}):
+            with pytest.raises(ValueError, match="secret_detected"):
+                await manager.commit(project, key="k", value="v", **labels)
+        assert manager._planes == {}
+        await manager.close()
+
+    _run(scenario())
 
 
 def test_credential_fields_are_redacted_with_a_finding_not_rejected():

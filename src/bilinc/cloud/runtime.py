@@ -53,7 +53,14 @@ def _serialized_project_mutation(
     return wrapped
 
 
-def _scan_write(*, key: str, value: Any, metadata: Any = None, reason: str | None = None) -> ScanResult:
+def _scan_write(
+    *,
+    key: str,
+    value: Any,
+    metadata: Any = None,
+    reason: str | None = None,
+    labels: dict[str, Any] | None = None,
+) -> ScanResult:
     """Reject provider-shaped secrets and redact credential fields before anything is stored.
 
     It runs before the project plane is loaded, so a rejected write costs no
@@ -61,7 +68,7 @@ def _scan_write(*, key: str, value: Any, metadata: Any = None, reason: str | Non
     """
     if not scanning_enabled():
         return ScanResult(value=value, metadata=metadata, reason=reason)
-    scan = scan_write(key=key, value=value, metadata=metadata, reason=reason)
+    scan = scan_write(key=key, value=value, metadata=metadata, reason=reason, labels=labels)
     if scan.rejection:
         logger.warning(
             "Rejected a memory write that looks like it contains a secret: rule=%s field=%s",
@@ -448,7 +455,12 @@ class ProjectRuntimeManager:
         the per-project mutation lock, so it cannot race another writer. It uses
         the same existence test as ``revise``, so exactly one of the two succeeds.
         """
-        scan = _scan_write(key=key, value=value, metadata=metadata)
+        scan = _scan_write(
+            key=key,
+            value=value,
+            metadata=metadata,
+            labels={"source": source, "session_id": session_id},
+        )
         value, metadata = scan.value, scan.metadata
         plane = await self.get_plane(project_id)
         if if_absent:

@@ -207,9 +207,16 @@ def scan_write(
     value: Any,
     metadata: Any = None,
     reason: Optional[str] = None,
+    labels: Optional[dict[str, Any]] = None,
 ) -> ScanResult:
-    """Check one memory write. A rejection wins; otherwise return redacted copies."""
-    for item, path in ((key, "key"), (value, "value"), (metadata, "metadata"), (reason, "reason")):
+    """Check one memory write. A rejection wins; otherwise return redacted copies.
+
+    ``labels`` are short stored fields such as ``source`` and ``session_id``:
+    they are checked for provider-shaped secrets but never rewritten.
+    """
+    fields = [(key, "key"), (value, "value"), (metadata, "metadata"), (reason, "reason")]
+    fields.extend((item, name) for name, item in (labels or {}).items())
+    for item, path in fields:
         found = _first_shape(item, path)
         if found:
             return ScanResult(rejection=found, value=value, metadata=metadata, reason=reason)
