@@ -24,6 +24,10 @@ The repository has two explicit contracts:
 exact private mirror. New work merges to canonical first, then the exact resulting
 commit is fast-forwarded to the mirror. Published historical tags are immutable.
 
+Update 2026-10-21: the public package source now lives in `ReARCLabs/bilinc`
+(synced from each release's sdist), and the private mirror was renamed to
+`ReARCLabs/bilinc-core`. `atakanelik34/Bilinc` remains the core development upstream.
+
 ## Consequences
 
 - Public documentation cannot advertise `StatePlane`, local `--db` CLI commands or

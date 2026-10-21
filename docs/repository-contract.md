@@ -15,8 +15,10 @@ checkout and label related docs/tests as internal.
 
 ## Remote policy
 
-- Canonical public upstream: `atakanelik34/Bilinc`.
-- Exact private mirror: `ReARCLabs/Bilinc`.
+- Core development upstream: `atakanelik34/Bilinc` (public for now; it becomes private later).
+- Exact private mirror: `ReARCLabs/bilinc-core` (renamed from `ReARCLabs/Bilinc` on 2026-10-21).
+- Public package source: `ReARCLabs/bilinc` (renamed from `ReARCLabs/bilinc-python`). It holds exactly what PyPI publishes and is synced from each release's sdist; it is the `canonical_repository` in `docs/public/product-truth.json`.
+- `github.com/ReARCLabs/Bilinc` now resolves to the public package repository. Never push core history there; the `rearclabs` remote must point at `bilinc-core`.
 - No force-push, independent cherry-pick or tag rewrite.
 - Merge canonical work first; mirror the exact resulting commit after its checks pass.
 
