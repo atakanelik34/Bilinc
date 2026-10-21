@@ -1,188 +1,72 @@
-# Bilinc
-
 <!-- mcp-name: io.github.atakanelik34/bilinc -->
+
+<p align="center">
+  <a href="https://bilinc.space"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc-python/9774f8a97fb16b16cea10b974e9179e6f41df826/docs/assets/readme-hero.jpg" alt="Bilinc: memory you can look back through. Hosted memory for AI agents." width="100%"></a>
+</p>
+
+# Bilinc
 
 [![PyPI](https://img.shields.io/pypi/v/bilinc.svg)](https://pypi.org/project/bilinc/)
 [![Python](https://img.shields.io/pypi/pyversions/bilinc.svg)](https://pypi.org/project/bilinc/)
-[![License](https://img.shields.io/badge/license-BUSL--1.1-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-BUSL--1.1-blue.svg)](https://github.com/ReARCLabs/bilinc-python/blob/main/LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-server-purple.svg)](https://bilinc.space/for/mcp)
 <a href="https://pepy.tech/project/bilinc"><img src="https://static.pepy.tech/badge/bilinc" alt="Downloads"></a>
 
-**Hosted memory infrastructure for AI agents: commit, recall, and inspect agent state through one API key, with verification, provenance, and recovery around every write.**
+**Hosted memory for AI agents.** Save what your agents learn, recall it before they act, see who wrote each memory and what changed, and roll back when a run goes wrong.
 
-Retrieval answers *"what is similar to this?"*. Long-running agents also need to answer *"who wrote this state, was it verified, did it contradict what we already knew, and can we undo it?"* — that is the layer Bilinc provides.
+The `bilinc` package on PyPI is the Python SDK, the `bilinc` CLI and the stdio MCP adapter for [Bilinc Cloud](https://bilinc.space). Its source is [ReARCLabs/bilinc-python](https://github.com/ReARCLabs/bilinc-python); the hosted service is not part of the package.
 
-Bilinc 2.5.0 on PyPI is the public cloud-only package: a thin Python SDK, CLI, and MCP adapter for Bilinc Cloud. It does not ship the local StatePlane, storage backends, eval, observability, integrations, or server runtime internals.
+## Start in 60 seconds
 
-> **Frozen regression receipt** — LongMemEval-s cleaned retrieval fixture, 500 questions: **Hit@5 98.0%**, **NDCG@5 0.913**, no LLM reranker, no paid API. This is an isolated retrieval guardrail, not a current hosted SLA, end-to-end agent score, or competitor ranking — see [Benchmark receipt](#benchmark-receipt) for the full scope and qualification.
-
-## The short version
-
-Bilinc is the state layer between an agent and the things it must remember. It keeps memory writes attributable,
-correctable, and recoverable instead of treating retrieval as a bag of similar text.
-
-| If your agent needs to... | Bilinc gives it... |
-| --- | --- |
-| Recall a decision before acting | Key-scoped recall with explicit profiles and evidence metadata |
-| Correct a bad memory | `revise`, contradiction-aware state, and provenance-preserving updates |
-| Recover from an unsafe run | Snapshots, diffs, and confirmed rollback |
-| Work across any MCP-compatible agent | A Python SDK, CLI, and stdio MCP adapter |
-
-The fastest path is `pip install -U bilinc`, `bilinc login`, then `bilinc quicktest` against Bilinc Cloud.
-
-## Use Bilinc when
-
-- A long-running agent — coding, support, research, or a personal assistant — needs to recall prior decisions before a risky action.
-- You need to know which run, tool, or operator produced a piece of agent state.
-- A bad agent run wrote incorrect state and you need a recovery path, not a manual cleanup.
-- Several agents or teammates share one memory surface and you need key-scoped access and usage visibility.
-
-## Do not use Bilinc when
-
-- You only need semantic search over documents — a vector database is the simpler primitive.
-- You require an Apache-2.0 licensed, fully self-hosted runtime. The public package is cloud-only and licensed BUSL-1.1.
-- You want the memory layer to also be your agent framework. Bilinc is the state layer your runtime calls; it does not orchestrate agents.
-
-## Choose your surface
-
-| You want... | Use... |
-| --- | --- |
-| A hosted memory API for an agent or MCP client | The public cloud-only package from PyPI |
-| Local StatePlane, SQLite/PostgreSQL, benchmarks, or internals | This repository and the [architecture guide](docs/architecture.md) |
-| A hosted MCP connection without a Python install | The [remote MCP setup guide](https://bilinc.space/docs/remote-mcp) |
-
-The public package is intentionally smaller than this repository. It does not bundle the internal StatePlane or local
-storage runtime.
-
-## Start in 60 Seconds
-
-### Claude connector, without installing Python
-
-Open **Customize → Connectors → Add custom connector** in Claude, name it Bilinc,
-and paste `https://mcp.bilinc.space/mcp`. Sign in and choose read-only or read and
-write access. The setup guide is [bilinc.space/mcp](https://bilinc.space/mcp).
-
-For the remote connector in Claude Code:
+**Claude, ChatGPT or Codex, without Python.** In Claude, open **Customize → Connectors → Add custom connector**, name it Bilinc and paste `https://mcp.bilinc.space/mcp`. Sign in and choose read-only or read and write. In Claude Code:
 
 ```bash
 claude mcp add --transport http --scope user bilinc https://mcp.bilinc.space/mcp
 ```
 
-Then run `/mcp` and authenticate. The remote connector has ten tools; the Python
-stdio adapter below has eleven. Both connect to hosted Bilinc memory.
+The same address works in ChatGPT and Codex: [remote MCP guide](https://bilinc.space/docs/remote-mcp).
 
-Recall in the remote connector shows how long ago each memory was last confirmed
-and marks entries that are past their review window (90 days for facts, decisions,
-how-tos and places; 1 day for working notes; events are never marked) as possibly
-outdated. Nothing is hidden or deleted. Revising a memory with the same value
-confirms it.
-
-| Remote tool | Access | What it does |
-| --- | --- | --- |
-| `recall` | read | Look up memories before acting, with when each was last confirmed. |
-| `list_snapshots` | read | List saved checkpoints, newest first. |
-| `diff` | read | Compare current memory with a checkpoint, showing before → after values. |
-| `status` | read | Workspace, plan, credits, usage, and whether this connection can write. |
-| `remember` | read and write | Store a new memory. It never overwrites an existing key. |
-| `revise` | read and write | Change an existing memory; pass the version you read to refuse the change if it moved since. |
-| `forget` | read and write | Remove a memory from recall, with a reason. |
-| `create_snapshot` | read and write | Save a checkpoint before risky work. |
-| `preview_rollback` | read and write | Show what a rollback would change and issue its confirmation token. |
-| `rollback` | read and write | Restore a checkpoint with that token. |
-
-A read-only connection lists only the four read tools.
-
-### SDK and CLI
+**Python, the CLI or any MCP client.**
 
 ```bash
 pip install -U bilinc
-bilinc login
-bilinc quicktest
+bilinc login        # browser sign-in, free, no card required
+bilinc quicktest    # one hosted commit, one recall and a status check
 ```
 
-`bilinc login` opens your browser. Sign in with Google, GitHub, or email (free,
-no card required) and approve this computer; the CLI saves its own API key with
-owner-only permissions. The key never appears in a URL or your terminal.
-`bilinc quicktest` then performs one hosted commit, one hosted recall, and one
-Cloud status check.
+`bilinc login` saves an API key for this computer with owner-only permissions; the key never appears in a URL or your terminal. Without a browser, use `bilinc login --device`. For CI and scripts, set `BILINC_API_KEY`.
 
-- **No browser on this machine** (SSH, servers, containers): `bilinc login --device`
-  prints a short code to approve from any browser.
-- **CI and scripts:** `bilinc login --api-key bil_live_...`, or set `BILINC_API_KEY`.
+## Where Bilinc sits
 
-To reproduce this release exactly:
+<p align="center"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc-python/9774f8a97fb16b16cea10b974e9179e6f41df826/docs/assets/where-bilinc-sits.png" alt="Claude, ChatGPT, Codex, Cursor and Python agents connect with a sign-in or an API key to one Bilinc Cloud workspace. Operations: commit, recall, revise, forget; snapshot, diff, rollback; list, history, export, confirm. Every memory keeps who wrote it, every version, why it changed and when it was last confirmed." width="100%"></p>
 
-```bash
-pip install -U bilinc==2.5.0
-```
+Every write records where it came from and returns a version you can pass back, so a change is refused if the memory moved since you read it. Forget requires a reason and revise accepts one. In the remote connector, recall shows when each memory was last confirmed and marks entries past their review window as possibly outdated; nothing is hidden or deleted by that check.
 
-If you prefer a browser guide, open https://bilinc.space/install and follow the
-same three-step path.
+## Similar is not the same as current
 
-## MCP Adapter
+<p align="center"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc-python/9774f8a97fb16b16cea10b974e9179e6f41df826/docs/assets/similar-vs-current.png" alt="Search over saved text returns three similar answers to 'where do we deploy?' and cannot say which is current. Bilinc recall returns the key deploy.target with value production, who wrote it, why and when it was confirmed, with its history from v1 staging to v2 production." width="100%"></p>
 
-Bilinc exposes a standard Model Context Protocol server over **stdio**, so any
-MCP-compatible client can connect — Claude Code, Codex, Cursor, Hermes-Agent,
-opencode, and others.
+Use Bilinc when:
 
-After `bilinc login`, let the CLI write the setup for your client:
+- a long-running agent (coding, support, research, a personal assistant) needs earlier decisions before a risky action;
+- you need to know which run, tool or person wrote a piece of agent state;
+- a bad run wrote wrong state and you need a way back, not a manual cleanup;
+- several agents or teammates share one memory and you want per-key access and visible usage.
 
-```bash
-bilinc mcp install --client claude-code     # prints a ready `claude mcp add ...` command
-bilinc mcp install --client claude-desktop  # prints the config and where Claude Desktop keeps it
-bilinc mcp install                          # plain mcpServers JSON for any other client
-```
-
-```json
-{
-  "mcpServers": {
-    "bilinc": {
-      "command": "/path/to/python3",
-      "args": ["-m", "bilinc.cloud_mcp"]
-    }
-  }
-}
-```
-
-`command` is the interpreter that has Bilinc installed, and the adapter reads the key saved by `bilinc login`, so
-the config carries no key. On a machine without a saved key, add `"env": { "BILINC_API_KEY": "bil_live_..." }`.
-
-Eleven tools: the eight-step memory lifecycle plus three review tools.
-
-| Tool | What it does |
-| --- | --- |
-| `commit_mem` | Write durable agent state. Each write carries provenance — which run, tool, or operator produced it — and returns a version for optimistic concurrency. |
-| `recall` | Retrieve prior context and decisions before acting. `profile` selects retrieval quality; smart retrieval is that argument, not a separate tool. |
-| `revise` | Deliberately correct something already known. It never creates, so a correction stays distinguishable from an accidental overwrite. |
-| `forget` | **Destructive.** Remove obsolete state from active recall. A reason is required and is audited; the deleted value is never returned. |
-| `status` | Report the authenticated workspace, plan, capabilities, recall profiles, limits, and usage. Never billed. |
-| `snapshot` | Checkpoint a project before risky work, or list existing checkpoints. |
-| `diff` | Compare a checkpoint against another checkpoint or current state. Values are redacted by default. |
-| `rollback` | **Destructive in execute mode.** Restore a checkpoint through a free preview plus an explicitly confirmed execute. |
-| `list_memories` | Browse what is stored, ordered by key, with prefix, type and updated-time filters. Read-only and free. |
-| `history` | Show one memory's recorded changes, newest first, with the value before and after. Read-only and free. |
-| `confirm` | Record that a memory is still accurate without resending its value. Costs one write. |
-
-Operator and debug tooling — health probes, benchmarks, bulk import, workspace replay — stays
-local-only, as do the epistemic read tools for claims, contradictions, and graph queries. The hosted
-adapter does not bundle local runtime internals.
-
-Documented client setups: [Claude Code](https://bilinc.space/docs/claude-code) ·
-[Codex](https://bilinc.space/docs/codex) · [Cursor](https://bilinc.space/docs/cursor) ·
-[any MCP client](https://bilinc.space/for/mcp)
+Reach for something else when you only need semantic search over documents (a vector database is the simpler tool), when you need an Apache-2.0, fully self-hosted runtime (this package is cloud-only and BUSL-1.1), or when you want the memory layer to also be your agent framework.
 
 ## Python SDK
 
 ```python
 from bilinc import CloudClient
 
-client = CloudClient()  # reads BILINC_API_KEY or a key saved by `bilinc login`
+client = CloudClient()  # reads BILINC_API_KEY or the key saved by `bilinc login`
 
 # Write, and keep the version for optimistic concurrency.
 written = client.commit("agent.goal", {"ship": "reliable memory"}, memory_type="semantic")
 results = client.recall("agent goal", limit=5)
 
-# Correct something you already know. Fails if it does not exist.
+# Correct something you already know. Fails if the key does not exist.
 client.revise("agent.goal", {"ship": "verifiable memory"},
               reason="scope corrected", expected_version=written["entryVersion"])
 
@@ -190,65 +74,37 @@ client.revise("agent.goal", {"ship": "verifiable memory"},
 snapshot = client.create_snapshot(label="before-autonomous-run")["snapshot"]
 client.diff(snapshot["id"])
 
-# Drop obsolete state. A reason is required and is audited.
-client.forget("agent.goal", reason="superseded by the planner service")
-
-# Recover. Preview is free; execute is destructive and needs the token.
+# Recover. The preview is free; executing needs its token.
 preview = client.rollback_preview(snapshot["id"], reason="undo bad agent run")
 client.rollback(snapshot["id"], confirmation_token=preview["confirmationToken"],
                 reason="undo bad agent run")
 
-client.status()   # what can this key do?
-client.health()   # is the service reachable?
-```
-
-### Review what Bilinc remembers
-
-Listing, history and export are reads and are not billed. Confirming costs one write.
-
-```python
-page = client.list_memories(prefix="agent.", limit=50)       # one page, ordered by key
-for entry in client.iter_memories(memory_type="semantic"):   # every page
+# Review what is stored. Listing, history and export are free reads.
+for entry in client.iter_memories(prefix="agent."):
     print(entry["key"], entry["updatedAt"])
+client.history("agent.goal")
+client.confirm("agent.goal")   # still accurate; costs one write
 
-client.history("agent.goal")   # newest changes first (20 by default, up to 100); "truncated" marks older ones
-client.confirm("agent.goal", expected_version=page["entries"][0]["entryVersion"])  # still true
-
-backup = client.export()       # every stored memory with its full value, as one dict
+# Take a memory out of use. A reason is required and recorded.
+client.forget("agent.goal", reason="superseded by the planner service")
 ```
-
-Forgetting a memory removes its value from history as well: earlier values of a forgotten
-memory are not returned.
-
-For server, CI, and hosted agent runtimes, store the key as `BILINC_API_KEY`.
 
 ## CLI
 
 ```bash
-bilinc status                 # authenticated plan, capabilities, limits, usage
-bilinc health                 # public service health
+bilinc status                          # plan, capabilities, limits, usage
 bilinc commit --key agent.goal --value '{"ship":"reliable memory"}'
 bilinc recall --query "agent goal"
 bilinc revise --key agent.goal --value '{"ship":"verifiable memory"}' --reason "scope corrected"
+bilinc list --prefix agent.            # keys, types, update times, value previews
+bilinc history agent.goal              # recorded changes, newest first
 bilinc snapshot create --label before-autonomous-run
-bilinc snapshot list
 bilinc diff --from-snapshot snap_...
+bilinc export -o bilinc-export.json    # full values; the file is readable only by you
 bilinc forget --key agent.goal --reason "superseded by the planner service"
-bilinc doctor
 ```
 
-Review what is stored:
-
-```bash
-bilinc list --prefix agent.          # table of keys, types, update times, value previews
-bilinc list --all --json             # every page as JSON
-bilinc history agent.goal            # recorded changes, newest first
-bilinc confirm agent.goal            # still accurate; the value is unchanged
-bilinc export -o bilinc-export.json  # full values; the file is readable only by you
-```
-
-Rollback is two stages. Execute takes the token from the preview and never prompts interactively,
-so it stays safe inside automation:
+Rollback is two steps, and execute never prompts, so it is safe in automation:
 
 ```bash
 bilinc rollback preview --snapshot snap_... --reason "undo bad agent run"
@@ -256,98 +112,76 @@ bilinc rollback execute --snapshot snap_... --reason "undo bad agent run" \
   --confirmation-token <token-from-preview>
 ```
 
-Useful first-run commands:
+## MCP adapter
+
+The stdio adapter works with any MCP client: Claude Code, Codex, Cursor, Hermes Agent, opencode and others. After `bilinc login`, let the CLI write the setup:
 
 ```bash
-bilinc login              # browser sign-in; --device without a browser
-bilinc quicktest
-bilinc mcp install
-bilinc start              # prints the first-run guide
+bilinc mcp install --client claude-code     # prints a ready `claude mcp add ...` command
+bilinc mcp install --client claude-desktop  # prints the config and where Claude Desktop keeps it
+bilinc mcp install                          # plain mcpServers JSON for any other client
 ```
 
-## Hosted Endpoints
+The config carries no key; the adapter reads the one `bilinc login` saved. On a machine without one, add `"env": { "BILINC_API_KEY": "..." }`.
+
+| Tool | What it does |
+| --- | --- |
+| `commit_mem` | Save durable state with its source; returns a version. |
+| `recall` | Find earlier context and decisions before acting. |
+| `revise` | Correct an existing memory. It never creates one. |
+| `forget` | Take a memory out of use. **Destructive**; a reason is required. |
+| `status` | Workspace, plan, capabilities, limits and usage. Never billed. |
+| `snapshot` | Save a checkpoint before risky work, or list checkpoints. |
+| `diff` | Compare a checkpoint with another one or with now. |
+| `rollback` | Restore a checkpoint: a free preview, then a confirmed execute. |
+| `list_memories` | Browse what is stored. Free. |
+| `history` | One memory's changes, newest first. Free. |
+| `confirm` | Record that a memory is still accurate. One write. |
+
+The remote connector at `https://mcp.bilinc.space/mcp` has ten tools; a read-only connection lists only the four read tools. Client guides: [Claude Code](https://bilinc.space/docs/claude-code) · [Codex](https://bilinc.space/docs/codex) · [Cursor](https://bilinc.space/docs/cursor) · [any MCP client](https://bilinc.space/for/mcp).
+
+## Forget and purge
+
+<p align="center"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc-python/9774f8a97fb16b16cea10b974e9179e6f41df826/docs/assets/forget-and-purge.png" alt="Comparison of forget and forget --purge. Both stop recall and hide earlier values in memory history. After forget, saved checkpoints still contain the memory and the audit trail keeps each change. After purge, the memory is removed from every checkpoint and its values are removed from the audit trail; the key name and a fingerprint of each change stay. Encrypted backups keep earlier copies until they expire in both cases." width="100%"></p>
+
+New in 2.5.0: `client.forget(key, reason=..., purge=True)`, `bilinc forget --key ... --reason ... --purge`, or `"purge": true` in the REST API also removes the memory's stored content from storage and history. It works on a memory you forgot earlier and cannot be undone. See the [privacy policy](https://bilinc.space/privacy) for what is kept and for how long.
+
+## Hosted API
+
+All endpoints live under `https://bilinc.space`. Memory operations need an API key and an active Bilinc Cloud plan; the free plan needs no card.
 
 | Endpoint | Notes |
 | --- | --- |
-| `GET /api/cloud/health` | Public service health. No key, no billing. |
-| `GET /api/cloud/status` | Authenticated capabilities for one key. Never billed. |
-| `POST /api/cloud/memory/commit` | Write. |
-| `POST /api/cloud/memory/recall` | Read. |
-| `POST /api/cloud/memory/revise` | Replace an existing memory. |
-| `POST /api/cloud/memory/forget` | Destructive. Reason required. |
-| `GET /api/cloud/memory/snapshots` | List checkpoints. Free. |
-| `POST /api/cloud/memory/snapshots` | Create a checkpoint. |
+| `GET /api/cloud/health` | Public service health. No key, never billed. |
+| `GET /api/cloud/status` | What one key can do. Never billed. |
+| `POST /api/cloud/memory/commit` · `recall` · `revise` | Write, read, correct. |
+| `POST /api/cloud/memory/forget` | Destructive. Reason required; `"purge": true` also removes stored content. |
+| `GET` · `POST /api/cloud/memory/snapshots` | List (free) or create checkpoints. |
 | `POST /api/cloud/memory/diff` | Compare checkpoints. Free. |
-| `POST /api/cloud/memory/rollback/preview` | Free. Mints a confirmation token. |
+| `POST /api/cloud/memory/rollback/preview` | Free. Returns a confirmation token. |
 | `POST /api/cloud/memory/rollback` | Destructive. Requires that token. |
 
-All hosted endpoints share `https://bilinc.space`. Authenticated memory operations require an
-active Bilinc Cloud entitlement.
+Send an `Idempotency-Key` header on any write you might retry: the same key with the same payload replays the original result and is billed once; a different payload is refused with `409 idempotency_conflict`. Saves that contain a credential, such as an API key, token or private key, are refused with `secret_detected` and the value is never echoed back.
 
-Send an `Idempotency-Key` header on any write you might retry: the same key with the same payload
-replays the original result and is billed once, and the same key with a different payload is
-refused with `409 idempotency_conflict`.
+## What's new in 2.5.0
 
-## Benchmark receipt
+- **Purge**: forget can also remove a memory's content from storage and history.
+- **Secret scan**: hosted saves are checked for credentials before anything is stored.
+- **Recall**: hosted search ranks full-text matches by relevance and finds Turkish and other non-ASCII words.
 
-Frozen regression receipt, LongMemEval-s cleaned retrieval fixture, 500 questions:
-**Hit@5 98.0%**, **NDCG@5 0.913**, with no LLM reranker and no paid API.
-
-This is a frozen isolated retrieval guardrail — not a current hosted SLA, not an
-end-to-end agent score, and not a competitor ranking. Published memory-system
-scores use different metrics, datasets, and levels of LLM assistance, so they are
-not directly comparable. Present this receipt only with this isolated scope attached.
-
-### Evidence map
-
-The repository keeps dated manifests with source state, dataset provenance, runner and metric semantics. These are
-traceability artifacts, not claims that Bilinc is universally first place.
-
-| Lane | Publicly stored evidence | Scope |
-| --- | --- | --- |
-| LongMemEval-s | [frozen manifest](benchmarks/evidence/2026-08-04/longmemeval-frozen-final/manifest.json) | Isolated retrieval guardrail |
-| AMB legacy v3 | [current Modal manifests](benchmarks/evidence/2026-08-06/) | Historical generic harness; not Vectorize AMB RAG/judge |
-| Official LoCoMo | [retrieval manifests](benchmarks/evidence/2026-08-06/) | Retrieval component; not end-to-end QA/F1 |
-| Evidence contract | [validation rules](benchmarks/evidence/README.md) | Hashes, limitations, and reproducibility boundaries |
-
-For the engineering rationale, read [Why vector search is not enough for agent memory](docs/launch/why-vector-search-is-not-enough.md).
-
-## Compare
-
-- [Bilinc vs vector memory](https://bilinc.space/compare/vector-memory)
-- [Bilinc vs Mem0](https://bilinc.space/compare/mem0)
-- [Bilinc vs Zep](https://bilinc.space/compare/zep)
-- [Bilinc vs Letta](https://bilinc.space/compare/letta)
-
-## Answer guides
-
-- [What is AI agent memory?](https://bilinc.space/answers/ai-agent-memory)
-- [How do you roll back an agent memory write?](https://bilinc.space/answers/agent-memory-rollback)
-- [What is an MCP memory server?](https://bilinc.space/answers/mcp-memory-server)
-- [How do you audit what an agent remembered?](https://bilinc.space/answers/audit-agent-memory)
-
-## Contributing
-
-Start with [CONTRIBUTING.md](CONTRIBUTING.md). Use [Issues](https://github.com/ReARCLabs/bilinc-python/issues)
-for design questions and roadmap feedback; use an issue for a reproducible bug or a scoped implementation task.
-
-Security reports should follow [SECURITY.md](SECURITY.md). Please do not include private memory values, API keys, or
-production logs in issues, pull requests, benchmark fixtures, or screenshots.
+Every release: [changelog](https://bilinc.space/changelog).
 
 ## Links
 
-- Website: https://bilinc.space
-- Signup: https://bilinc.space/signup
-- Install guide: https://bilinc.space/install
-- Pricing (permanent free tier, no card): https://bilinc.space/pricing
-- Quickstart: https://bilinc.space/docs/quickstart
-- Cloud quickstart: https://bilinc.space/docs/cloud-quickstart
-- Migration guide: https://bilinc.space/docs/migration-v2
-- MCP setup: https://bilinc.space/docs/mcp
-- PyPI: https://pypi.org/project/bilinc/
-- Machine-readable index: https://bilinc.space/llms.txt · https://bilinc.space/ai-index.json
-- Technical article: [Why vector search is not enough for agent memory](docs/launch/why-vector-search-is-not-enough.md)
+- [bilinc.space](https://bilinc.space) · [Docs](https://bilinc.space/docs) · [Install guide](https://bilinc.space/install) · [Pricing](https://bilinc.space/pricing) (free plan, no card) · [Changelog](https://bilinc.space/changelog) · [Trust](https://bilinc.space/trust)
+- Compare: [vector memory](https://bilinc.space/compare/vector-memory) · [Mem0](https://bilinc.space/compare/mem0) · [Zep](https://bilinc.space/compare/zep) · [Letta](https://bilinc.space/compare/letta)
+- Guides: [What is AI agent memory?](https://bilinc.space/answers/ai-agent-memory) · [Rolling back an agent memory write](https://bilinc.space/answers/agent-memory-rollback) · [Auditing what an agent remembered](https://bilinc.space/answers/audit-agent-memory)
+- For machines: [llms.txt](https://bilinc.space/llms.txt) · [ai-index.json](https://bilinc.space/ai-index.json)
+
+## Feedback and security
+
+Questions, bugs and ideas: [GitHub Issues](https://github.com/ReARCLabs/bilinc-python/issues). Report security issues privately to bilincsupport@rearclabs.com (see [security.txt](https://bilinc.space/.well-known/security.txt)). Please keep memory values, API keys and production logs out of issues and screenshots.
 
 ## License
 
-BUSL-1.1. See `LICENSE`.
+Business Source License 1.1, licensed by ReARC Labs Inc. See [LICENSE](https://github.com/ReARCLabs/bilinc-python/blob/main/LICENSE).
