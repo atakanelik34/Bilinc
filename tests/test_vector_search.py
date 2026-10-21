@@ -19,6 +19,12 @@ def test_expand_query_is_deterministic_and_ignores_punctuation():
     assert first.split()[:5] == ["what", "database", "do", "we", "use"]
 
 
+def test_expand_query_keeps_turkish_dotted_capital_i_in_one_term():
+    terms = expand_query("İstanbul ofisi İZMİR").split()
+    assert "istanbul" in terms and "izmir" in terms
+    assert "stanbul" not in terms and "zm" not in terms
+
+
 def test_hybrid_search_handles_natural_question_punctuation(tmp_path):
     async def scenario():
         backend = SQLiteBackend(str(tmp_path / "vector-search.sqlite"))

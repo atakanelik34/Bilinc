@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- Local full-text recall no longer splits words that start with the Turkish dotted capital I: `İstanbul` was searched as `i` and `stanbul`.
+
 ## [2.4.1] — 2026-10-19
 
 ### Added

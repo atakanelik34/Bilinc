@@ -240,14 +240,23 @@ QUERY_SYNONYMS = {
 }
 
 
+def _lower(text: str) -> str:
+    """Lowercase without splitting Turkish dotted capital I.
+
+    ``"İ".lower()`` is ``i`` plus a combining dot, which ``\\w`` does not
+    match, so ``"İstanbul"`` used to become the two terms ``i`` and ``stanbul``.
+    """
+    return text.replace("İ", "i").lower()
+
+
 def expand_query(query: str) -> str:
     """Expand query with synonyms for better recall."""
-    words = re.findall(r"[\w]+", str(query or "").lower(), flags=re.UNICODE)
+    words = re.findall(r"[\w]+", _lower(str(query or "")), flags=re.UNICODE)
     expanded: list[str] = []
     seen: set[str] = set()
 
     def add(term: str) -> None:
-        normalized = str(term or "").strip().lower()
+        normalized = _lower(str(term or "").strip())
         if normalized and normalized not in seen:
             seen.add(normalized)
             expanded.append(normalized)
