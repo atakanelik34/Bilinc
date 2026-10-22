@@ -194,9 +194,11 @@ class EmbeddingDaemon:
                 reply = {"error": "unknown_op"}
         except Exception as exc:  # a bad request must not stop the daemon
             reply = {"error": type(exc).__name__}
-        writer.write((json.dumps(reply) + "\n").encode("utf-8"))
         try:
+            writer.write((json.dumps(reply) + "\n").encode("utf-8"))
             await writer.drain()
+        except ConnectionError:
+            pass  # the client gave up (its timeout passed) before the reply; nothing to do
         finally:
             writer.close()
 

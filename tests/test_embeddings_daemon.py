@@ -231,3 +231,20 @@ async def test_a_memory_forgotten_or_edited_while_it_is_embedded_gets_no_stale_v
     assert daemon.index_once()["embedded"] == 1  # the edited memory, from its new text
     assert set(store.indexed_shas(conn, "test-hashing")) == {"edited"}
     await backend.close()
+
+
+
+def test_a_client_that_leaves_before_the_reply_does_not_break_the_daemon(tmp_path, caplog):
+    import logging
+    import socket as socket_module
+
+    with caplog.at_level(logging.ERROR, logger="asyncio"), _RunningDaemon(tmp_path / "leave.sqlite") as running:
+        for _ in range(5):
+            conn = socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM)
+            conn.setsockopt(socket_module.SOL_SOCKET, socket_module.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+            conn.connect(str(running.socket))
+            conn.sendall(b'{"op": "encode_query", "text": "hello"}\n')
+            conn.close()  # gone before the reply
+        time.sleep(0.3)
+        assert client.request({"op": "health"}, path=running.socket)["model"] == "test-hashing"
+    assert not [record for record in caplog.records if "client_connected_cb" in record.getMessage()]
