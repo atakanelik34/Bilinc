@@ -161,12 +161,19 @@ def build_server():
         reason: str,
         expected_version: str | None = None,
         idempotency_key: str | None = None,
+        purge: bool = False,
     ) -> dict[str, Any]:
         """Remove a memory from active recall. DESTRUCTIVE.
 
         This is a destructive operation: the entry stops influencing every
         future recall in this project. `reason` is required and is written to
         the audit trail. The deleted value is never returned.
+
+        With `purge=true` the memory's stored values are also removed from the
+        audit trail and every checkpoint of the project (removal from storage
+        and history; key names and value hashes remain). It also works on a
+        memory forgotten earlier and cannot be undone. Only purge when the user
+        asks for the content to be gone, not just out of recall.
 
         Use this for state that is genuinely obsolete. To correct a memory
         rather than remove it, use `revise`.
@@ -177,6 +184,7 @@ def build_server():
             reason=reason,
             expected_version=expected_version,
             idempotency_key=idempotency_key,
+            purge=purge,
         )
 
     @mcp.tool()

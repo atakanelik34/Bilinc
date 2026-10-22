@@ -119,6 +119,27 @@ def test_forget_requires_key_and_reason():
     assert set(schema["required"]) == {"key", "reason"}
 
 
+def test_cloud_mcp_forget_passes_purge_to_the_sdk(monkeypatch):
+    import bilinc.cloud_mcp as cloud_mcp
+
+    seen = {}
+
+    class FakeClient:
+        def forget(self, key, **kwargs):
+            seen.update(kwargs, key=key)
+            return {"success": True, "purged": {"audit_rows": 1, "events": 0, "snapshots": 0}}
+
+    monkeypatch.setattr(cloud_mcp, "create_client", lambda: FakeClient())
+    tool = _tools()["forget"]
+    assert tool.inputSchema["properties"]["purge"]["default"] is False
+    assert "purge" in (tool.description or "").lower()
+    asyncio.run(cloud_mcp.build_server().call_tool("forget", {"key": "k", "reason": "user asked", "purge": True}))
+    assert seen["key"] == "k" and seen["purge"] is True
+    seen.clear()
+    asyncio.run(cloud_mcp.build_server().call_tool("forget", {"key": "k", "reason": "stale"}))
+    assert seen["purge"] is False
+
+
 def test_rollback_requires_explicit_mode_and_reason():
     schema = _tools()["rollback"].inputSchema
     assert "mode" in schema["properties"]
