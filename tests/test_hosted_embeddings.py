@@ -298,3 +298,44 @@ def test_forget_and_a_concurrent_vector_write_do_not_deadlock():
             await _drop(backend)
 
     _run(scenario())
+
+
+def test_runtime_with_semantic_off_never_imports_the_embedding_stack(tmp_path, monkeypatch):
+    import builtins
+    import sys
+
+    from bilinc.cloud.runtime import ProjectRuntimeManager
+
+    monkeypatch.delenv("BILINC_CLOUD_EMBEDDINGS", raising=False)
+    monkeypatch.delitem(sys.modules, "bilinc.embeddings.hosted", raising=False)
+    real_import = builtins.__import__
+
+    def guarded(name, *args, **kwargs):
+        if name in {"numpy", "bilinc.embeddings.hosted"}:
+            raise ImportError(f"{name} must not be imported when semantic recall is off")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded)
+    manager = ProjectRuntimeManager(tmp_path)
+    assert asyncio.new_event_loop().run_until_complete(manager._semantic_encoder()) is None
+
+
+def test_runtime_survives_a_missing_embedding_stack_when_semantic_is_on(tmp_path, monkeypatch):
+    import builtins
+    import sys
+
+    from bilinc.cloud.runtime import ProjectRuntimeManager
+
+    monkeypatch.setenv("BILINC_CLOUD_EMBEDDINGS", "e5")
+    monkeypatch.delitem(sys.modules, "bilinc.embeddings.hosted", raising=False)
+    real_import = builtins.__import__
+
+    def missing(name, *args, **kwargs):
+        if name == "bilinc.embeddings.hosted":
+            raise ModuleNotFoundError("No module named 'numpy'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", missing)
+    manager = ProjectRuntimeManager(tmp_path)
+    assert asyncio.new_event_loop().run_until_complete(manager._semantic_encoder()) is None
+    assert manager._encoder_failed is True
