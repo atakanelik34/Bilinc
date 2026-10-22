@@ -321,17 +321,27 @@ class PostgresBackend(StorageBackend):
                 ALTER TABLE bilinc_entries ADD COLUMN IF NOT EXISTS tsv_at DOUBLE PRECISION;
                 CREATE INDEX IF NOT EXISTS idx_bilinc_tsv ON bilinc_entries USING GIN (tsv);
             """)
-            current = await conn.fetchrow("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
-            if current is not None and current["version"] < 3:
-                # Built from unfolded text before v3: let the backfill rebuild them.
-                await conn.execute("UPDATE bilinc_entries SET tsv_at = NULL WHERE tsv IS NOT NULL")
-            await self._backfill_fts(conn)
-            if current is None or current["version"] < self.SCHEMA_VERSION:
-                await conn.execute(
-                    "INSERT INTO schema_version (version, applied_at) VALUES ($1, $2)",
-                    self.SCHEMA_VERSION,
-                    time.time(),
-                )
+            # One process migrates a tenant at a time (prewarm and live traffic
+            # can open the same schema together); the others wait here and then
+            # find the version already recorded. A session lock, so backfill
+            # batches still commit one by one and saves are not blocked.
+            lock = "SELECT {}(hashtext('bilinc_schema_migration:' || current_schema()))"
+            await conn.execute(lock.format("pg_advisory_lock"))
+            try:
+                current = await conn.fetchrow("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
+                if current is not None and current["version"] < 3:
+                    # Built from unfolded text before v3: let the backfill rebuild them.
+                    await conn.execute("UPDATE bilinc_entries SET tsv_at = NULL WHERE tsv IS NOT NULL")
+                await self._backfill_fts(conn)
+                if current is None or current["version"] < self.SCHEMA_VERSION:
+                    await conn.execute(
+                        "INSERT INTO schema_version (version, applied_at) VALUES ($1, $2) "
+                        "ON CONFLICT (version) DO NOTHING",
+                        self.SCHEMA_VERSION,
+                        time.time(),
+                    )
+            finally:
+                await conn.execute(lock.format("pg_advisory_unlock"))
             if self.schema:
                 # Fail closed: every table must resolve inside the tenant schema,
                 # so no query can fall through to a shared table in public.
@@ -647,7 +657,9 @@ class PostgresBackend(StorageBackend):
             if not rows:
                 break
             await conn.executemany(
-                "UPDATE bilinc_entries SET tsv = to_tsvector('simple', $2), tsv_at = $3 WHERE key = $1",
+                # A save that lands after the SELECT keeps its own, newer vector.
+                "UPDATE bilinc_entries SET tsv = to_tsvector('simple', $2), tsv_at = $3 "
+                "WHERE key = $1 AND updated_at IS NOT DISTINCT FROM $3",
                 [
                     (
                         row["key"],

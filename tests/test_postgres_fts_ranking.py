@@ -278,3 +278,32 @@ def test_schema_v3_rebuilds_v2_vectors_from_folded_text():
             raise
 
     asyncio.new_event_loop().run_until_complete(scenario())
+
+
+@needs_postgres
+def test_two_processes_can_migrate_the_same_v2_tenant_at_once():
+    async def scenario():
+        import asyncpg
+
+        backend = await _backend()
+        schema = backend.schema
+        try:
+            await backend.save(MemoryEntry(key="tr", value="Girişimci", memory_type=MemoryType.SEMANTIC))
+            await backend.close()
+            conn = await asyncpg.connect(DSN)
+            try:
+                await conn.execute(f'DELETE FROM "{schema}".schema_version WHERE version >= 3')
+                await conn.execute(f'INSERT INTO "{schema}".schema_version (version, applied_at) VALUES (2, 0)')
+            finally:
+                await conn.close()
+            first, second = PostgresBackend(dsn=DSN, schema=schema), PostgresBackend(dsn=DSN, schema=schema)
+            results = await asyncio.gather(first.init(), second.init(), return_exceptions=True)
+            assert [r for r in results if isinstance(r, Exception)] == []
+            assert [k for _, k, _ in await first.fts_search("girisimci")] == ["tr"]
+            await second.close()
+            await _drop(first)
+        except Exception:
+            await _drop(backend)
+            raise
+
+    asyncio.new_event_loop().run_until_complete(scenario())
