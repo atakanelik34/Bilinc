@@ -6,11 +6,12 @@ import json
 import traceback
 import urllib.error
 
-import numpy as np
 import pytest
 
-from bilinc.embeddings import encoder as encoder_module
-from bilinc.embeddings.encoder import WorkersAIEncoder
+np = pytest.importorskip("numpy")
+
+from bilinc.embeddings import encoder as encoder_module  # noqa: E402
+from bilinc.embeddings.encoder import WorkersAIEncoder  # noqa: E402
 
 ACCOUNT = "0123456789abcdef0123456789abcdef"
 
