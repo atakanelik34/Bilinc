@@ -271,6 +271,9 @@ class StatePlane:
     def __init__(self, backend=None, working_memory=None, max_working_slots=8,
                  enable_verification=False, enable_audit=False):
         self.backend = backend
+        # Hosted runtime: an encoder (bilinc.embeddings.encoder.Encoder) for
+        # query vectors, matched against vectors the backend persists.
+        self.query_encoder = None
         self.working_memory = working_memory or WorkingMemory(max_slots=max_working_slots)
         self.estimator = ConfidenceEstimator()
         self.s1 = System1Engine(state_plane=self)
@@ -2455,6 +2458,9 @@ class StatePlane:
         runs in a thread; database reads stay on the loop's thread, which owns
         the connection.
         """
+        backend_ranked = await self._rank_backend_semantic_keys(query, top_k, candidate_keys)
+        if backend_ranked is not None:
+            return backend_ranked, True
         encoded = None
         if self._semantic_index_available():
             from bilinc.embeddings import client
@@ -2464,6 +2470,35 @@ class StatePlane:
         if indexed is not None:
             return indexed, True
         return self._rank_semantic_keys(query, top_k, candidate_keys), False
+
+    async def _rank_backend_semantic_keys(
+        self,
+        query: str,
+        top_k: int,
+        candidate_keys: Optional[set[str]] = None,
+    ) -> Optional[List[str]]:
+        """Semantic ranking by vectors the backend persists; None when there is no such path.
+
+        Used by the hosted runtime (Postgres), where ``query_encoder`` is set.
+        Any failure, including a slow or unreachable encoder, means no signal.
+        """
+        encoder = self.query_encoder
+        search = getattr(self.backend, "semantic_search", None)
+        if encoder is None or search is None or not asyncio.iscoroutinefunction(search):
+            return None
+        try:
+            from bilinc.embeddings.client import QUERY_TIMEOUT_SECONDS
+            from bilinc.embeddings.text import QUERY_PREFIX
+
+            encoded = await asyncio.wait_for(
+                asyncio.to_thread(encoder.encode, [QUERY_PREFIX + query]), QUERY_TIMEOUT_SECONDS
+            )
+            vector = encoded[0]
+            rows = await search(vector.tolist(), encoder.model_id, limit=top_k, allowed_keys=candidate_keys)
+        except Exception as exc:
+            logger.warning("Semantic recall failed: %s", type(exc).__name__)
+            return None
+        return [key for key, _ in rows] or None
 
     def _semantic_index_available(self) -> bool:
         conn = self._sqlite_connection()

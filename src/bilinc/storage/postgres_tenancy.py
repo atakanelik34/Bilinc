@@ -20,6 +20,7 @@ TENANT_TABLES = (
     "bilinc_claims",
     "entities",
     "entity_mentions",
+    "memory_embeddings",
     "memory_events",
     "audit_log",
 )
