@@ -110,9 +110,11 @@ class StatePlane:
     # enabled only by an explicit deployment flag and is otherwise inert.
     INTELLIGENT_RECALL_ADAPTIVE_SEMANTIC_WEIGHT = 0.12
     # Weight of the semantic signal when it comes from persisted vectors kept by
-    # the embedding daemon (bilinc.embeddings). BILINC_SEMANTIC_RRF_WEIGHT
-    # overrides it, as it does for the in-process path.
-    INTELLIGENT_RECALL_INDEXED_SEMANTIC_WEIGHT = 0.05
+    # the embedding daemon (bilinc.embeddings, multilingual-e5-small). Chosen on
+    # LongMemEval dev (2026-10-22): 0.25 and 0.35 both improved R_all@5 and
+    # nDCG@5 with paired confidence intervals above zero; 0.35 was the best.
+    # BILINC_SEMANTIC_RRF_WEIGHT overrides it, as for the in-process path.
+    INTELLIGENT_RECALL_INDEXED_SEMANTIC_WEIGHT = 0.35
     INTELLIGENT_RECALL_SEMANTIC_LEXICAL_COVERAGE_THRESHOLD = 0.5
     # Graph continuity can recover a memory that does not mention the query
     # entity directly, but only through a bounded bridge path. Keep this a

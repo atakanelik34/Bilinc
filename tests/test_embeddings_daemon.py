@@ -126,6 +126,8 @@ async def test_recall_uses_persisted_vectors_when_the_daemon_answers(tmp_path, m
         results = await plane.recall_intelligent("Lisbon conference flights", limit=2)
         assert results[0]["key"] == "trip" and results[0]["signals"]["semantic"] > 0
         assert plane._semantic_recall_rrf_weight(indexed=True) == plane.INTELLIGENT_RECALL_INDEXED_SEMANTIC_WEIGHT
+        assert plane.INTELLIGENT_RECALL_INDEXED_SEMANTIC_WEIGHT == 0.35
+        assert plane._semantic_recall_rrf_weight(indexed=False) == plane.INTELLIGENT_RECALL_SEMANTIC_WEIGHT
 
     # Daemon gone: no semantic signal, recall still works.
     keys, indexed = plane._rank_semantic_signal("Lisbon conference flights", top_k=5)
