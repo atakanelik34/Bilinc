@@ -1141,6 +1141,9 @@ class ProjectRuntimeManager:
         plane = self._planes.pop(project_id, None)
         if plane is None:
             return
+        schema = getattr(getattr(plane, "backend", None), "schema", None)
+        if self._indexer is not None and schema:
+            self._indexer.forget_tenant(schema)
         for component in (getattr(plane, "backend", None), getattr(plane, "audit", None)):
             close = getattr(component, "close", None)
             if close is not None:

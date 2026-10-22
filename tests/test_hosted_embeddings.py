@@ -205,3 +205,41 @@ def test_recall_without_vectors_or_with_a_failing_encoder_still_answers():
             await _drop(backend)
 
     _run(scenario())
+
+
+@needs_postgres
+def test_rejected_memories_back_off_and_do_not_block_the_queue():
+    class Picky(HashingEncoder):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def encode(self, texts):
+            self.calls += 1
+            if any("poison" in text for text in texts):
+                raise RuntimeError("rejected")
+            return super().encode(texts)
+
+    async def scenario():
+        backend = await _backend()
+        encoder = Picky()
+        indexer = HostedIndexer(encoder, lambda: [], keys_per_pass=2)
+        try:
+            # The two newest memories are rejected; with two keys per pass they would fill every pass.
+            await backend.save(_entry("good", "harbor launch plan"))
+            await backend.save(_entry("bad1", "poison one"))
+            await backend.save(_entry("bad2", "poison two"))
+            first = await indexer.index_backend(backend)
+            assert first["failed"] == 2 and first["embedded"] == 0
+            second = await indexer.index_backend(backend)
+            assert second["embedded"] == 1 and second["failed"] == 0
+            calls = encoder.calls
+            third = await indexer.index_backend(backend)
+            assert third["embedded"] == 0 and encoder.calls == calls  # still backing off
+            assert await _vector_keys(backend, encoder.model_id) == {"good"}
+            indexer.forget_tenant(backend.schema)
+            assert indexer._failed == {}
+        finally:
+            await _drop(backend)
+
+    _run(scenario())

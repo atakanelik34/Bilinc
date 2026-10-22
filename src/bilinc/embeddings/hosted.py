@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Callable, Dict, Iterable, List, Optional
 
 import numpy as np
@@ -22,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 
 class HostedIndexer:
+    FAILURE_BACKOFF = 60.0
+    FAILURE_BACKOFF_MAX = 3600.0
+
     def __init__(
         self,
         encoder: Encoder,
@@ -39,6 +43,8 @@ class HostedIndexer:
         self.keys_per_pass = max(1, int(keys_per_pass))
         self.poll_seconds = float(poll_seconds)
         self._wake = asyncio.Event()
+        # (tenant, key) -> (text sha, retry not before, backoff seconds) for memories the encoder rejected
+        self._failed: Dict[tuple, tuple] = {}
 
     def nudge(self) -> None:
         """Start the next pass now (after a write) instead of at the next poll."""
@@ -52,9 +58,16 @@ class HostedIndexer:
     async def index_backend(self, backend) -> Dict[str, int]:
         """One bounded pass over one tenant. ``pending`` > 0 means more work is due."""
         model = self.encoder.model_id
-        candidates = await backend.embedding_candidates(model, self.keys_per_pass + 1, self.exclude_prefixes)
-        written = touched = 0
-        for key, value, updated_at, indexed_sha in candidates[: self.keys_per_pass]:
+        tenant = getattr(backend, "schema", None) or id(backend)
+        now = time.time()
+        waiting = {key for (owner, key), (_, retry_at, _) in self._failed.items() if owner == tenant and retry_at > now}
+        # Rejected memories are fetched too, so they cannot crowd out the rest of the queue.
+        candidates = await backend.embedding_candidates(
+            model, self.keys_per_pass + len(waiting) + 1, self.exclude_prefixes
+        )
+        due = [row for row in candidates if row[0] not in waiting]
+        written = touched = failed = 0
+        for key, value, updated_at, indexed_sha in due[: self.keys_per_pass]:
             text = memory_text(key, value)
             sha = text_sha(text)
             if sha == indexed_sha:
@@ -64,17 +77,29 @@ class HostedIndexer:
             try:
                 vectors = await asyncio.to_thread(self._embed, text)
             except Exception as exc:  # a memory the encoder rejects must not block the rest
-                logger.warning("Embedding failed for one memory: %s", type(exc).__name__)
+                previous = self._failed.get((tenant, key))
+                delay = self.FAILURE_BACKOFF if previous is None or previous[0] != sha else min(
+                    self.FAILURE_BACKOFF_MAX, previous[2] * 2
+                )
+                self._failed[(tenant, key)] = (sha, time.time() + delay, delay)
+                failed += 1
+                logger.warning("Embedding failed for one memory: %s; retry in %.0f s", type(exc).__name__, delay)
                 continue
+            self._failed.pop((tenant, key), None)
             written += int(await backend.write_embeddings(key, model, sha, vectors.tolist(), updated_at))
         removed = await backend.prune_embeddings(model, self.exclude_prefixes)
         return {
             "embedded": written,
             "touched": touched,
             "removed": removed,
+            "failed": failed,
             # Only a pass that made progress asks for another right away.
-            "pending": int(len(candidates) > self.keys_per_pass and (written + touched) > 0),
+            "pending": int(len(due) > self.keys_per_pass and (written + touched) > 0),
         }
+
+    def forget_tenant(self, tenant: str) -> None:
+        """Drop backoff state for a tenant that was unloaded or purged."""
+        self._failed = {item: state for item, state in self._failed.items() if item[0] != tenant}
 
     async def run_once(self) -> bool:
         """Visit every loaded tenant once; True when any tenant still has work pending."""
