@@ -248,3 +248,78 @@ def test_a_client_that_leaves_before_the_reply_does_not_break_the_daemon(tmp_pat
         time.sleep(0.3)
         assert client.request({"op": "health"}, path=running.socket)["model"] == "test-hashing"
     assert not [record for record in caplog.records if "client_connected_cb" in record.getMessage()]
+
+
+class _Picky(HashingEncoder):
+    """Rejects any text containing "poison"; counts calls."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def encode(self, texts):
+        self.calls += 1
+        if any("poison" in text for text in texts):
+            raise RuntimeError("rejected")
+        return super().encode(texts)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_memory_waits_and_does_not_block_the_rest(tmp_path):
+    db = tmp_path / "local.sqlite"
+    backend = await _backend(db)
+    await backend.save(MemoryEntry(key="a:bad", value="poison text"))
+    await backend.save(MemoryEntry(key="b:good", value="harbor launch plan"))
+    encoder = _Picky()
+    daemon = EmbeddingDaemon(str(db), encoder, keys_per_pass=10)
+
+    first = daemon.index_once()
+    assert first["embedded"] == 1 and first["failed"] == 1 and first["pending"] == 0
+    assert set(store.indexed_shas(backend._get_conn(), encoder.model_id)) == {"b:good"}
+    calls = encoder.calls
+    assert daemon.index_once()["embedded"] == 0
+    assert encoder.calls == calls  # still backing off: no new call for the rejected memory
+
+    await backend.save(MemoryEntry(key="a:bad", value="fixed text"))  # changed text is tried at once
+    assert daemon.index_once()["embedded"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failing_encoder_is_not_called_for_every_memory(tmp_path):
+    db = tmp_path / "local.sqlite"
+    backend = await _backend(db)
+    for i in range(10):
+        await backend.save(MemoryEntry(key=f"k:{i}", value=f"poison {i}"))
+    encoder = _Picky()
+    result = EmbeddingDaemon(str(db), encoder, keys_per_pass=10).index_once()
+    assert encoder.calls == EmbeddingDaemon.MAX_FAILURES_PER_PASS
+    assert result["pending"] == 0  # no progress: wait for the next poll, do not spin
+
+
+@pytest.mark.asyncio
+async def test_an_outage_stops_the_pass_without_blaming_memories(tmp_path):
+    from bilinc.embeddings.encoder import WorkersAIError
+
+    class Down(HashingEncoder):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+            self.up = False
+
+        def encode(self, texts):
+            self.calls += 1
+            if not self.up:
+                raise WorkersAIError("Workers AI request failed: URLError", None)
+            return super().encode(texts)
+
+    db = tmp_path / "local.sqlite"
+    backend = await _backend(db)
+    for i in range(5):
+        await backend.save(MemoryEntry(key=f"k:{i}", value=f"note {i}"))
+    encoder = Down()
+    daemon = EmbeddingDaemon(str(db), encoder, keys_per_pass=10)
+    down = daemon.index_once()
+    assert encoder.calls == 1 and down["failed"] == 0 and down["pending"] == 0 and down["indexed"] == 0
+    encoder.up = True
+    up = daemon.index_once()  # back online: everything is embedded at once
+    assert up["embedded"] == 5 and up["indexed"] == 5
