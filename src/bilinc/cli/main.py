@@ -108,6 +108,11 @@ def _continuation_command(next_cursor: str, filters: dict[str, Any] | None) -> s
         value = (filters or {}).get(name)
         if value is not None and value != "":
             parts.append(f"{flag} {shlex.quote(str(value))}")
+    for source in (filters or {}).get("sources") or []:
+        parts.append(f"--source {shlex.quote(str(source))}")
+    order = (filters or {}).get("order")
+    if order and order != "key":
+        parts.append(f"--order {shlex.quote(str(order))}")
     values = (filters or {}).get("values")
     if values and values != "preview":
         parts.append(f"--values {shlex.quote(str(values))}")
@@ -306,8 +311,16 @@ def build_parser() -> argparse.ArgumentParser:
     history.add_argument("--values", choices=VALUE_MODES, default="full", help="How much of each value to show")
     history.add_argument("--json", action="store_true", help="Print the raw JSON response")
 
-    list_cmd = sub.add_parser("list", help="List stored memories, ordered by key")
+    list_cmd = sub.add_parser("list", help="List stored memories, ordered by key unless --order says otherwise")
     list_cmd.add_argument("--prefix", help="Only keys starting with this text")
+    list_cmd.add_argument(
+        "--order", choices=("key", "newest", "oldest"), default=None,
+        help="key (default), newest (most recently updated first) or oldest",
+    )
+    list_cmd.add_argument(
+        "--source", action="append", dest="sources", default=None,
+        help="Only memories saved by this source, exactly (repeatable; \"\" = no source)",
+    )
     list_cmd.add_argument("--type", choices=MEMORY_TYPES, help="Only this memory type")
     list_cmd.add_argument("--updated-after", help="Only memories updated after this ISO-8601 time")
     list_cmd.add_argument("--updated-before", help="Only memories updated before this ISO-8601 time")
@@ -530,6 +543,8 @@ def main(argv: list[str] | None = None) -> int:
                 "updated_after": args.updated_after,
                 "updated_before": args.updated_before,
                 "values": args.values,
+                "sources": args.sources,
+                "order": args.order,
             }
             if args.all:
                 entries = list(client.iter_memories(page_size=args.limit, cursor=args.cursor, **filters))

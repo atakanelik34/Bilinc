@@ -45,6 +45,7 @@ def test_health_advertises_the_memory_review_capabilities(sidecar):
         "memory_list",
         "memory_confirm",
         "memory_list_source",
+        "memory_list_order",
     } <= set(capabilities)
 
 
@@ -639,3 +640,139 @@ def test_list_reports_the_same_source_the_filter_matches():
     # A non-string metadata.source is no source, exactly as the backends' filter treats it.
     assert _effective_source({"source": "", "metadata": {"source": 5}}) is None
     assert _effective_source({"source": None, "metadata": None}) is None
+
+
+# --- list order ---------------------------------------------------------------
+
+@pytest.mark.parametrize("order", ["newest", "oldest"])
+def test_list_orders_by_update_time_with_a_stable_cursor(sidecar, order):
+    import time
+
+    project = str(uuid4())
+    for key in ("b", "a", "c", "d"):
+        _commit(sidecar, project, key, key)
+        time.sleep(0.01)
+    expected = ["d", "c", "a", "b"] if order == "newest" else ["b", "a", "c", "d"]
+
+    first = _post(sidecar, project, "memories", {"limit": 2, "order": order}).json()
+    assert first["order"] == order
+    assert [entry["key"] for entry in first["entries"]] == expected[:2]
+    assert first["total"] == 4
+    second = _post(sidecar, project, "memories", {"limit": 2, "order": order, "cursor": first["next_cursor"]}).json()
+    assert [entry["key"] for entry in second["entries"]] == expected[2:]
+    assert second["next_cursor"] is None
+
+
+def test_list_order_cursors_are_bound_to_their_order(sidecar):
+    project = str(uuid4())
+    for key in ("a", "b", "c"):
+        _commit(sidecar, project, key, key)
+    newest = _post(sidecar, project, "memories", {"limit": 1, "order": "newest"}).json()["next_cursor"]
+    by_key = _post(sidecar, project, "memories", {"limit": 1}).json()["next_cursor"]
+    for body in (
+        {"order": "oldest", "cursor": newest},
+        {"cursor": newest},
+        {"order": "newest", "cursor": by_key},
+    ):
+        response = _post(sidecar, project, "memories", {"limit": 1, **body})
+        assert response.status_code == 400, (body, response.text)
+    assert _post(sidecar, project, "memories", {"order": "sideways"}).status_code == 422
+
+
+def test_list_without_order_is_key_ordered_as_before(sidecar):
+    project = str(uuid4())
+    for key in ("b", "a"):
+        _commit(sidecar, project, key, key)
+    body = _post(sidecar, project, "memories", {}).json()
+    assert [entry["key"] for entry in body["entries"]] == ["a", "b"]
+    assert body["order"] == "key"
+
+
+@pytest.mark.parametrize("order", ["newest", "oldest"])
+def test_sqlite_list_page_orders_ties_by_key_and_pages_through_them(tmp_path, order):
+    import asyncio
+
+    from bilinc.storage.sqlite import SQLiteBackend
+
+    async def scenario():
+        backend = SQLiteBackend(str(tmp_path / "order.sqlite"))
+        await backend.init()
+        conn = backend._get_conn()
+        for key, stamp in (("x", 5.0), ("a", 5.0), ("m", 9.0), ("z", 1.0)):
+            await backend.save(MemoryEntry(key=key, value=key))
+            # save() stamps the clock; fixed times make ties and order explicit.
+            conn.execute("UPDATE memories SET updated_at = ? WHERE key = ?", (stamp, key))
+        conn.commit()
+        seen, after = [], None
+        while True:
+            page = await backend.list_page(
+                order=order, after_key=after[1] if after else None, after_updated=after[0] if after else None, limit=1
+            )
+            if not page:
+                break
+            seen.append(page[0].key)
+            after = (page[0].updated_at, page[0].key)
+        return seen
+
+    expected = ["m", "a", "x", "z"] if order == "newest" else ["z", "a", "x", "m"]
+    assert asyncio.run(scenario()) == expected
+
+
+def test_order_cursor_for_a_long_non_ascii_key_stays_within_the_cursor_limit():
+    from bilinc.cloud.runtime import decode_order_cursor, encode_order_cursor
+    from bilinc.cloud.service import MAX_CURSOR_LENGTH
+
+    for key in ("ş" * 512, "\U0001F600" * 512):
+        cursor = encode_order_cursor("newest", 1792675712.123456, key)
+        assert len(cursor) <= MAX_CURSOR_LENGTH
+        assert decode_order_cursor(cursor, "newest") == (1792675712.123456, key)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"o":"newest","u":NaN,"k":"a"}',
+        '{"o":"newest","u":Infinity,"k":"a"}',
+        '{"o":"newest","u":1e400,"k":"a"}',
+        '{"o":"newest","u":' + "9" * 400 + ',"k":"a"}',
+        "[" * 3000,
+    ],
+)
+def test_crafted_order_cursors_are_a_400_not_a_500(sidecar, payload):
+    project = str(uuid4())
+    _commit(sidecar, project, "a", "a")
+    cursor = encode_cursor(payload)
+    for order in ("newest", "key"):
+        response = _post(sidecar, project, "memories", {"order": order, "cursor": cursor})
+        assert response.status_code in (400, 200), response.text
+        assert response.status_code != 500
+
+
+@pytest.mark.parametrize("order", ["newest", "oldest"])
+def test_sqlite_update_time_order_reads_text_timestamps_and_terminates(tmp_path, order):
+    import asyncio
+
+    from bilinc.storage.sqlite import SQLiteBackend
+
+    async def scenario():
+        backend = SQLiteBackend(str(tmp_path / "text.sqlite"))
+        await backend.init()
+        conn = backend._get_conn()
+        stamps = {"a": 100.0, "b": "1970-01-01T00:03:20+00:00", "c": 300.0, "d": "1970-01-01T00:06:40Z", "e": "50"}
+        for key, stamp in stamps.items():
+            await backend.save(MemoryEntry(key=key, value=key))
+            conn.execute("UPDATE memories SET updated_at = ? WHERE key = ?", (stamp, key))
+        conn.commit()
+        seen, after = [], None
+        for _ in range(20):
+            page = await backend.list_page(
+                order=order, after_key=after[1] if after else None, after_updated=after[0] if after else None, limit=1
+            )
+            if not page:
+                return seen
+            seen.append(page[0].key)
+            after = (page[0].list_stamp, page[0].key)
+        raise AssertionError(f"no end: {seen}")
+
+    expected = ["e", "a", "b", "c", "d"]  # 50, 100, 200, 300, 400 seconds
+    assert asyncio.run(scenario()) == (expected[::-1] if order == "newest" else expected)

@@ -297,11 +297,15 @@ def build_server():
         cursor: str | None = None,
         limit: int = 50,
         values: str = "preview",
+        sources: list[str] | None = None,
+        order: str | None = None,
     ) -> dict[str, Any]:
-        """List the memories stored in this Bilinc Cloud project, ordered by key.
+        """List the memories stored in this Bilinc Cloud project.
 
-        Read-only and free. Filters: key `prefix`, `memory_type`, and ISO-8601
-        `updated_after` / `updated_before`. Returns up to `limit` entries
+        Read-only and free. Filters: key `prefix`, `memory_type`, ISO-8601
+        `updated_after` / `updated_before`, and `sources` (exact "saved by"
+        values). `order` is "key" (default), "newest" (most recently updated
+        first) or "oldest"; pass the same order with a `cursor`. Returns up to `limit` entries
         (1-100) with key, type, importance, source, created and updated times,
         entry version, and a value whose size follows `values` ("preview" by
         default, "full", or "none"). `total` counts all matches; `nextCursor`
@@ -316,6 +320,8 @@ def build_server():
             cursor=cursor,
             limit=limit,
             values=values,
+            sources=sources,
+            order=order,
         )
 
     @mcp.tool(

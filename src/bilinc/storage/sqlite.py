@@ -1173,25 +1173,59 @@ class SQLiteBackend(StorageBackend):
         updated_before: Optional[float] = None,
         sources: Optional[List[str]] = None,
         after_key: Optional[str] = None,
+        after_updated: Optional[float] = None,
+        order: str = "key",
         limit: int = 50,
     ) -> List[MemoryEntry]:
-        """Return one key-ordered page of entries.
+        """Return one page of entries, ordered by key (default) or by update time.
 
         Ordered by key so a cursor (the last key seen) stays stable while other
         writes land: new keys appear in their sorted place, never shift a page.
+        ``order="newest"`` / ``"oldest"`` sort by ``updated_at`` (missing = 0),
+        then key; the cursor is then the last entry's ``(updated_at, key)``
+        passed as ``after_updated`` and ``after_key``.
         ``sources`` keeps only entries whose effective source (the source
         column, else metadata.source, else '') is one of the given strings.
         """
         clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before, sources)
-        if after_key is not None:
-            clauses.append("key > ?")
-            params.append(after_key)
+        if order == "key":
+            if after_key is not None:
+                clauses.append("key > ?")
+                params.append(after_key)
+            order_by = "key ASC"
+            stamp_sql = ""
+        elif order in ("newest", "oldest"):
+            # Keyset paging on (updated time, key): stable while other writes land.
+            # Some writers stored ISO-8601 text; read it as epoch seconds (as
+            # ``_epoch`` does) so text and numbers sort together and match the cursor.
+            stamp_sql = (
+                "(CASE WHEN updated_at IS NULL THEN 0 "
+                "WHEN typeof(updated_at) IN ('integer', 'real') THEN updated_at "
+                "WHEN julianday(updated_at) IS NOT NULL AND updated_at GLOB '*[^0-9.]*' "
+                "THEN (julianday(updated_at) - 2440587.5) * 86400.0 "
+                "ELSE COALESCE(CAST(updated_at AS REAL), 0) END)"
+            )
+            before, direction = ("<", "DESC") if order == "newest" else (">", "ASC")
+            if after_key is not None:
+                stamp = float(after_updated or 0.0)
+                clauses.append(f"({stamp_sql} {before} ? OR ({stamp_sql} = ? AND key > ?))")
+                params.extend([stamp, stamp, after_key])
+            order_by = f"{stamp_sql} {direction}, key ASC"
+        else:
+            raise ValueError(f"unknown list order: {order}")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        stamp_column = f", {stamp_sql} AS list_stamp" if order != "key" else ""
         rows = self._get_conn().execute(
-            f"SELECT * FROM memories {where} ORDER BY key ASC LIMIT ?",
+            f"SELECT *{stamp_column} FROM memories {where} ORDER BY {order_by} LIMIT ?",
             (*params, max(1, int(limit))),
         ).fetchall()
-        return [self._row_to_entry(r) for r in rows]
+        entries = [self._row_to_entry(r) for r in rows]
+        if order != "key":
+            # The cursor must carry the value the query sorted on, which for a
+            # text timestamp can differ from how it is read back.
+            for entry, row in zip(entries, rows):
+                entry.list_stamp = float(row["list_stamp"])
+        return entries
 
     async def count_filtered(
         self,
