@@ -5,6 +5,11 @@ persisted vectors from `intfloat/multilingual-e5-small`, run as an int8 ONNX
 graph. One process owns the model; every MCP process sharing the database
 uses its vectors without loading a model itself.
 
+This is part of the source checkout, not the PyPI package: install it with
+`pip install -e ".[embeddings]"` from a clone. The `embeddings` extra on PyPI
+only adds the dependencies. The daemon can also call a Workers AI model instead
+of loading one (`--encoder workers-ai`).
+
 ## How it works
 
 - `python -m bilinc.embeddings serve` loads the model once and keeps the
