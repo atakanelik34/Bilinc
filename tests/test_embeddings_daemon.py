@@ -198,3 +198,36 @@ def test_a_second_daemon_does_not_take_over(tmp_path):
         finally:
             shutil.rmtree(other_dir, ignore_errors=True)
         assert client.request({"op": "health"}, path=running.socket)["db"] == str(db)
+
+
+
+@pytest.mark.asyncio
+async def test_a_memory_forgotten_or_edited_while_it_is_embedded_gets_no_stale_vectors(tmp_path):
+    import sqlite3 as stdlib_sqlite3
+
+    db = tmp_path / "race.sqlite"
+    backend = await _backend(db)
+    await backend.save(MemoryEntry(key="gone", value="soon forgotten"))
+    await backend.save(MemoryEntry(key="edited", value="first text"))
+    daemon = EmbeddingDaemon(str(db), HashingEncoder())
+    real_embed = daemon._embed
+
+    def embed_then_change(text):
+        vectors = real_embed(text)
+        other = stdlib_sqlite3.connect(str(db))  # another process acts mid-pass
+        other.execute("DELETE FROM memories WHERE key = 'gone'")
+        other.execute("UPDATE memories SET value = ? WHERE key = 'edited'", (json.dumps("second text"),))
+        other.commit()
+        other.close()
+        return vectors
+
+    daemon._embed = embed_then_change
+    result = daemon.index_once()
+    assert result["embedded"] == 0
+    conn = backend._get_conn()
+    assert store.indexed_shas(conn, "test-hashing") == {}
+
+    daemon._embed = real_embed
+    assert daemon.index_once()["embedded"] == 1  # the edited memory, from its new text
+    assert set(store.indexed_shas(conn, "test-hashing")) == {"edited"}
+    await backend.close()

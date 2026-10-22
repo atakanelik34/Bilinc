@@ -92,6 +92,16 @@ class EmbeddingDaemon:
                 wanted[str(key)] = (text_sha(text), text)
         return wanted, indexed
 
+    def _current_shas(self, conn, keys: List[str]) -> Dict[str, str]:
+        """Text fingerprints of the given keys as stored right now."""
+        shas: Dict[str, str] = {}
+        for start in range(0, len(keys), 500):
+            chunk = keys[start:start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            for key, raw in conn.execute(f"SELECT key, value FROM memories WHERE key IN ({placeholders})", chunk):
+                shas[str(key)] = text_sha(memory_text(key, decode_stored_value(raw)))
+        return shas
+
     def _embed(self, text: str):
         chunks = [PASSAGE_PREFIX + chunk for chunk in chunk_words(text)]
         parts = [self.encoder.encode(chunks[i:i + self.batch_size]) for i in range(0, len(chunks), self.batch_size)]
@@ -111,10 +121,18 @@ class EmbeddingDaemon:
             sha, text = wanted[key]
             embedded.append((key, sha, self._embed(text)))
         conn = self._connect()
+        written = 0
         try:
+            # The write lock is taken before the re-check, so a forget or an
+            # edit made while this batch was being embedded cannot be undone
+            # by writing vectors of a value that is gone or has changed.
+            conn.execute("BEGIN IMMEDIATE")
+            current = self._current_shas(conn, [key for key, _, _ in embedded])
             now = time.time()
             for key, sha, vectors in embedded:
-                store.replace(conn, key, model, sha, vectors, now)
+                if current.get(key) == sha:
+                    store.replace(conn, key, model, sha, vectors, now)
+                    written += 1
             removed = store.delete_keys(conn, stale, model)
             # Vectors of an older model or revision are never read again.
             removed += int(conn.execute(f"DELETE FROM {store.TABLE} WHERE model != ?", (model,)).rowcount or 0)
@@ -122,7 +140,7 @@ class EmbeddingDaemon:
         finally:
             conn.close()
         self.last_pass = {
-            "embedded": len(embedded),
+            "embedded": written,
             "removed": removed,
             "pending": len(todo) - len(batch),
             "indexed": len(wanted) - (len(todo) - len(batch)),
