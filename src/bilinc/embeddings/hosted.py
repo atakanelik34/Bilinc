@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 class HostedIndexer:
     FAILURE_BACKOFF = 60.0
     FAILURE_BACKOFF_MAX = 3600.0
+    # Pause between memories so query encoding, which shares the encoder, is not starved.
+    YIELD_SECONDS = 0.02
+    # Writes arrive in bursts; one pass after the burst is enough.
+    NUDGE_DEBOUNCE_SECONDS = 1.0
+    # Removed and out-of-scope vectors are swept on a pass with work, or every this many passes.
+    PRUNE_EVERY_PASSES = 30
 
     def __init__(
         self,
@@ -45,6 +51,7 @@ class HostedIndexer:
         self._wake = asyncio.Event()
         # (tenant, key) -> (text sha, retry not before, backoff seconds) for memories the encoder rejected
         self._failed: Dict[tuple, tuple] = {}
+        self._passes: Dict[object, int] = {}
 
     def nudge(self) -> None:
         """Start the next pass now (after a write) instead of at the next poll."""
@@ -65,6 +72,12 @@ class HostedIndexer:
         candidates = await backend.embedding_candidates(
             model, self.keys_per_pass + len(waiting) + 1, self.exclude_prefixes
         )
+        if len(candidates) < self.keys_per_pass + len(waiting) + 1:
+            # Every candidate was seen: a backoff for a key that is gone (forgotten) can go.
+            present = {row[0] for row in candidates}
+            self._failed = {
+                item: state for item, state in self._failed.items() if item[0] != tenant or item[1] in present
+            }
         due = [row for row in candidates if row[0] not in waiting]
         written = touched = failed = 0
         for key, value, updated_at, indexed_sha in due[: self.keys_per_pass]:
@@ -87,7 +100,12 @@ class HostedIndexer:
                 continue
             self._failed.pop((tenant, key), None)
             written += int(await backend.write_embeddings(key, model, sha, vectors.tolist(), updated_at))
-        removed = await backend.prune_embeddings(model, self.exclude_prefixes)
+            await asyncio.sleep(self.YIELD_SECONDS)
+        passes = self._passes.get(tenant, 0) + 1
+        self._passes[tenant] = passes
+        removed = 0
+        if written or touched or passes % self.PRUNE_EVERY_PASSES == 1:
+            removed = await backend.prune_embeddings(model, self.exclude_prefixes)
         return {
             "embedded": written,
             "touched": touched,
@@ -100,6 +118,7 @@ class HostedIndexer:
     def forget_tenant(self, tenant: str) -> None:
         """Drop backoff state for a tenant that was unloaded or purged."""
         self._failed = {item: state for item, state in self._failed.items() if item[0] != tenant}
+        self._passes.pop(tenant, None)
 
     async def run_once(self) -> bool:
         """Visit every loaded tenant once; True when any tenant still has work pending."""
@@ -126,6 +145,7 @@ class HostedIndexer:
                 continue
             try:
                 await asyncio.wait_for(self._wake.wait(), self.poll_seconds)
+                await asyncio.sleep(self.NUDGE_DEBOUNCE_SECONDS)
             except asyncio.TimeoutError:
                 pass
 

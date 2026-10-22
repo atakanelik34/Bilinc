@@ -243,3 +243,56 @@ def test_rejected_memories_back_off_and_do_not_block_the_queue():
             await _drop(backend)
 
     _run(scenario())
+
+
+@needs_postgres
+def test_a_restored_older_version_is_embedded_again():
+    async def scenario():
+        import time
+
+        backend = await _backend()
+        encoder = HashingEncoder()
+        indexer = HostedIndexer(encoder, lambda: [])
+        try:
+            old = _entry("launch", "harbor launch in november")
+            old.updated_at = old.created_at = time.time() - 3600
+            await backend.save(old)
+            await indexer.index_backend(backend)
+            await backend.save(_entry("launch", "harbor launch moved to december"))
+            await indexer.index_backend(backend)
+            await backend.restore(old)  # a rollback brings back the older value and timestamp
+            assert (await indexer.index_backend(backend))["embedded"] == 1
+            query = encoder.encode(["query: november"])[0].tolist()
+            [(key, score)] = await backend.semantic_search(query, encoder.model_id, limit=1)
+            december = encoder.encode(["query: december"])[0].tolist()
+            [(_, stale)] = await backend.semantic_search(december, encoder.model_id, limit=1)
+            assert key == "launch" and score > stale
+        finally:
+            await _drop(backend)
+
+    _run(scenario())
+
+
+@needs_postgres
+def test_forget_and_a_concurrent_vector_write_do_not_deadlock():
+    async def scenario():
+        backend = await _backend()
+        encoder = HashingEncoder()
+        try:
+            for round_ in range(10):
+                await backend.save(_entry("k", f"text {round_}"))
+                await HostedIndexer(encoder, lambda: []).index_backend(backend)
+                [(key, value, updated_at, _)] = await backend.embedding_candidates("other-model", 10)
+                vectors = encoder.encode([f"passage: text {round_}"]).tolist()
+                results = await asyncio.gather(
+                    backend.write_embeddings(key, "other-model", "sha", vectors, updated_at),
+                    backend.delete("k"),
+                    return_exceptions=True,
+                )
+                assert not [r for r in results if isinstance(r, Exception)], results
+                assert await _vector_keys(backend, encoder.model_id) == set()
+                assert await _vector_keys(backend, "other-model") == set()
+        finally:
+            await _drop(backend)
+
+    _run(scenario())

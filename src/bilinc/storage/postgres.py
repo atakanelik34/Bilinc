@@ -261,7 +261,10 @@ class PostgresBackend(StorageBackend):
             """)
             # Persisted memory vectors (see bilinc.embeddings). The column has no
             # fixed dimension so the model can change; ``dim`` keeps rows of one
-            # model comparable. Only the hosted indexer writes it.
+            # model comparable. ``updated_at`` is the entry's ``updated_at`` the
+            # vectors were built from (like ``tsv_at``): any other value, newer
+            # or older (a rollback), means they must be checked again. Only the
+            # hosted indexer writes it.
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS memory_embeddings (
                     memory_key TEXT NOT NULL,
@@ -270,7 +273,7 @@ class PostgresBackend(StorageBackend):
                     text_sha TEXT NOT NULL,
                     dim INTEGER NOT NULL,
                     vector vector NOT NULL,
-                    updated_at DOUBLE PRECISION NOT NULL,
+                    updated_at DOUBLE PRECISION,
                     PRIMARY KEY (memory_key, model, chunk)
                 );
                 CREATE INDEX IF NOT EXISTS idx_memory_embeddings_model ON memory_embeddings(model);
@@ -1054,6 +1057,9 @@ class PostgresBackend(StorageBackend):
             await self.init()
         async with self.pool.acquire() as conn:
             async with conn.transaction():
+                # Lock the entry first, in the same order as the embedding writer, so a
+                # forget and a concurrent re-embed of the key cannot deadlock.
+                await conn.execute("SELECT 1 FROM bilinc_entries WHERE key = $1 FOR UPDATE", key)
                 await conn.execute("DELETE FROM bilinc_claims WHERE memory_key = $1", key)
                 # A forgotten memory must not keep entity links, as in the SQLite backend.
                 await conn.execute("DELETE FROM entity_mentions WHERE memory_key = $1", key)
@@ -1066,7 +1072,7 @@ class PostgresBackend(StorageBackend):
     async def embedding_candidates(
         self, model: str, limit: int, exclude_prefixes: Sequence[str] = ()
     ) -> List[Tuple[str, Any, Optional[float], Optional[str]]]:
-        """Entries the indexer must look at: never embedded for ``model``, or changed since.
+        """Entries the indexer must look at: never embedded for ``model``, or saved since (or restored to an older version).
 
         ``(key, decoded value, updated_at, indexed text_sha or None)``. An entry
         whose text did not change is confirmed with ``touch_embeddings``.
@@ -1077,7 +1083,7 @@ class PostgresBackend(StorageBackend):
             rows = await conn.fetch(
                 "SELECT e.key, e.value, e.updated_at, m.text_sha FROM bilinc_entries e "
                 "LEFT JOIN memory_embeddings m ON m.memory_key = e.key AND m.model = $1 AND m.chunk = 0 "
-                "WHERE (m.memory_key IS NULL OR e.updated_at > m.updated_at) "
+                "WHERE (m.memory_key IS NULL OR e.updated_at IS DISTINCT FROM m.updated_at) "
                 "AND NOT EXISTS (SELECT 1 FROM unnest($3::text[]) p WHERE starts_with(e.key, p)) "
                 "ORDER BY e.updated_at DESC NULLS LAST LIMIT $2",
                 model,
@@ -1093,10 +1099,9 @@ class PostgresBackend(StorageBackend):
         async with self.pool.acquire() as conn:
             result = await conn.execute(
                 "UPDATE memory_embeddings SET updated_at = $3 WHERE memory_key = $1 AND model = $2 "
-                "AND EXISTS (SELECT 1 FROM bilinc_entries WHERE key = $1 AND updated_at IS NOT DISTINCT FROM $4)",
+                "AND EXISTS (SELECT 1 FROM bilinc_entries WHERE key = $1 AND updated_at IS NOT DISTINCT FROM $3)",
                 key,
                 model,
-                max(time.time(), float(updated_at or 0)),
                 updated_at,
             )
         return int(result.split()[-1]) > 0
@@ -1111,8 +1116,6 @@ class PostgresBackend(StorageBackend):
         """
         if not self._initialized:
             await self.init()
-        # Never older than the entry, so the candidate query does not pick it again.
-        now = max(time.time(), float(updated_at or 0))
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 current = await conn.fetchval(
@@ -1127,7 +1130,7 @@ class PostgresBackend(StorageBackend):
                     "INSERT INTO memory_embeddings (memory_key, model, chunk, text_sha, dim, vector, updated_at) "
                     "VALUES ($1, $2, $3, $4, $5, $6::text::vector, $7)",
                     [
-                        (key, model, chunk, sha, len(vector), _vector_literal(vector), now)
+                        (key, model, chunk, sha, len(vector), _vector_literal(vector), updated_at)
                         for chunk, vector in enumerate(vectors)
                     ],
                 )

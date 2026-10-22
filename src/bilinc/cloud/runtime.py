@@ -36,6 +36,15 @@ logger = logging.getLogger(__name__)
 _METADATA_PASSTHROUGH = ("source", "session_id", "canonical", "priority", "ttl")
 
 
+def _log_indexer_exit(task: asyncio.Task) -> None:
+    """The embedding indexer runs until shutdown; say so if it stops for any other reason."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Embedding indexer stopped: %s", type(exc).__name__, exc_info=exc)
+
+
 def _serialized_project_mutation(
     method: Callable[..., Awaitable[Any]],
 ) -> Callable[..., Awaitable[Any]]:
@@ -396,6 +405,7 @@ class ProjectRuntimeManager:
         self._encoder_failed = False
         self._indexer: Any = None
         self._indexer_task: asyncio.Task | None = None
+        self._encoder_lock = asyncio.Lock()
 
     @staticmethod
     def normalize_project_id(project_id: str) -> str:
@@ -420,6 +430,10 @@ class ProjectRuntimeManager:
         if existing is not None:
             return existing
 
+        backend_mode = os.getenv("BILINC_STORAGE_BACKEND", "sqlite").lower()
+        # Built (once) before the project lock: loading a model takes seconds.
+        query_encoder = await self._semantic_encoder() if backend_mode == "postgres" else None
+
         async with self._lock:
             existing = self._planes.get(normalized)
             if existing is not None:
@@ -427,7 +441,6 @@ class ProjectRuntimeManager:
 
             db_path = self.db_path(normalized)
             db_path.parent.mkdir(parents=True, exist_ok=True)
-            backend_mode = os.getenv("BILINC_STORAGE_BACKEND", "sqlite").lower()
             if backend_mode == "postgres":
                 dsn = os.getenv("BILINC_POSTGRES_DSN")
                 if not dsn:
@@ -452,8 +465,7 @@ class ProjectRuntimeManager:
                 entries = await plane.backend.list_all()
                 plane.agm_engine.load_beliefs_from_entries(entries)
 
-            if backend_mode == "postgres":
-                plane.query_encoder = await self._semantic_encoder()
+            plane.query_encoder = query_encoder
 
             self._planes[normalized] = plane
             if self._indexer is not None:
@@ -464,6 +476,12 @@ class ProjectRuntimeManager:
         """The shared encoder, built on first use; None when semantic recall is off or failed to load."""
         if self._encoder is not None or self._encoder_failed:
             return self._encoder
+        async with self._encoder_lock:
+            if self._encoder is not None or self._encoder_failed:
+                return self._encoder
+            return await self._build_semantic_encoder()
+
+    async def _build_semantic_encoder(self) -> Any:
         from bilinc.embeddings.hosted import HostedIndexer, build_encoder
 
         try:
@@ -479,6 +497,7 @@ class ProjectRuntimeManager:
         self._encoder = encoder
         self._indexer = HostedIndexer(encoder, lambda: list(self._planes.values()))
         self._indexer_task = asyncio.create_task(self._indexer.run(), name="bilinc-embedding-indexer")
+        self._indexer_task.add_done_callback(_log_indexer_exit)
         return encoder
 
     async def _project_mutation_lock(self, project_id: str) -> asyncio.Lock:
