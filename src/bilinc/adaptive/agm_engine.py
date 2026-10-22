@@ -27,6 +27,8 @@ Darwiche & Pearl Iterated Revision Postulates:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 import logging
 from enum import Enum
@@ -466,10 +468,14 @@ class AGMEngine:
                 detail=f"Old belief removed (strategy={strategy.value})",
             ))
 
-            # Metadata
-            entry.metadata["superseded_by"] = existing.key
-            entry.metadata["supersedes"] = existing.key
-            entry.metadata["previous_value"] = repr(existing.value)[:200]
+            # Metadata. Only a fingerprint of the replaced value: the value itself
+            # stays in the audit trail, where a purge can remove it. A copy here
+            # would follow the key into every later write, event and snapshot.
+            for stale_field in ("superseded_by", "supersedes", "previous_value"):
+                entry.metadata.pop(stale_field, None)
+            entry.metadata["previous_value_sha256"] = hashlib.sha256(
+                json.dumps(existing.value, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
             entry.metadata["reason_for_revision"] = (
                 f"Strategy {strategy.value}: old={existing.importance:.2f}, new={entry.importance:.2f}"
             )
