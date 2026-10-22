@@ -231,3 +231,16 @@ async def test_a_memory_forgotten_or_edited_while_it_is_embedded_gets_no_stale_v
     assert daemon.index_once()["embedded"] == 1  # the edited memory, from its new text
     assert set(store.indexed_shas(conn, "test-hashing")) == {"edited"}
     await backend.close()
+
+
+
+def test_a_client_that_leaves_before_the_reply_does_not_break_the_daemon(tmp_path):
+    import socket as socket_module
+
+    with _RunningDaemon(tmp_path / "leave.sqlite") as running:
+        for _ in range(3):
+            conn = socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM)
+            conn.connect(str(running.socket))
+            conn.sendall(b'{"op": "encode_query", "text": "hello"}\n')
+            conn.close()  # gone before the reply
+        assert client.request({"op": "health"}, path=running.socket)["model"] == "test-hashing"
