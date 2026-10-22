@@ -51,6 +51,10 @@ CANONICAL_ERROR_CODES: dict[str, int] = {
     "snapshot_not_found": 404,
     "version_conflict": 409,
     "idempotency_conflict": 409,
+    "purge_blocked": 409,
+    "purge_disabled": 403,
+    "purge_unsupported": 501,
+    "secret_detected": 422,
     "state_changed_since_preview": 409,
     "rollback_confirmation_expired": 410,
     "rate_limited": 429,
@@ -61,7 +65,7 @@ CANONICAL_ERROR_CODES: dict[str, int] = {
 RETRYABLE_ERROR_CODES = frozenset({"rate_limited", "cloud_runtime_unavailable", "connection_failed"})
 #: Answered with 503, but retrying cannot help: the running service lacks the
 #: feature until it is upgraded.
-NON_RETRYABLE_ERROR_CODES = frozenset({"capability_unavailable"})
+NON_RETRYABLE_ERROR_CODES = frozenset({"capability_unavailable", "purge_unsupported"})
 
 
 class BilincError(RuntimeError):
@@ -146,6 +150,7 @@ _STATUS_ERRORS: dict[int, type[BilincCloudError]] = {
     404: BilincNotFoundError,
     409: BilincConflictError,
     410: BilincConfirmationExpiredError,
+    422: BilincValidationError,
     429: BilincRateLimitError,
     503: BilincRuntimeUnavailableError,
 }

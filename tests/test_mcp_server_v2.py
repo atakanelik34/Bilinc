@@ -535,3 +535,100 @@ class TestPhase8Tools:
         })
         assert imported["tool"] == "bilinc_import"
         assert imported["imported"] >= 1
+
+
+# ── Forget with purge (stdio) ────────────────────────────────
+
+class TestMCPForgetPurge:
+    @staticmethod
+    def _plane(tmp_path, name="purge.sqlite"):
+        async def build():
+            backend = SQLiteBackend(str(tmp_path / name))
+            await backend.init()
+            p = StatePlane(backend=backend, enable_verification=False, enable_audit=True)
+            await p.init()
+            p.init_agm()
+            p.init_knowledge_graph()
+            return p
+
+        return asyncio.run(build())
+
+    @staticmethod
+    def _audit_values(p: StatePlane, key: str) -> list:
+        rows = p.audit.conn.execute(
+            "SELECT before_value, after_value FROM audit_log WHERE key = ?", (key,)
+        ).fetchall()
+        return [value for row in rows for value in row if value is not None]
+
+    def test_purge_removes_the_value_from_history(self, tmp_path):
+        p = self._plane(tmp_path)
+        _call(_handle_commit_mem, p, {"key": "card", "value": "visa ending 4242 expires 09/29"})
+        assert any("4242" in str(v) for v in self._audit_values(p, "card"))
+
+        result = _call(_handle_forget, p, {"key": "card", "reason": "user asked", "purge": True})
+        assert result["removed"] is True and result["purged"]["audit_rows"] > 0
+        assert not any("4242" in str(v) for v in self._audit_values(p, "card"))
+        assert p.audit.verify_integrity()["valid"] is True
+        events = p.backend._get_conn().execute(
+            "SELECT payload_json FROM memory_events WHERE memory_key = ?", ("card",)
+        ).fetchall()
+        assert events and not any("4242" in str(row[0]) for row in events)
+
+    def test_purge_works_on_a_key_forgotten_earlier(self, tmp_path):
+        p = self._plane(tmp_path)
+        _call(_handle_commit_mem, p, {"key": "old", "value": "secret plan alpha"})
+        _call(_handle_forget, p, {"key": "old"})
+        assert any("alpha" in str(v) for v in self._audit_values(p, "old"))
+
+        result = _call(_handle_forget, p, {"key": "old", "purge": True})
+        assert result["removed"] is False and result["purged"]["audit_rows"] > 0
+        assert not any("alpha" in str(v) for v in self._audit_values(p, "old"))
+
+    def test_purge_of_an_unknown_key_changes_nothing(self, tmp_path):
+        p = self._plane(tmp_path)
+        assert _call(_handle_forget, p, {"key": "never", "purge": True})["error"] == "memory_not_found"
+
+    def test_forget_without_purge_keeps_history(self, tmp_path):
+        p = self._plane(tmp_path)
+        _call(_handle_commit_mem, p, {"key": "keep", "value": "reviewable value"})
+        result = _call(_handle_forget, p, {"key": "keep"})
+        assert "purged" not in result
+        assert any("reviewable" in str(v) for v in self._audit_values(p, "keep"))
+
+    def test_another_process_with_a_stale_copy_does_not_write_the_value_back(self, tmp_path):
+        a = self._plane(tmp_path)
+        _call(_handle_commit_mem, a, {"key": "card", "value": "visa ending 4242"})
+        b = self._plane(tmp_path)  # a second agent on the same database
+        b.agm_engine.load_beliefs_from_entries(asyncio.run(b.backend.list_all()))
+        assert b.agm_engine.belief_state.get_belief("card") is not None
+
+        _call(_handle_forget, a, {"key": "card", "purge": True})
+        _call(_handle_forget, b, {"key": "card"})  # b still holds the old belief
+        assert not any("4242" in str(v) for v in self._audit_values(a, "card"))
+        assert b.agm_engine.belief_state.get_belief("card") is None
+
+    def test_purge_clears_the_revision_log_and_graph_entities(self, tmp_path):
+        p = self._plane(tmp_path)
+        _call(_handle_commit_mem, p, {"key": "deal", "value": "Zorblaxquentin Corp signs with Vexmorrandil Ltd"})
+        _call(_handle_commit_mem, p, {"key": "deal", "value": "Zorblaxquentin Corp contract renewed"})
+        _call(_handle_forget, p, {"key": "deal", "purge": True})
+        snapshot = _call(_handle_snapshot, p, {"include_audit": True})
+        assert "Zorblaxquentin" not in json.dumps(snapshot)
+        graph = p.knowledge_graph
+        assert not any("zorblaxquentin" in str(node).lower() for node in [*graph.graph.nodes, *graph._nodes])
+
+    def test_a_purge_cut_short_can_be_finished(self, tmp_path):
+        p = self._plane(tmp_path)
+        _call(_handle_commit_mem, p, {"key": "note", "value": "draft alpha"})
+        _call(_handle_forget, p, {"key": "note"})
+        p.audit.purge_key("note")  # as if the process stopped right after the audit step
+        result = _call(_handle_forget, p, {"key": "note", "purge": True})
+        assert "error" not in result and result["purged"]["events"] > 0
+
+    def test_forgetting_a_memory_keeps_another_memory_it_mentions(self, tmp_path):
+        p = self._plane(tmp_path)
+        _call(_handle_commit_mem, p, {"key": "user_name", "value": "Ada Lovelace"})
+        _call(_handle_commit_mem, p, {"key": "profile", "value": "user_name: Ada, role founder"})
+        _call(_handle_forget, p, {"key": "profile"})
+        assert "user_name" in p.knowledge_graph._nodes
+        assert "profile" not in p.knowledge_graph._nodes

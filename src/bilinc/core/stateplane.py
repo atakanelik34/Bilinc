@@ -3355,8 +3355,13 @@ class StatePlane:
             existing_belief = agm.belief_state.get_belief(key) if agm else None
             self._sync_cached_state(key, None)
             if self.enable_audit:
-                before = existing or wm_entry or existing_belief
+                # With a backend, only its row is the stored state. A belief or working
+                # copy left in this process after another process forgot (or purged) the
+                # key must not write that value back into the audit trail.
+                before = existing if self.backend else (existing or wm_entry or existing_belief)
                 metadata = {"deleted": result}
+                if self.backend and existing is None and (wm_entry or existing_belief):
+                    metadata["stale_cache_cleared"] = True
                 if reason is not None:
                     metadata["reason"] = reason
                 self.audit.log(

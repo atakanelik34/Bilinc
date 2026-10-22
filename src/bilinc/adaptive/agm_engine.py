@@ -739,3 +739,23 @@ class AGMEngine:
         )
         self.operation_log.append(result)
         return result
+
+
+def redact_operation_log(engine, key: str) -> int:
+    """Drop in-memory revision records that carry ``key``'s values (used by purge); returns how many."""
+    log = getattr(engine, "operation_log", None)
+    if not log:
+        return 0
+
+    def mentions(result) -> bool:
+        return (
+            key in (result.affected_keys or [])
+            or key in (result.removed_keys or [])
+            or key in (result.new_beliefs or {})
+            or any(getattr(step, "belief_key", None) == key for step in result.explanation or [])
+        )
+
+    kept = [result for result in log if not mentions(result)]
+    removed = len(log) - len(kept)
+    log[:] = kept
+    return removed

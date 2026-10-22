@@ -119,6 +119,27 @@ def test_forget_requires_key_and_reason():
     assert set(schema["required"]) == {"key", "reason"}
 
 
+def test_cloud_mcp_forget_passes_purge_to_the_sdk(monkeypatch):
+    import bilinc.cloud_mcp as cloud_mcp
+
+    seen = {}
+
+    class FakeClient:
+        def forget(self, key, **kwargs):
+            seen.update(kwargs, key=key)
+            return {"success": True, "purged": {"audit_rows": 1, "events": 0, "snapshots": 0}}
+
+    monkeypatch.setattr(cloud_mcp, "create_client", lambda: FakeClient())
+    tool = _tools()["forget"]
+    assert tool.inputSchema["properties"]["purge"]["default"] is False
+    assert "purge" in (tool.description or "").lower()
+    asyncio.run(cloud_mcp.build_server().call_tool("forget", {"key": "k", "reason": "user asked", "purge": True}))
+    assert seen["key"] == "k" and seen["purge"] is True
+    seen.clear()
+    asyncio.run(cloud_mcp.build_server().call_tool("forget", {"key": "k", "reason": "stale"}))
+    assert seen["purge"] is False
+
+
 def test_rollback_requires_explicit_mode_and_reason():
     schema = _tools()["rollback"].inputSchema
     assert "mode" in schema["properties"]
@@ -274,6 +295,10 @@ CANONICAL_ERROR_STATUS = {
     "snapshot_not_found": 404,
     "version_conflict": 409,
     "idempotency_conflict": 409,
+    "purge_blocked": 409,
+    "purge_disabled": 403,
+    "purge_unsupported": 501,
+    "secret_detected": 422,
     "state_changed_since_preview": 409,
     "rollback_confirmation_expired": 410,
     "rate_limited": 429,
@@ -298,6 +323,7 @@ def test_canonical_error_codes_are_published_by_the_sdk():
         (404, "BilincNotFoundError"),
         (409, "BilincConflictError"),
         (410, "BilincConfirmationExpiredError"),
+        (422, "BilincValidationError"),
         (429, "BilincRateLimitError"),
         (503, "BilincRuntimeUnavailableError"),
     ],

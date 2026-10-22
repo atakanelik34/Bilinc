@@ -951,7 +951,7 @@ class SQLiteBackend(StorageBackend):
             conn.rollback()
             raise
 
-    async def compact_search_index(self) -> None:
+    async def compact_search_index(self) -> bool:
         """Merge full-text segments so deleted rows leave no terms behind.
 
         FTS5 keeps the words of a deleted row in its index blocks until the
@@ -968,9 +968,18 @@ class SQLiteBackend(StorageBackend):
         # checkpoint copies it back and truncates it. Best effort: a reader
         # in another process can keep the log from being truncated.
         try:
-            c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+            busy, _, _ = c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         except Exception:
-            pass
+            return False
+        return not busy
+
+    async def has_unpurged_memory_events(self, memory_key: str) -> bool:
+        """Whether any event for the key still carries its payload (a purge left unfinished)."""
+        row = self._get_conn().execute(
+            "SELECT 1 FROM memory_events WHERE memory_key = ? AND payload_json != ? LIMIT 1",
+            (memory_key, PURGED_EVENT_PAYLOAD),
+        ).fetchone()
+        return row is not None
 
     async def purge_memory_event_payloads(self, memory_key: str) -> int:
         """Replace the payload of every event for a key with a purge marker.
