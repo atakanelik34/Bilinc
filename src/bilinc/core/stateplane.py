@@ -1534,22 +1534,26 @@ class StatePlane:
         if not self.backend:
             return 0
         ready = self.working_memory.gate_to_episodic()
-        count = 0
-        if ready:
-            for e in ready:
-                await self.backend.save(e)
-                if self.enable_audit and self.audit:
-                    self.audit.log(OpType.CONSOLIDATE, e.key,
-                                   before_value={"type": "working"}, after_value=e.to_dict())
-                count += 1
+        consolidated: List[MemoryEntry] = []
+        for e in ready:
+            stored = await self.backend.load(e.key)
+            if stored is not None and stored.memory_type != MemoryType.WORKING:
+                # A long-term memory warmed into the buffer is a copy; its stored
+                # type stays as it is instead of being rewritten as episodic.
+                continue
+            await self.backend.save(e)
+            if self.enable_audit and self.audit:
+                self.audit.log(OpType.CONSOLIDATE, e.key,
+                               before_value={"type": "working"}, after_value=e.to_dict())
+            consolidated.append(e)
         await self.summarize_episodic_sessions()
-        if count:
+        if consolidated:
             await self._append_memory_event(
                 operation=EventOperation.CONSOLIDATE.value,
                 subject=f"consolidate:{int(time.time())}",
-                payload_json={"consolidated_count": count, "memory_keys": [e.key for e in ready]},
+                payload_json={"consolidated_count": len(consolidated), "memory_keys": [e.key for e in consolidated]},
             )
-        return count
+        return len(consolidated)
 
     async def apply_decay_pass(self, now: Optional[float] = None, prune: bool = True) -> Dict[str, int]:
         """
@@ -1933,9 +1937,11 @@ class StatePlane:
         if invalid_at is not None and invalid_at <= now:
             return False
 
+        # A TTL is turned into invalid_at when it is written, measured from that
+        # write; a TTL set on a later write must not count from the first one.
         ttl = _timestamp(entry.ttl)
         created_at = _timestamp(entry.created_at)
-        if ttl is not None and created_at is not None and created_at + ttl <= now:
+        if invalid_at is None and ttl is not None and created_at is not None and created_at + ttl <= now:
             return False
 
         return True

@@ -13,6 +13,7 @@ try:
 except ImportError:
     import sqlite3
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -386,6 +387,8 @@ class SQLiteBackend(StorageBackend):
                 :importance, :decay_rate, :current_strength, :conflict_id, :superseded_by)
             ON CONFLICT(key) DO UPDATE SET
                 memory_type=:memory_type, value=:value, metadata=:metadata, ccs_dimensions=:ccs,
+                source=:source, session_id=:session_id,
+                valid_at=:valid_at, invalid_at=:invalid_at, ttl=:ttl,
                 updated_at=:updated_at, last_accessed=:last_accessed,
                 access_count=:access_count,
                 is_verified=:is_verified, verification_score=:verification_score,
@@ -1286,16 +1289,31 @@ class SQLiteBackend(StorageBackend):
         except json.JSONDecodeError:
             return raw
 
+    @staticmethod
+    def _epoch(value: Any) -> Optional[float]:
+        """A stored timestamp as epoch seconds; some writers stored ISO-8601 text."""
+        if value is None or isinstance(value, (int, float)):
+            return value
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            pass
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+
     def _row_to_entry(self, row: sqlite3.Row) -> MemoryEntry:
+        epoch = self._epoch
         return MemoryEntry(
             id=row["id"], memory_type=MemoryType(row["memory_type"]),
             key=row["key"], value=self._decode_value(row["value"]),
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
             ccs_dimensions=json.loads(row["ccs_dimensions"]) if row["ccs_dimensions"] else {},
             source=row["source"] or "", session_id=row["session_id"] or "",
-            created_at=row["created_at"], updated_at=row["updated_at"],
-            last_accessed=row["last_accessed"], access_count=row["access_count"],
-            valid_at=row["valid_at"], invalid_at=row["invalid_at"], ttl=row["ttl"],
+            created_at=epoch(row["created_at"]) or 0.0, updated_at=epoch(row["updated_at"]) or 0.0,
+            last_accessed=epoch(row["last_accessed"]) or 0.0, access_count=row["access_count"],
+            valid_at=epoch(row["valid_at"]), invalid_at=epoch(row["invalid_at"]), ttl=row["ttl"],
             is_verified=bool(row["is_verified"]), verification_score=row["verification_score"],
             verification_method=row["verification_method"] or "",
             importance=row["importance"], decay_rate=row["decay_rate"],
