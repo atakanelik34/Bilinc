@@ -7,6 +7,7 @@ import base64
 import hashlib
 import inspect
 import json
+import math
 import logging
 import os
 import re
@@ -285,33 +286,45 @@ LIST_ORDERS = ("key", "newest", "oldest")
 
 def encode_order_cursor(order: str, updated_at: float | None, key: str) -> str:
     """A cursor for an update-time order: the last entry's (updated_at, key), bound to the order."""
-    payload = json.dumps({"o": order, "u": float(updated_at or 0.0), "k": key}, separators=(",", ":"))
+    # ensure_ascii=False: escaped non-ASCII keys would push the cursor past MAX_CURSOR_LENGTH.
+    payload = json.dumps(
+        {"o": order, "u": float(updated_at or 0.0), "k": key}, separators=(",", ":"), ensure_ascii=False
+    )
     return encode_cursor(payload)
+
+
+def _reject_constant(name: str) -> Any:
+    raise ValueError(f"non-finite number {name}")
 
 
 def decode_order_cursor(cursor: str, order: str) -> tuple[float, str]:
     """Decode a cursor issued for ``order``; one from another order is malformed."""
     try:
-        payload = json.loads(decode_cursor(cursor))
-    except ValueError as exc:
+        payload = json.loads(decode_cursor(cursor), parse_constant=_reject_constant)
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"o", "u", "k"}
+            or payload["o"] != order
+            or not isinstance(payload["k"], str)
+            or not payload["k"]
+            or isinstance(payload["u"], bool)
+            or not isinstance(payload["u"], (int, float))
+        ):
+            raise ValueError("invalid_cursor")
+        stamp = float(payload["u"])
+    except (ValueError, OverflowError, RecursionError) as exc:
         raise ValueError("invalid_cursor") from exc
-    if (
-        not isinstance(payload, dict)
-        or set(payload) != {"o", "u", "k"}
-        or payload["o"] != order
-        or not isinstance(payload["k"], str)
-        or not payload["k"]
-        or isinstance(payload["u"], bool)
-        or not isinstance(payload["u"], (int, float))
-    ):
+    if not math.isfinite(stamp):
         raise ValueError("invalid_cursor")
-    return float(payload["u"]), payload["k"]
+    return stamp, payload["k"]
 
 
 def _is_order_cursor_payload(key: str) -> bool:
+    if not key.startswith("{"):
+        return False
     try:
-        payload = json.loads(key)
-    except ValueError:
+        payload = json.loads(key, parse_constant=_reject_constant)
+    except (ValueError, RecursionError):
         return False
     return isinstance(payload, dict) and set(payload) == {"o", "u", "k"}
 
@@ -729,7 +742,9 @@ class ProjectRuntimeManager:
         ``order`` is ``"key"`` (default), ``"newest"`` (most recently updated
         first) or ``"oldest"``. Paging is keyset-based in every order, so a
         cursor stays valid while other writes land; a cursor is bound to the
-        order it was issued under.
+        order it was issued under. In an update-time order a memory updated
+        during a walk moves: under ``newest`` it is skipped for that walk,
+        under ``oldest`` it can appear twice. Key order has no such effect.
         ``total`` counts every entry matching the filters, not just this page.
 
         ``sources`` keeps only entries whose effective source -- the value
@@ -812,9 +827,11 @@ class ProjectRuntimeManager:
                 if not (has_more and page)
                 else encode_cursor(page[-1].key)
                 if order == "key"
-                else encode_order_cursor(order, page[-1].updated_at, page[-1].key)
+                else encode_order_cursor(order, getattr(page[-1], "list_stamp", page[-1].updated_at), page[-1].key)
             ),
             "order": order,
+            # Echoed so callers can tell an applied filter from one an older service dropped.
+            **({"sources": sources} if sources is not None else {}),
             "total": await backend.count_filtered(**filters),
             "values": values,
             "state_version": state_version(plane),

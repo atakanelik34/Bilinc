@@ -759,7 +759,26 @@ class CloudClient:
         if order is not None:
             payload["order"] = _require_choice(order, "order", LIST_ORDERS)
 
-        return self._read("/api/cloud/memory/list", payload)
+        result = self._read("/api/cloud/memory/list", payload)
+        # An older Bilinc Cloud ignores these fields and returns every memory in
+        # key order; never hand that back as the filtered or sorted page.
+        if isinstance(result, dict) and (
+            (order not in (None, "key") and result.get("order") != order)
+            or (
+                sources is not None
+                and (
+                    not isinstance(result.get("sources"), list)
+                    or set(result["sources"]) != set(payload["sources"])
+                )
+            )
+        ):
+            raise BilincCloudError(
+                "Bilinc Cloud did not apply the requested order or source filter; it may need an update.",
+                code="capability_unavailable",
+                status=503,
+                retryable=False,
+            )
+        return result
 
     def iter_memories(
         self,

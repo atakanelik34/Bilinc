@@ -569,7 +569,9 @@ def test_cli_history_says_not_stored_unless_the_newest_change_is_a_forget(cli, c
 
 
 def test_list_memories_sends_sources_and_order_only_when_given():
-    transport = RecordingTransport({"entries": [], "nextCursor": None, "total": 0})
+    transport = RecordingTransport(
+        {"entries": [], "nextCursor": None, "total": 0, "order": "newest", "sources": ["", "claude-code"]}
+    )
     client = _client(transport)
     client.list_memories(sources=["claude-code", ""], order="newest")
     client.list_memories()
@@ -597,3 +599,19 @@ def test_cli_list_order_and_sources_reach_the_client_and_the_hint(cli, capsys):
     _, kwargs = FakeClient.instances[0].calls[0]
     assert kwargs["order"] == "newest" and kwargs["sources"] == ["claude code", ""]
     assert "--source 'claude code' --source '' --order newest" in out
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "response"),
+    [
+        ({"order": "newest"}, {"entries": [], "nextCursor": None, "total": 0}),
+        ({"order": "newest"}, {"entries": [], "nextCursor": None, "total": 0, "order": "key"}),
+        ({"sources": ["claude"]}, {"entries": [], "nextCursor": None, "total": 0}),
+    ],
+)
+def test_list_memories_refuses_a_page_where_the_order_or_filter_was_not_applied(kwargs, response):
+    from bilinc.client import BilincCloudError
+
+    with pytest.raises(BilincCloudError) as raised:
+        _client(RecordingTransport(response)).list_memories(**kwargs)
+    assert raised.value.code == "capability_unavailable" and raised.value.retryable is False
