@@ -179,13 +179,19 @@ class KnowledgeGraph:
         if not memory_key:
             return False
         entities = self._memory_to_entities.pop(memory_key, set())
+        orphaned = []
         for entity in entities:
             linked = self._entity_to_memories.get(entity)
             if linked is not None:
                 linked.discard(memory_key)
                 if not linked:
                     self._entity_to_memories.pop(entity, None)
+                    orphaned.append(entity)
         removed_node = self.remove_entity(memory_key)  # rebuilds the indexes when it removes a node
+        # An entity named only by this memory came from its text: drop it with the memory.
+        for entity in orphaned:
+            if entity != memory_key:
+                removed_node = self.remove_entity(entity) or removed_node
         if entities and not removed_node:
             self._rebuild_normalized_entity_index()
             self._updated_at = time.time()

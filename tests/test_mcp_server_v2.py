@@ -541,9 +541,9 @@ class TestPhase8Tools:
 
 class TestMCPForgetPurge:
     @staticmethod
-    def _plane(tmp_path):
+    def _plane(tmp_path, name="purge.sqlite"):
         async def build():
-            backend = SQLiteBackend(str(tmp_path / "purge.sqlite"))
+            backend = SQLiteBackend(str(tmp_path / name))
             await backend.init()
             p = StatePlane(backend=backend, enable_verification=False, enable_audit=True)
             await p.init()
@@ -594,3 +594,33 @@ class TestMCPForgetPurge:
         result = _call(_handle_forget, p, {"key": "keep"})
         assert "purged" not in result
         assert any("reviewable" in str(v) for v in self._audit_values(p, "keep"))
+
+    def test_another_process_with_a_stale_copy_does_not_write_the_value_back(self, tmp_path):
+        a = self._plane(tmp_path)
+        _call(_handle_commit_mem, a, {"key": "card", "value": "visa ending 4242"})
+        b = self._plane(tmp_path)  # a second agent on the same database
+        b.agm_engine.load_beliefs_from_entries(asyncio.run(b.backend.list_all()))
+        assert b.agm_engine.belief_state.get_belief("card") is not None
+
+        _call(_handle_forget, a, {"key": "card", "purge": True})
+        _call(_handle_forget, b, {"key": "card"})  # b still holds the old belief
+        assert not any("4242" in str(v) for v in self._audit_values(a, "card"))
+        assert b.agm_engine.belief_state.get_belief("card") is None
+
+    def test_purge_clears_the_revision_log_and_graph_entities(self, tmp_path):
+        p = self._plane(tmp_path)
+        _call(_handle_commit_mem, p, {"key": "deal", "value": "Zorblaxquentin Corp signs with Vexmorrandil Ltd"})
+        _call(_handle_commit_mem, p, {"key": "deal", "value": "Zorblaxquentin Corp contract renewed"})
+        _call(_handle_forget, p, {"key": "deal", "purge": True})
+        snapshot = _call(_handle_snapshot, p, {"include_audit": True})
+        assert "Zorblaxquentin" not in json.dumps(snapshot)
+        graph = p.knowledge_graph
+        assert not any("zorblaxquentin" in str(node).lower() for node in [*graph.graph.nodes, *graph._nodes])
+
+    def test_a_purge_cut_short_can_be_finished(self, tmp_path):
+        p = self._plane(tmp_path)
+        _call(_handle_commit_mem, p, {"key": "note", "value": "draft alpha"})
+        _call(_handle_forget, p, {"key": "note"})
+        p.audit.purge_key("note")  # as if the process stopped right after the audit step
+        result = _call(_handle_forget, p, {"key": "note", "purge": True})
+        assert "error" not in result and result["purged"]["events"] > 0
