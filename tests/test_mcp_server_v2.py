@@ -535,3 +535,62 @@ class TestPhase8Tools:
         })
         assert imported["tool"] == "bilinc_import"
         assert imported["imported"] >= 1
+
+
+# ── Forget with purge (stdio) ────────────────────────────────
+
+class TestMCPForgetPurge:
+    @staticmethod
+    def _plane(tmp_path):
+        async def build():
+            backend = SQLiteBackend(str(tmp_path / "purge.sqlite"))
+            await backend.init()
+            p = StatePlane(backend=backend, enable_verification=False, enable_audit=True)
+            await p.init()
+            p.init_agm()
+            p.init_knowledge_graph()
+            return p
+
+        return asyncio.run(build())
+
+    @staticmethod
+    def _audit_values(p: StatePlane, key: str) -> list:
+        rows = p.audit.conn.execute(
+            "SELECT before_value, after_value FROM audit_log WHERE key = ?", (key,)
+        ).fetchall()
+        return [value for row in rows for value in row if value is not None]
+
+    def test_purge_removes_the_value_from_history(self, tmp_path):
+        p = self._plane(tmp_path)
+        _call(_handle_commit_mem, p, {"key": "card", "value": "visa ending 4242 expires 09/29"})
+        assert any("4242" in str(v) for v in self._audit_values(p, "card"))
+
+        result = _call(_handle_forget, p, {"key": "card", "reason": "user asked", "purge": True})
+        assert result["removed"] is True and result["purged"]["audit_rows"] > 0
+        assert not any("4242" in str(v) for v in self._audit_values(p, "card"))
+        assert p.audit.verify_integrity()["valid"] is True
+        events = p.backend._get_conn().execute(
+            "SELECT payload_json FROM memory_events WHERE memory_key = ?", ("card",)
+        ).fetchall()
+        assert events and not any("4242" in str(row[0]) for row in events)
+
+    def test_purge_works_on_a_key_forgotten_earlier(self, tmp_path):
+        p = self._plane(tmp_path)
+        _call(_handle_commit_mem, p, {"key": "old", "value": "secret plan alpha"})
+        _call(_handle_forget, p, {"key": "old"})
+        assert any("alpha" in str(v) for v in self._audit_values(p, "old"))
+
+        result = _call(_handle_forget, p, {"key": "old", "purge": True})
+        assert result["removed"] is False and result["purged"]["audit_rows"] > 0
+        assert not any("alpha" in str(v) for v in self._audit_values(p, "old"))
+
+    def test_purge_of_an_unknown_key_changes_nothing(self, tmp_path):
+        p = self._plane(tmp_path)
+        assert _call(_handle_forget, p, {"key": "never", "purge": True})["error"] == "memory_not_found"
+
+    def test_forget_without_purge_keeps_history(self, tmp_path):
+        p = self._plane(tmp_path)
+        _call(_handle_commit_mem, p, {"key": "keep", "value": "reviewable value"})
+        result = _call(_handle_forget, p, {"key": "keep"})
+        assert "purged" not in result
+        assert any("reviewable" in str(v) for v in self._audit_values(p, "keep"))

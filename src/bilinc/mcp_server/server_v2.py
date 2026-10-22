@@ -323,6 +323,11 @@ def _create_server_v2(
                         "key": {"type": "string", "description": "Memory key to delete"},
                         "reason": {"type": "string", "default": "manual",
                                    "description": "Why this memory is being forgotten"},
+                        "purge": {"type": "boolean", "default": False,
+                                  "description": "Also remove the key's stored values from the audit trail, "
+                                                 "the event history and the entity index (removal from storage "
+                                                 "and history; key names and value hashes remain). Works on a "
+                                                 "key forgotten earlier."},
                     },
                     "required": ["key"],
                 },
@@ -1295,24 +1300,54 @@ async def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
 async def _handle_forget(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     key = args["key"]
     reason = args.get("reason", "manual")
+    purge = bool(args.get("purge", False))
+    audit = getattr(plane, "audit", None) if getattr(plane, "enable_audit", False) else None
+
+    if purge and audit is not None and not (hasattr(audit, "purge_key") and hasattr(audit, "has_purgeable_rows")):
+        # Refuse before anything changes rather than report a purge the audit trail did not do.
+        return _result_text({"tool": "forget", "key": key, "error": "purge_unsupported"})
 
     agm = getattr(plane, "agm_engine", None)
     had_belief = bool(agm and agm.belief_state.get_belief(key))
     in_working_memory = hasattr(plane, "working_memory") and plane.working_memory.get(key) is not None
     stored = await plane.backend.load(key) if plane.backend else None
 
+    if purge and stored is None and not had_belief and not in_working_memory and not (
+        audit is not None and audit.has_purgeable_rows(key)
+    ):
+        return _result_text({"tool": "forget", "key": key, "error": "memory_not_found"})
+
     backend_removed = False
     if stored is not None or had_belief or in_working_memory:
         # One path for every caller: backend row, belief cache, graph, audit and event.
         backend_removed = await plane.forget(key, reason=reason)
 
-    return _result_text({
+    result = {
         "tool": "forget",
         "key": key,
         "reason": reason,
         "removed": backend_removed or had_belief or in_working_memory,
         "backend_removed": backend_removed,
-    })
+    }
+    if purge:
+        result["purged"] = await _purge_key_history(plane, audit, key, reason)
+    return _result_text(result)
+
+
+async def _purge_key_history(plane: StatePlane, audit, key: str, reason: str) -> Dict[str, int]:
+    """Remove one key's values from the audit trail, event ledger and entity index (as Bilinc Cloud does)."""
+    audit_rows = audit.purge_key(key, metadata={"reason": reason, "origin": "bilinc_stdio"}) if audit else 0
+    events = 0
+    purge_events = getattr(plane.backend, "purge_memory_event_payloads", None)
+    if purge_events is not None:
+        events = await purge_events(key)
+    delete_mentions = getattr(plane.backend, "delete_entity_mentions_for_memory_key", None)
+    if delete_mentions is not None:
+        await delete_mentions(key)
+    compact_index = getattr(plane.backend, "compact_search_index", None)
+    if compact_index is not None:
+        await compact_index()
+    return {"audit_rows": audit_rows, "events": events}
 
 
 async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:

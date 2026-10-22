@@ -51,6 +51,8 @@ CANONICAL_ERROR_CODES: dict[str, int] = {
     "snapshot_not_found": 404,
     "version_conflict": 409,
     "idempotency_conflict": 409,
+    "purge_blocked": 409,
+    "secret_detected": 422,
     "state_changed_since_preview": 409,
     "rollback_confirmation_expired": 410,
     "rate_limited": 429,
@@ -146,6 +148,7 @@ _STATUS_ERRORS: dict[int, type[BilincCloudError]] = {
     404: BilincNotFoundError,
     409: BilincConflictError,
     410: BilincConfirmationExpiredError,
+    422: BilincValidationError,
     429: BilincRateLimitError,
     503: BilincRuntimeUnavailableError,
 }
