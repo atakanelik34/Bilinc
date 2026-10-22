@@ -892,12 +892,12 @@ class ProjectRuntimeManager:
                 "state_version": state_version(plane),
             }
 
-        if plane.knowledge_graph:
-            plane.knowledge_graph.ingest_memory_entry(winning)
-
         if not await plane.backend.save(winning):
             raise ValueError("invalid_request")
         await plane._project_claims_for_entry(winning)
+        await plane._record_revision(
+            key, previous_state, winning, revision_strategy=conflict_strategy.value, origin="bilinc_cloud"
+        )
 
         next_state = winning.to_dict()
         if plane.enable_audit and plane.audit and next_state != previous_state:
@@ -1030,13 +1030,20 @@ class ProjectRuntimeManager:
         reason: str,
         snapshot_files: list[tuple[Path, dict[str, Any]]],
     ) -> dict[str, int]:
-        """Remove one key's values from the audit trail, snapshots and entity index."""
+        """Remove one key's values from the audit trail, event ledger, snapshots and entity index."""
         audit_rows = 0
         if plane.enable_audit and plane.audit:
             audit_rows = plane.audit.purge_key(key, metadata={"reason": reason, "origin": "bilinc_cloud"})
+        events = 0
+        purge_events = getattr(plane.backend, "purge_memory_event_payloads", None)
+        if purge_events is not None:
+            events = await purge_events(key)
         delete_mentions = getattr(plane.backend, "delete_entity_mentions_for_memory_key", None)
         if delete_mentions is not None:
             await delete_mentions(key)
+        compact_index = getattr(plane.backend, "compact_search_index", None)
+        if compact_index is not None:
+            await compact_index()
         snapshots = 0
         for path, payload in snapshot_files:
             entries = payload.get("snapshot", {}).get("entries")
@@ -1049,7 +1056,7 @@ class ProjectRuntimeManager:
             temporary.write_text(json.dumps(payload, sort_keys=True, default=str), encoding="utf-8")
             os.replace(temporary, path)
             snapshots += 1
-        return {"audit_rows": audit_rows, "snapshots": snapshots}
+        return {"audit_rows": audit_rows, "events": events, "snapshots": snapshots}
 
     @_serialized_project_mutation
     async def purge_project(self, project_id: str, *, dry_run: bool = False) -> dict[str, Any]:
@@ -1328,6 +1335,7 @@ class ProjectRuntimeManager:
             existing = await plane.backend.load(key)
             await plane.backend.delete(key)
             plane.working_memory.remove(key)
+            plane._sync_cached_state(key, None)
             if plane.enable_audit and plane.audit:
                 plane.audit.log(
                     OpType.DELETE,
@@ -1349,6 +1357,8 @@ class ProjectRuntimeManager:
             await plane._project_claims_for_entry(restored)
             await plane._project_entities_for_entry(restored)  # replaces the mentions itself
             plane.working_memory.remove(key)
+            # A rolled-back key must not revise against the belief it had before the rollback.
+            plane._sync_cached_state(key, restored)
 
             if plane.enable_audit and plane.audit:
                 plane.audit.log(

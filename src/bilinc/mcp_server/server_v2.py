@@ -1062,6 +1062,37 @@ def create_mcp_http_app(
 
 # ─── Handler Functions (sync, called from async handlers) ─────────
 
+def _scan_local_write(tool: str, key: str, value: Any, metadata: Any, labels: Dict[str, Any]):
+    """The hosted runtime's write check, applied locally.
+
+    Provider-shaped secrets (API keys, tokens, private keys) are refused and
+    credential fields are masked before anything is stored. Returns
+    ``(value, metadata, warnings, refusal)``; ``refusal`` is a tool result to
+    return instead of writing. ``BILINC_SECRET_SCAN=off`` turns it off.
+    """
+    from bilinc.security.secret_scan import scan_write, scanning_enabled
+
+    if not scanning_enabled():
+        return value, metadata, [], None
+    scan = scan_write(key=key, value=value, metadata=metadata, labels=labels)
+    if scan.rejection:
+        logger.warning(
+            "Refused a memory write that looks like it contains a secret: rule=%s field=%s",
+            scan.rejection.rule,
+            scan.rejection.field,
+        )
+        return value, metadata, [], _result_text({
+            "tool": tool,
+            "key": key,
+            "success": False,
+            "error": "secret_detected",
+            "rule": scan.rejection.rule,
+            "field": scan.rejection.field,
+        })
+    warnings = [{"code": "secret_redacted", "rule": item.rule, "field": item.field} for item in scan.redactions]
+    return scan.value, scan.metadata, warnings, None
+
+
 async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     try:
         key = InputValidator.validate_key(args["key"])
@@ -1085,6 +1116,12 @@ async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[Te
 
     if ttl is None and str(source).startswith("hermes_session"):
         ttl = DEFAULT_HERMES_SESSION_TTL_SECONDS
+
+    value, metadata, scan_warnings, refusal = _scan_local_write(
+        "commit_mem", key, value, metadata, {"source": source, "session_id": session_id}
+    )
+    if refusal is not None:
+        return refusal
 
     # Resource limit check
     if hasattr(plane, "working_memory") and memory_type == "working":
@@ -1132,6 +1169,7 @@ async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[Te
             "removed_keys": result.removed_keys,
             "metadata": metadata,
             "ttl": ttl,
+            **({"warnings": scan_warnings} if scan_warnings else {}),
         })
     else:
         # It's a MemoryEntry (fallback mode)
@@ -1153,6 +1191,7 @@ async def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
     exclude_session_summaries = bool(args.get("exclude_session_summaries", False))
 
     entries_by_key = {}
+    stored_by_key: Dict[str, Any] = {}
 
     # Start from persistent backend when available.
     if plane.backend:
@@ -1164,16 +1203,28 @@ async def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
         elif hasattr(plane.backend, "list_all"):
             backend_entries = await plane.backend.list_all()
 
+        stored_by_key = {entry.key: entry for entry in backend_entries}
         for entry in backend_entries:
             if entry.current_strength < min_strength:
                 continue
             entries_by_key[entry.key] = entry
 
-    # Overlay AGM beliefs, but only when they are actually newer than what
-    # the backend already returned — the in-process AGM cache is loaded once
-    # at server startup and can go stale relative to writes made by other
-    # agent processes (Claude/Codex/Hermes) sharing the same backend.
-    if hasattr(plane, "agm_engine") and plane.agm_engine:
+        # The backend is the shared truth: other agent processes write the same
+        # file, so the in-process belief cache is brought in line with what was
+        # read instead of being shown over it. A missing row only counts as
+        # forgotten when this read covered every row in scope.
+        agm = getattr(plane, "agm_engine", None)
+        if agm:
+            covers_scope = bool(key) or not memory_type
+            for belief in list(agm.belief_state.get_all_beliefs()):
+                if key and belief.key != key:
+                    continue
+                stored = stored_by_key.get(belief.key)
+                if stored is not None or covers_scope:
+                    plane._refresh_cached_belief(belief.key, stored)
+
+    # Without a backend the belief set is the store.
+    elif hasattr(plane, "agm_engine") and plane.agm_engine:
         beliefs = plane.agm_engine.belief_state.get_all_beliefs()
         for entry in beliefs:
             if key and entry.key != key:
@@ -1187,10 +1238,13 @@ async def _handle_recall(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
                 continue
             entries_by_key[entry.key] = entry
 
-    # Include working memory entries when present.
+    # Include working memory entries when present. A slot that copies a stored
+    # row (warmed at startup) does not replace the row itself.
     if hasattr(plane, "working_memory"):
         for slot in plane.working_memory.get_all():
             if key and slot.key != key:
+                continue
+            if slot.key in stored_by_key:
                 continue
             if memory_type and slot.memory_type.value != memory_type:
                 continue
@@ -1242,33 +1296,22 @@ async def _handle_forget(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
     key = args["key"]
     reason = args.get("reason", "manual")
 
-    removed = False
-    existing_backend = await plane.backend.load(key) if plane.backend else None
-    existing_belief = None
+    agm = getattr(plane, "agm_engine", None)
+    had_belief = bool(agm and agm.belief_state.get_belief(key))
+    in_working_memory = hasattr(plane, "working_memory") and plane.working_memory.get(key) is not None
+    stored = await plane.backend.load(key) if plane.backend else None
 
-    # Remove from AGM
-    if hasattr(plane, "agm_engine") and plane.agm_engine:
-        existing_belief = plane.agm_engine.belief_state.get_belief(key)
-        result = plane.agm_engine.contract(key)
-        removed = result.success
-    if hasattr(plane, "working_memory"):
-        plane.working_memory.remove(key)
-    if plane.backend:
-        removed = await plane.backend.delete(key) or removed
-    if plane.enable_audit and plane.audit and (existing_backend or existing_belief):
-        plane.audit.log(
-            OpType.FORGET,
-            key,
-            before_value=(existing_backend.to_dict() if existing_backend else existing_belief.to_dict()),
-            metadata={"reason": reason, "deleted": removed},
-        )
+    backend_removed = False
+    if stored is not None or had_belief or in_working_memory:
+        # One path for every caller: backend row, belief cache, graph, audit and event.
+        backend_removed = await plane.forget(key, reason=reason)
 
     return _result_text({
         "tool": "forget",
         "key": key,
         "reason": reason,
-        "removed": removed,
-        "backend_removed": removed,
+        "removed": backend_removed or had_belief or in_working_memory,
+        "backend_removed": backend_removed,
     })
 
 
@@ -1287,6 +1330,15 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
     importance = args.get("importance", 1.0)
     strategy_str = args.get("strategy", "entrenchment")
 
+    value, scanned_metadata, scan_warnings, refusal = _scan_local_write(
+        "revise", key, value, args.get("metadata"),
+        {name: args[name] for name in ("source", "session_id") if args.get(name)},
+    )
+    if refusal is not None:
+        return refusal
+    if scanned_metadata is not None:
+        args = {**args, "metadata": scanned_metadata}
+
     try:
         strategy = ConflictStrategy(strategy_str)
     except ValueError:
@@ -1299,6 +1351,9 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
         })
 
     previous_entry = await plane.backend.load(key) if plane.backend else None
+    if plane.backend:
+        # Revise against what is stored, not a belief another process has since replaced.
+        plane._refresh_cached_belief(key, previous_entry)
     previous_belief = plane.agm_engine.belief_state.get_belief(key)
     base_entry = previous_entry or previous_belief
 
@@ -1347,7 +1402,8 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
         result.new_beliefs[key] = entry
         winning_entry = entry
 
-    if result.success and winning_entry and hasattr(plane, "knowledge_graph") and plane.knowledge_graph:
+    if result.success and winning_entry and not plane.backend and getattr(plane, "knowledge_graph", None):
+        plane.knowledge_graph.forget_memory(key)
         plane.knowledge_graph.ingest_memory_entry(winning_entry)
 
     if plane.backend and result.success and winning_entry:
@@ -1364,6 +1420,12 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
             })
         if hasattr(plane, "_project_claims_for_entry"):
             await plane._project_claims_for_entry(winning_entry)
+        await plane._record_revision(
+            key,
+            previous_entry.to_dict() if previous_entry else None,
+            winning_entry,
+            revision_strategy=strategy.value,
+        )
         if plane.enable_audit and plane.audit:
             previous_state = previous_entry.to_dict() if previous_entry else None
             next_state = winning_entry.to_dict()
@@ -1389,6 +1451,7 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
         "explanation": result.explanation_text,
         "affected_keys": result.affected_keys,
         "removed_keys": result.removed_keys,
+        **({"warnings": scan_warnings} if scan_warnings else {}),
     })
 
 
@@ -1455,35 +1518,30 @@ async def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List
 
 async def _handle_verify(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     key = args["key"]
+    agm = plane.agm_engine if hasattr(plane, "agm_engine") and plane.agm_engine else None
 
-    if hasattr(plane, "agm_engine") and plane.agm_engine:
-        entry = plane.agm_engine.belief_state.get_belief(key)
-        if entry is not None:
-            return _result_text({
-                "tool": "verify",
-                "key": key,
-                "exists": True,
-                "is_verified": entry.is_verified,
-                "verification_score": entry.verification_score,
-                "verification_method": entry.verification_method,
-                "entrenchment": plane.agm_engine.get_entrenchment(key),
-                "strength": entry.current_strength,
-            })
+    def _payload(entry):
+        return _result_text({
+            "tool": "verify",
+            "key": key,
+            "exists": True,
+            "is_verified": entry.is_verified,
+            "verification_score": entry.verification_score,
+            "verification_method": entry.verification_method,
+            "entrenchment": agm.get_entrenchment(key) if agm else None,
+            "strength": entry.current_strength,
+        })
 
     if plane.backend:
+        # The stored row is the truth; another process may have changed or forgotten it.
         entry = await plane.backend.load(key)
+        plane._refresh_cached_belief(key, entry)
         if entry is not None:
-            return _result_text({
-                "tool": "verify",
-                "key": key,
-                "exists": True,
-                "is_verified": entry.is_verified,
-                "verification_score": entry.verification_score,
-                "verification_method": entry.verification_method,
-                "entrenchment": plane.agm_engine.get_entrenchment(key) if hasattr(plane, "agm_engine") and plane.agm_engine else None,
-                "strength": entry.current_strength,
-            })
-
+            return _payload(entry)
+    elif agm:
+        entry = agm.belief_state.get_belief(key)
+        if entry is not None:
+            return _payload(entry)
 
     return _result_text({
         "tool": "verify",
@@ -2165,6 +2223,13 @@ async def _handle_bilinc_import(plane: StatePlane, args: Dict[str, Any]) -> List
                     metadata = json.loads(metadata)
                 except Exception:
                     metadata = {}
+            value, metadata, _, refusal = _scan_local_write(
+                "bilinc_import", key, value, metadata if isinstance(metadata, dict) else {}, {}
+            )
+            if refusal is not None:
+                failed += 1
+                errors.append({"index": idx, "error": "secret_detected"})
+                continue
             await plane.commit_with_agm_async(
                 key=key,
                 value=value,

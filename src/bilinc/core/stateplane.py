@@ -1534,22 +1534,26 @@ class StatePlane:
         if not self.backend:
             return 0
         ready = self.working_memory.gate_to_episodic()
-        count = 0
-        if ready:
-            for e in ready:
-                await self.backend.save(e)
-                if self.enable_audit and self.audit:
-                    self.audit.log(OpType.CONSOLIDATE, e.key,
-                                   before_value={"type": "working"}, after_value=e.to_dict())
-                count += 1
+        consolidated: List[MemoryEntry] = []
+        for e in ready:
+            stored = await self.backend.load(e.key)
+            if stored is not None and stored.memory_type != MemoryType.WORKING:
+                # A long-term memory warmed into the buffer is a copy; its stored
+                # type stays as it is instead of being rewritten as episodic.
+                continue
+            await self.backend.save(e)
+            if self.enable_audit and self.audit:
+                self.audit.log(OpType.CONSOLIDATE, e.key,
+                               before_value={"type": "working"}, after_value=e.to_dict())
+            consolidated.append(e)
         await self.summarize_episodic_sessions()
-        if count:
+        if consolidated:
             await self._append_memory_event(
                 operation=EventOperation.CONSOLIDATE.value,
                 subject=f"consolidate:{int(time.time())}",
-                payload_json={"consolidated_count": count, "memory_keys": [e.key for e in ready]},
+                payload_json={"consolidated_count": len(consolidated), "memory_keys": [e.key for e in consolidated]},
             )
-        return count
+        return len(consolidated)
 
     async def apply_decay_pass(self, now: Optional[float] = None, prune: bool = True) -> Dict[str, int]:
         """
@@ -1933,9 +1937,11 @@ class StatePlane:
         if invalid_at is not None and invalid_at <= now:
             return False
 
+        # A TTL is turned into invalid_at when it is written, measured from that
+        # write; a TTL set on a later write must not count from the first one.
         ttl = _timestamp(entry.ttl)
         created_at = _timestamp(entry.created_at)
-        if ttl is not None and created_at is not None and created_at + ttl <= now:
+        if invalid_at is None and ttl is not None and created_at is not None and created_at + ttl <= now:
             return False
 
         return True
@@ -3136,7 +3142,67 @@ class StatePlane:
         import asyncio
         return asyncio.run(self.forget(key))
 
-    async def forget(self, key: str) -> bool:
+    def _sync_cached_state(self, key: str, entry: Optional[MemoryEntry]) -> None:
+        """Bring the in-process belief set and graph in line with what the backend now holds.
+
+        ``entry`` is the stored state after a change, or None once the key is
+        gone. A forgotten belief left in the AGM cache would make the next
+        write to the same key count as a revision of the forgotten value.
+        """
+        agm = getattr(self, "agm_engine", None)
+        if agm:
+            if entry is None:
+                agm.contract(key)
+            else:
+                agm.belief_state.add_belief(entry)
+                agm.set_entrenchment(key, float(entry.importance))
+        graph = getattr(self, "knowledge_graph", None)
+        if graph is not None:
+            graph.forget_memory(key)
+            if entry is not None:
+                graph.ingest_memory_entry(entry)
+
+    async def _record_revision(
+        self,
+        key: str,
+        previous_state: Optional[Dict[str, Any]],
+        entry: MemoryEntry,
+        **payload: Any,
+    ) -> None:
+        """Entity links, graph and ledger entry for a revision saved outside commit_with_agm_async."""
+        await self._project_entities_for_entry(entry)
+        graph = getattr(self, "knowledge_graph", None)
+        if graph is not None:
+            graph.forget_memory(key)
+            graph.ingest_memory_entry(entry)
+        await self._append_memory_event(
+            operation=EventOperation.REVISE.value if previous_state else EventOperation.COMMIT.value,
+            subject=key,
+            memory_key=key,
+            memory_type=entry.memory_type.value if hasattr(entry.memory_type, "value") else str(entry.memory_type),
+            before_value=previous_state,
+            after_value=entry.to_dict(),
+            payload_json={"metadata": entry.metadata, "source": entry.source, "session_id": entry.session_id, **payload},
+        )
+
+    def _refresh_cached_belief(self, key: str, stored: Optional[MemoryEntry]) -> None:
+        """Bring an already cached belief in line with the stored row read just now.
+
+        Other processes write the same file, so a belief cached at startup can
+        be older than the row, or name a key that was forgotten elsewhere. Keys
+        without a cached belief are left alone: startup deliberately loads only
+        some rows as beliefs.
+        """
+        agm = getattr(self, "agm_engine", None)
+        belief = agm.belief_state.get_belief(key) if agm else None
+        if belief is None:
+            return
+        if stored is None:
+            self._sync_cached_state(key, None)
+        elif belief.value != stored.value or belief.updated_at != stored.updated_at:
+            self._sync_cached_state(key, stored)
+
+    async def forget(self, key: str, reason: Optional[str] = None) -> bool:
         start_time = time.perf_counter()
         try:
             wm_entry = self.working_memory.get(key)
@@ -3146,12 +3212,19 @@ class StatePlane:
             if self.backend:
                 existing = await self.backend.load(key)
                 result = await self.backend.delete(key)
+            agm = getattr(self, "agm_engine", None)
+            existing_belief = agm.belief_state.get_belief(key) if agm else None
+            self._sync_cached_state(key, None)
             if self.enable_audit:
+                before = existing or wm_entry or existing_belief
+                metadata = {"deleted": result}
+                if reason is not None:
+                    metadata["reason"] = reason
                 self.audit.log(
                     OpType.FORGET,
                     key,
-                    before_value=existing.to_dict() if existing else (wm_entry.to_dict() if wm_entry else None),
-                    metadata={"deleted": result},
+                    before_value=before.to_dict() if before else None,
+                    metadata=metadata,
                 )
             await self._append_memory_event(
                 operation=EventOperation.FORGET.value,

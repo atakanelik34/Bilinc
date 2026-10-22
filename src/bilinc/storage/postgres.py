@@ -1010,8 +1010,22 @@ class PostgresBackend(StorageBackend):
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute("DELETE FROM bilinc_claims WHERE memory_key = $1", key)
+                # A forgotten memory must not keep entity links, as in the SQLite backend.
+                await conn.execute("DELETE FROM entity_mentions WHERE memory_key = $1", key)
                 result = await conn.execute("DELETE FROM bilinc_entries WHERE key = $1", key)
             return result == "DELETE 1"
+
+    async def purge_memory_event_payloads(self, memory_key: str) -> int:
+        """Replace the payload of every event for a key with a purge marker (see the SQLite backend)."""
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE memory_events SET payload_json = $2::jsonb WHERE memory_key = $1 AND payload_json <> $2::jsonb",
+                memory_key,
+                json.dumps({"purged": True}),
+            )
+        return int(result.split()[-1])
 
     async def delete_claims_for_memory_key(self, memory_key: str) -> int:
         if not self._initialized:

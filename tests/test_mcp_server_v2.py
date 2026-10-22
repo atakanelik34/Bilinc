@@ -14,6 +14,7 @@ Covering:
 """
 
 import asyncio
+import hashlib
 import json
 import tempfile
 import pytest
@@ -456,7 +457,9 @@ class TestPhase8Tools:
         assert entry["metadata"]["custom"] == "kept"
         assert entry["metadata"]["canonical"] is True
         assert entry["metadata"]["priority"] == 0.7
-        assert entry["metadata"]["previous_value"] == "'before'"
+        # Only a fingerprint of the replaced value is kept; the value stays in the audit trail.
+        assert "previous_value" not in entry["metadata"]
+        assert entry["metadata"]["previous_value_sha256"] == hashlib.sha256(b'"before"').hexdigest()
 
     def test_event_segment_retrieve_keeps_revised_segmented_key(self, phase8_plane: StatePlane):
         _call(_handle_commit_mem, phase8_plane, {

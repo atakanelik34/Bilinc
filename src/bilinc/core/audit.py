@@ -135,6 +135,8 @@ class AuditTrail:
         """Initialize audit trail database."""
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
+        # Purged audit values must not stay behind in freed page space.
+        self.conn.execute("PRAGMA secure_delete=ON")
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

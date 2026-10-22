@@ -142,7 +142,8 @@ async def test_decay_pass_handles_text_updated_at_without_last_accessed(tmp_path
     entry.current_strength = 1.0
     await backend.restore(entry)
     raw = await backend.load("import:text-ts")
-    assert isinstance(raw.updated_at, str)
+    # Stored as ISO text by the importer; reads normalize it to epoch seconds.
+    assert raw.updated_at == entry_epoch("2026-05-19T09:00:00+00:00")
 
     now = entry_epoch("2026-10-16T00:00:00+00:00")
     report = await plane.apply_decay_pass(now=now, prune=False)
