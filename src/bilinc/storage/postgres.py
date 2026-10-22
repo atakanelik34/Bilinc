@@ -341,7 +341,10 @@ class PostgresBackend(StorageBackend):
                         time.time(),
                     )
             finally:
-                await conn.execute(lock.format("pg_advisory_unlock"))
+                try:
+                    await conn.execute(lock.format("pg_advisory_unlock"))
+                except Exception:
+                    pass  # the pool's reset query releases it; keep the first error
             if self.schema:
                 # Fail closed: every table must resolve inside the tenant schema,
                 # so no query can fall through to a shared table in public.
