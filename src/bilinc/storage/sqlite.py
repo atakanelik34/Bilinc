@@ -1156,17 +1156,30 @@ class SQLiteBackend(StorageBackend):
         rows = self._get_conn().execute("SELECT memory_type, COUNT(*) as cnt FROM memories GROUP BY memory_type")
         return {r["memory_type"]: r["cnt"] for r in rows}
     
+    def _has_fts_v2(self) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (FTS_V2_TABLE,)
+        ).fetchone()
+        return row is not None
+
     def fts_rebuild(self):
-        """Rebuild the full-text index from the memories table. Call during consolidation."""
+        """Rebuild the full-text indexes from the memories table. Call during consolidation.
+
+        Rebuilds the Turkish-aware index when the database has it, and the
+        legacy ``mem_fts`` index that older processes and schema-v1 databases use.
+        """
         c = self._conn
         try:
             c.commit()
             c.execute("BEGIN IMMEDIATE")
-            c.execute(f"DELETE FROM {FTS_V2_TABLE}")
-            c.execute(
-                f"INSERT INTO {FTS_V2_TABLE}(rowid, key, body) "
-                f"SELECT rowid, {FTS_V2_KEY_SQL('memories.key')}, {FTS_V2_TEXT_SQL('memories.value')} FROM memories"
-            )
+            if self._has_fts_v2():
+                c.execute(f"DELETE FROM {FTS_V2_TABLE}")
+                c.execute(
+                    f"INSERT INTO {FTS_V2_TABLE}(rowid, key, body) "
+                    f"SELECT rowid, {FTS_V2_KEY_SQL('memories.key')}, {FTS_V2_TEXT_SQL('memories.value')} FROM memories"
+                )
+            if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mem_fts'").fetchone():
+                c.execute("INSERT INTO mem_fts(mem_fts) VALUES('rebuild')")
             c.commit()
             return True
         except Exception:
@@ -1174,10 +1187,21 @@ class SQLiteBackend(StorageBackend):
             return False
 
     def fts_search(self, query: str, limit: int = 10):
-        """Direct full-text search. Returns (rowid, key, rank) tuples."""
+        """Direct full-text search. Returns (rowid, key, rank) tuples.
+
+        Uses the Turkish-aware index when the database has it, otherwise the
+        legacy index, as ``HybridSearch.keyword_search`` does.
+        """
         from bilinc.core.text_fold import search_terms
 
         try:
+            if not self._has_fts_v2():
+                fts_query = " OR ".join(query.split())
+                return self._conn.execute("""
+                    SELECT rowid, key, rank FROM mem_fts
+                    WHERE mem_fts MATCH ?
+                    ORDER BY rank LIMIT ?
+                """, (fts_query, limit)).fetchall()
             fts_query = " OR ".join(f'"{term}"' for term in dict.fromkeys(search_terms(query)))
             if not fts_query:
                 return []

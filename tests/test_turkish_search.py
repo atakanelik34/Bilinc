@@ -230,3 +230,27 @@ def test_explicit_health_reads_always_refresh_gauges(monkeypatch):
     _health_payload(plane)
     _health_payload(plane)
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_rebuild_and_direct_search_fall_back_to_the_legacy_index_on_schema_v1(tmp_path):
+    backend = await _backend(tmp_path / "v1.sqlite")
+    await backend.save(MemoryEntry(key="plain", value="harbor schedule"))
+    for name in ("insert", "update", "delete"):
+        backend._conn.execute(f"DROP TRIGGER {FTS_V2_TABLE}_{name}")
+    backend._conn.execute(f"DROP TABLE {FTS_V2_TABLE}")
+    backend._conn.commit()
+
+    assert backend.fts_rebuild() is True
+    assert [row[1] for row in backend.fts_search("harbor")] == ["plain"]
+    await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_rebuild_keeps_both_indexes_and_direct_search_folds(tmp_path):
+    backend = await _backend(tmp_path / "v2.sqlite")
+    await backend.save(MemoryEntry(key="tr", value="İstanbul başvurusu"))
+    assert backend.fts_rebuild() is True
+    assert [row[1] for row in backend.fts_search("ISTANBUL")] == ["tr"]
+    assert backend._conn.execute("SELECT count(*) FROM mem_fts").fetchone()[0] == 1
+    await backend.close()
