@@ -1,11 +1,10 @@
 """Turkish-aware search: the shared fold, the SQLite v2 full-text index and local recall."""
 
 import json
-import sqlite3
 
 import pytest
 
-from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core.models import MemoryEntry
 from bilinc.core.stateplane import StatePlane
 from bilinc.core.text_fold import fold_text, has_turkish_letters, search_terms
 from bilinc.core.vector_search import HybridSearch, VectorStore
@@ -168,3 +167,19 @@ def test_health_gauges_refresh_at_most_once_per_interval(monkeypatch):
     check.update_gauge_on_metrics("m3")  # 31 s after the first: refreshed
 
     assert calls == ["m1", "m3"]
+
+
+def test_fold_cache_keeps_one_entry_per_memory_and_is_bounded_by_characters(monkeypatch):
+    plane = StatePlane()
+    monkeypatch.setattr(StatePlane, "LEXICAL_SURFACE_CACHE_MAX_CHARS", 60)
+    note = MemoryEntry(key="note", value="eski değer")
+    assert plane._lexical_surface(note)[0] == "note eski deger"
+    note.value = "yeni değer"
+    assert plane._lexical_surface(note)[0] == "note yeni deger"  # an edit replaces the entry
+    assert list(plane._lexical_surface_cache) == ["note"]
+
+    for index in range(5):
+        plane._lexical_surface(MemoryEntry(key=f"k{index}", value="x" * 20))
+    assert plane._lexical_surface_cache_chars <= 60
+    assert "note" not in plane._lexical_surface_cache  # least recently used goes first
+    assert "k4" in plane._lexical_surface_cache

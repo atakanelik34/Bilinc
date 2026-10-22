@@ -21,6 +21,7 @@ import os
 import re
 import json
 import time
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.event_ledger import EventOperation
@@ -280,8 +281,9 @@ class StatePlane:
         self.verifier = StateVerifier() if enable_verification else None
         self.audit = self._build_audit_trail() if enable_audit else None
         self._ops_count = 0
-        # Folded lexical surface per memory text; keyed by the text itself, so an edit is a new entry.
-        self._lexical_surface_cache: Dict[str, Tuple[str, frozenset]] = {}
+        # Folded lexical surface per memory key: (fingerprint, folded text, tokens). See _lexical_surface.
+        self._lexical_surface_cache: "OrderedDict[str, Tuple[Tuple[int, int], str, frozenset]]" = OrderedDict()
+        self._lexical_surface_cache_chars = 0
 
         # Observability (Phase 4)
         self.metrics = MetricsCollector()
@@ -1973,27 +1975,36 @@ class StatePlane:
             return normalized[:-1]
         return normalized
 
-    LEXICAL_SURFACE_CACHE_MAX = 20000
+    # Upper bound on folded characters kept across all cached memories.
+    LEXICAL_SURFACE_CACHE_MAX_CHARS = 32_000_000
 
     def _lexical_surface(self, entry: MemoryEntry) -> Tuple[str, frozenset]:
         """The folded surface text of a memory and its normalized tokens, cached.
 
         Recall scores every candidate on every pass, and folding is the costly
-        step. The cache key is the unfolded surface text, so a changed memory
-        never reads a stale fold.
+        step. There is one entry per memory key, checked against a fingerprint
+        of the unfolded text, so an edited memory replaces its entry instead of
+        reading a stale fold. The cache is bounded by folded characters and
+        evicts least recently used memories first.
         """
         surface = self._retrieval_surface_text(entry)
-        cached = self._lexical_surface_cache.get(surface)
-        if cached is None:
-            folded = fold_text(surface)
-            cached = (
-                folded,
-                frozenset(self._normalize_lexical_token(token) for token in folded_terms(folded) if token),
-            )
-            if len(self._lexical_surface_cache) >= self.LEXICAL_SURFACE_CACHE_MAX:
-                self._lexical_surface_cache.clear()
-            self._lexical_surface_cache[surface] = cached
-        return cached
+        fingerprint = (len(surface), hash(surface))
+        cache = self._lexical_surface_cache
+        cached = cache.get(entry.key)
+        if cached is not None and cached[0] == fingerprint:
+            cache.move_to_end(entry.key)
+            return cached[1], cached[2]
+        folded = fold_text(surface)
+        tokens = frozenset(self._normalize_lexical_token(token) for token in folded_terms(folded) if token)
+        if cached is not None:
+            self._lexical_surface_cache_chars -= len(cached[1])
+        cache[entry.key] = (fingerprint, folded, tokens)
+        cache.move_to_end(entry.key)
+        self._lexical_surface_cache_chars += len(folded)
+        while self._lexical_surface_cache_chars > self.LEXICAL_SURFACE_CACHE_MAX_CHARS and len(cache) > 1:
+            _, (_, evicted, _) = cache.popitem(last=False)
+            self._lexical_surface_cache_chars -= len(evicted)
+        return folded, tokens
 
     def _normalized_lexical_tokens(self, text: str) -> set[str]:
         return {
