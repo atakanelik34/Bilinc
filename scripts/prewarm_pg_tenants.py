@@ -1,10 +1,11 @@
 """Pre-warm every hosted tenant schema after a runtime upgrade.
 
 Schema v2 adds the full-text ``tsv`` column and fills it the first time a
-tenant loads. On a large tenant that first load can take seconds, and if it is
-a metered write the receipt flow can time out. Run this once after switching
-the runtime and before reopening traffic: it initialises each ``bilinc_p_*``
-schema in turn and logs how long each one took.
+tenant loads; schema v3 rebuilds it once from folded text. On a large tenant
+that first load can take seconds, and if it is a metered write the receipt
+flow can time out. Run this once after switching the runtime and before
+reopening traffic: it initialises each ``bilinc_p_*`` schema in turn and logs
+how long each one took.
 
 Usage:
     BILINC_POSTGRES_DSN=... python scripts/prewarm_pg_tenants.py [--dry-run]
@@ -39,6 +40,10 @@ async def rows_to_fill(conn, schema: str) -> int:
         schema,
     )
     if has_column:
+        version = await conn.fetchval(f"SELECT max(version) FROM {quoted(schema)}.schema_version")
+        if version is not None and version < 3:
+            # Schema v3 rebuilds every full-text vector from folded text.
+            return int(await conn.fetchval(f"SELECT COUNT(*) FROM {quoted(schema)}.bilinc_entries"))
         return int(
             await conn.fetchval(
                 f"SELECT COUNT(*) FROM {quoted(schema)}.bilinc_entries "

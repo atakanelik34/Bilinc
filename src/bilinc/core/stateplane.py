@@ -2388,9 +2388,8 @@ class StatePlane:
     def _pg_fts_query_text(self, query: str) -> str:
         """Query terms for Postgres full-text ranking, in original case.
 
-        Postgres lowercases query and document with the same rules, so terms are
-        not lowercased here (Python's ``"İ".lower()`` is two code points that
-        Postgres never produces). ``ts_rank`` has no IDF, so stopwords would
+        ``fts_or_query`` folds them the same way as the indexed text, so they
+        are not lowercased here. ``ts_rank`` has no IDF, so stopwords would
         outweigh content words; they are dropped unless nothing else is left.
         """
         terms = list(dict.fromkeys(re.findall(r"[^\W_]+", query or "", flags=re.UNICODE)))

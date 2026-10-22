@@ -27,6 +27,7 @@ try:
     from pgvector.asyncpg import register_vector
 except ImportError:
     register_vector = None
+from bilinc.core.text_fold import fold_text
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.event_ledger import MemoryEvent, create_memory_event, event_from_dict
 from bilinc.observability.health import _redact_dsn
@@ -70,7 +71,11 @@ def _fts_strings(value: Any) -> Iterable[str]:
 
 
 def fts_document(key: str, value: Any, metadata: Optional[Dict[str, Any]]) -> str:
-    """Plain text that the ``tsv`` column indexes: key, value and allowlisted metadata."""
+    """Plain text that the ``tsv`` column indexes: key, value and allowlisted metadata.
+
+    Folded like every recall path (``bilinc.core.text_fold``): case, Turkish
+    I variants and diacritics are ignored, so ``girisimci`` finds ``Girişimci``.
+    """
     parts = [str(key or "")]
     parts.extend(_fts_strings(value))
     if isinstance(metadata, dict):
@@ -78,12 +83,12 @@ def fts_document(key: str, value: Any, metadata: Optional[Dict[str, Any]]) -> st
             item = metadata.get(field)
             if item is not None and not isinstance(item, (dict, list, tuple, set)):
                 parts.append(str(item))
-    return " ".join(parts)[:FTS_DOCUMENT_MAX_CHARS]
+    return fold_text(" ".join(parts)[:FTS_DOCUMENT_MAX_CHARS])
 
 
 def fts_or_query(query: str) -> str:
-    """OR every distinct term, like the local FTS5 path; terms carry no tsquery syntax."""
-    terms = list(dict.fromkeys(_FTS_TERM.findall(str(query or ""))))
+    """OR every distinct folded term, like the local FTS5 path; terms carry no tsquery syntax."""
+    terms = list(dict.fromkeys(_FTS_TERM.findall(fold_text(query))))
     return " | ".join(terms[:FTS_MAX_QUERY_TERMS])
 
 
@@ -97,7 +102,8 @@ def _decode_json_text(raw: Any) -> Any:
 
 
 class PostgresBackend(StorageBackend):
-    SCHEMA_VERSION = 2
+    # v3: the ``tsv`` text is folded (see fts_document); v2 rows are rebuilt once.
+    SCHEMA_VERSION = 3
 
     def __init__(
         self,
@@ -315,14 +321,30 @@ class PostgresBackend(StorageBackend):
                 ALTER TABLE bilinc_entries ADD COLUMN IF NOT EXISTS tsv_at DOUBLE PRECISION;
                 CREATE INDEX IF NOT EXISTS idx_bilinc_tsv ON bilinc_entries USING GIN (tsv);
             """)
-            await self._backfill_fts(conn)
-            current = await conn.fetchrow("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
-            if current is None or current["version"] < self.SCHEMA_VERSION:
-                await conn.execute(
-                    "INSERT INTO schema_version (version, applied_at) VALUES ($1, $2)",
-                    self.SCHEMA_VERSION,
-                    time.time(),
-                )
+            # One process migrates a tenant at a time (prewarm and live traffic
+            # can open the same schema together); the others wait here and then
+            # find the version already recorded. A session lock, so backfill
+            # batches still commit one by one and saves are not blocked.
+            lock = "SELECT {}(hashtext('bilinc_schema_migration:' || current_schema()))"
+            await conn.execute(lock.format("pg_advisory_lock"))
+            try:
+                current = await conn.fetchrow("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
+                if current is not None and current["version"] < 3:
+                    # Built from unfolded text before v3: let the backfill rebuild them.
+                    await conn.execute("UPDATE bilinc_entries SET tsv_at = NULL WHERE tsv IS NOT NULL")
+                await self._backfill_fts(conn)
+                if current is None or current["version"] < self.SCHEMA_VERSION:
+                    await conn.execute(
+                        "INSERT INTO schema_version (version, applied_at) VALUES ($1, $2) "
+                        "ON CONFLICT (version) DO NOTHING",
+                        self.SCHEMA_VERSION,
+                        time.time(),
+                    )
+            finally:
+                try:
+                    await conn.execute(lock.format("pg_advisory_unlock"))
+                except Exception:
+                    pass  # the pool's reset query releases it; keep the first error
             if self.schema:
                 # Fail closed: every table must resolve inside the tenant schema,
                 # so no query can fall through to a shared table in public.
@@ -638,7 +660,9 @@ class PostgresBackend(StorageBackend):
             if not rows:
                 break
             await conn.executemany(
-                "UPDATE bilinc_entries SET tsv = to_tsvector('simple', $2), tsv_at = $3 WHERE key = $1",
+                # A save that lands after the SELECT keeps its own, newer vector.
+                "UPDATE bilinc_entries SET tsv = to_tsvector('simple', $2), tsv_at = $3 "
+                "WHERE key = $1 AND updated_at IS NOT DISTINCT FROM $3",
                 [
                     (
                         row["key"],

@@ -28,11 +28,12 @@ needs_postgres = pytest.mark.skipif(not DSN, reason="BILINC_TEST_POSTGRES_DSN no
 
 def test_fts_document_decodes_values_and_keeps_only_allowlisted_metadata():
     text = fts_document(
-        "program:hasat",
+        "program:spring",
         {"title": "Girişimci yarışması", "where": ["İstanbul", 2026]},
         {"timestamp": "2026-10-07", "internal_note": "never searchable"},
     )
-    for expected in ("program:hasat", "Girişimci", "İstanbul", "2026", "2026-10-07", "title"):
+    # Folded like every recall path: case, Turkish I variants and diacritics are ignored.
+    for expected in ("program:spring", "girisimci", "istanbul", "2026", "2026-10-07", "title"):
         assert expected in text
     assert "never searchable" not in text
     assert "\\u" not in text
@@ -43,7 +44,8 @@ def test_fts_metadata_allowlist_matches_lexical_recall():
 
 
 def test_fts_or_query_ors_distinct_terms_and_carries_no_query_syntax():
-    assert fts_or_query("Can't find 'plan' | plan & !draft_v2 (now)") == "Can | t | find | plan | draft | v2 | now"
+    assert fts_or_query("Can't find 'plan' | plan & !draft_v2 (now)") == "can | t | find | plan | draft | v2 | now"
+    assert fts_or_query("Başvuru ve İstanbul") == "basvuru | ve | istanbul"
     assert fts_or_query("!!! ...") == ""
     many = " ".join(f"term{i}" for i in range(FTS_MAX_QUERY_TERMS + 10))
     assert len(fts_or_query(many).split(" | ")) == FTS_MAX_QUERY_TERMS
@@ -157,7 +159,7 @@ def test_schema_v2_backfills_rows_written_before_it():
             await reopened.init()
             async with reopened.pool.acquire() as conn:
                 assert await conn.fetchval("SELECT COUNT(*) FROM bilinc_entries WHERE tsv IS NULL") == 0
-                assert await conn.fetchval("SELECT MAX(version) FROM schema_version") == 2
+                assert await conn.fetchval("SELECT MAX(version) FROM schema_version") == PostgresBackend.SCHEMA_VERSION
             assert [key for _, key, _ in await reopened.fts_search("older runtime")] == ["legacy"]
             backend.pool = reopened.pool
         finally:
@@ -227,3 +229,81 @@ def test_recall_intelligent_uses_pg_fts_in_postgres_mode():
             await _drop(backend)
 
     _run(scenario())
+
+
+@needs_postgres
+def test_turkish_words_match_folded_forms():
+    async def scenario():
+        backend = await _backend()
+        try:
+            await backend.save(MemoryEntry(key="tr", value="Girişimci yarışması başvurusu İstanbul'da", memory_type=MemoryType.SEMANTIC))
+            await backend.save(MemoryEntry(key="en", value="Deployment notes", memory_type=MemoryType.SEMANTIC))
+            def keys(rows):
+                return [key for _, key, _ in rows]
+
+            assert keys(await backend.fts_search("girisimci istanbul")) == ["tr"]
+            assert keys(await backend.fts_search("ISTANBUL")) == ["tr"]
+            assert keys(await backend.fts_search("BAŞVURUSU")) == ["tr"]
+        finally:
+            await _drop(backend)
+
+    asyncio.new_event_loop().run_until_complete(scenario())
+
+
+@needs_postgres
+def test_schema_v3_rebuilds_v2_vectors_from_folded_text():
+    async def scenario():
+        import asyncpg
+
+        backend = await _backend()
+        schema = backend.schema
+        try:
+            await backend.save(MemoryEntry(key="tr", value="Girişimci", memory_type=MemoryType.SEMANTIC))
+            conn = await asyncpg.connect(DSN)
+            try:
+                # Make it look like a v2 tenant: unfolded vector, version 2.
+                await conn.execute(f'UPDATE "{schema}".bilinc_entries SET tsv = to_tsvector(\'simple\', \'Girişimci\')')
+                await conn.execute(f'DELETE FROM "{schema}".schema_version WHERE version >= 3')
+                await conn.execute(f'INSERT INTO "{schema}".schema_version (version, applied_at) VALUES (2, 0)')
+            finally:
+                await conn.close()
+            assert [k for _, k, _ in await backend.fts_search("girisimci")] == []
+            await backend.close()
+            again = PostgresBackend(dsn=DSN, schema=schema)
+            await again.init()
+            assert [k for _, k, _ in await again.fts_search("girisimci")] == ["tr"]
+            await _drop(again)
+        except Exception:
+            await _drop(backend)
+            raise
+
+    asyncio.new_event_loop().run_until_complete(scenario())
+
+
+@needs_postgres
+def test_two_processes_can_migrate_the_same_v2_tenant_at_once():
+    async def scenario():
+        import asyncpg
+
+        backend = await _backend()
+        schema = backend.schema
+        try:
+            await backend.save(MemoryEntry(key="tr", value="Girişimci", memory_type=MemoryType.SEMANTIC))
+            await backend.close()
+            conn = await asyncpg.connect(DSN)
+            try:
+                await conn.execute(f'DELETE FROM "{schema}".schema_version WHERE version >= 3')
+                await conn.execute(f'INSERT INTO "{schema}".schema_version (version, applied_at) VALUES (2, 0)')
+            finally:
+                await conn.close()
+            first, second = PostgresBackend(dsn=DSN, schema=schema), PostgresBackend(dsn=DSN, schema=schema)
+            results = await asyncio.gather(first.init(), second.init(), return_exceptions=True)
+            assert [r for r in results if isinstance(r, Exception)] == []
+            assert [k for _, k, _ in await first.fts_search("girisimci")] == ["tr"]
+            await second.close()
+            await _drop(first)
+        except Exception:
+            await _drop(backend)
+            raise
+
+    asyncio.new_event_loop().run_until_complete(scenario())
