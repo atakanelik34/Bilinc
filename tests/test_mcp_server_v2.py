@@ -624,3 +624,11 @@ class TestMCPForgetPurge:
         p.audit.purge_key("note")  # as if the process stopped right after the audit step
         result = _call(_handle_forget, p, {"key": "note", "purge": True})
         assert "error" not in result and result["purged"]["events"] > 0
+
+    def test_forgetting_a_memory_keeps_another_memory_it_mentions(self, tmp_path):
+        p = self._plane(tmp_path)
+        _call(_handle_commit_mem, p, {"key": "user_name", "value": "Ada Lovelace"})
+        _call(_handle_commit_mem, p, {"key": "profile", "value": "user_name: Ada, role founder"})
+        _call(_handle_forget, p, {"key": "profile"})
+        assert "user_name" in p.knowledge_graph._nodes
+        assert "profile" not in p.knowledge_graph._nodes

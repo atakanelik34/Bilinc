@@ -174,6 +174,23 @@ class KnowledgeGraph:
         self._updated_at = time.time()
         return True
 
+    def _remove_nodes(self, names: Set[str]) -> bool:
+        """Remove several nodes with their edges, rebuilding the indexes once."""
+        present = [name for name in names if name in self._nodes]
+        if not present:
+            return False
+        gone = set(present)
+        for name in present:
+            self._nodes.pop(name)
+            self.graph.remove_node(name)
+            for memory_key in self._entity_to_memories.pop(name, set()):
+                self._memory_to_entities.get(memory_key, set()).discard(name)
+        self._edges = [e for e in self._edges if e.source not in gone and e.target not in gone]
+        self._rebuild_normalized_entity_index()
+        self._rebuild_relation_index()
+        self._updated_at = time.time()
+        return True
+
     def forget_memory(self, memory_key: str) -> bool:
         """Drop a forgotten memory from the graph: its node, its edges and its entity links."""
         if not memory_key:
@@ -187,11 +204,15 @@ class KnowledgeGraph:
                 if not linked:
                     self._entity_to_memories.pop(entity, None)
                     orphaned.append(entity)
-        removed_node = self.remove_entity(memory_key)  # rebuilds the indexes when it removes a node
-        # An entity named only by this memory came from its text: drop it with the memory.
-        for entity in orphaned:
-            if entity != memory_key:
-                removed_node = self.remove_entity(entity) or removed_node
+        # An entity named only by this memory came from its text: drop it with the
+        # memory. A node that is itself a memory (its text mentioned another key)
+        # stays; memory nodes carry their own ``created_at``.
+        doomed = {memory_key} | {
+            entity
+            for entity in orphaned
+            if entity in self._nodes and "created_at" not in self._nodes[entity].properties
+        }
+        removed_node = self._remove_nodes(doomed)
         if entities and not removed_node:
             self._rebuild_normalized_entity_index()
             self._updated_at = time.time()
