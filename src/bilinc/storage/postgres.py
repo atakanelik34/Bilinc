@@ -277,6 +277,7 @@ class PostgresBackend(StorageBackend):
                     PRIMARY KEY (memory_key, model, chunk)
                 );
                 CREATE INDEX IF NOT EXISTS idx_memory_embeddings_model ON memory_embeddings(model);
+                ALTER TABLE memory_embeddings ALTER COLUMN updated_at DROP NOT NULL;
             """)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS memory_events (
