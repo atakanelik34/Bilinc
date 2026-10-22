@@ -317,7 +317,7 @@ def test_runtime_with_semantic_off_never_imports_the_embedding_stack(tmp_path, m
 
     monkeypatch.setattr(builtins, "__import__", guarded)
     manager = ProjectRuntimeManager(tmp_path)
-    assert asyncio.new_event_loop().run_until_complete(manager._semantic_encoder()) is None
+    assert asyncio.run(manager._semantic_encoder()) is None
 
 
 def test_runtime_survives_a_missing_embedding_stack_when_semantic_is_on(tmp_path, monkeypatch):
@@ -337,5 +337,5 @@ def test_runtime_survives_a_missing_embedding_stack_when_semantic_is_on(tmp_path
 
     monkeypatch.setattr(builtins, "__import__", missing)
     manager = ProjectRuntimeManager(tmp_path)
-    assert asyncio.new_event_loop().run_until_complete(manager._semantic_encoder()) is None
+    assert asyncio.run(manager._semantic_encoder()) is None
     assert manager._encoder_failed is True
