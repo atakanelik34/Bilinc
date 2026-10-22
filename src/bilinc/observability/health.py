@@ -194,7 +194,17 @@ class HealthCheck:
     def readiness(self) -> Dict[str, Any]:
         return self.check(mode="readiness")
 
+    # A full check scans the knowledge graph for contradictions and re-verifies
+    # the audit chain, which took about 0.3 s per call on a 2.8K-memory store.
+    # Every operation used to pay it; gauges now refresh at most this often.
+    GAUGE_REFRESH_SECONDS = 30.0
+
     def update_gauge_on_metrics(self, metrics) -> None:
+        now = time.monotonic()
+        last = getattr(self, "_gauges_refreshed_at", None)
+        if last is not None and now - last < self.GAUGE_REFRESH_SECONDS:
+            return
+        self._gauges_refreshed_at = now
         self.update_gauges(metrics)
 
     def update_gauges(self, metrics) -> None:
