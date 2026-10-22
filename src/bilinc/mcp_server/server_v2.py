@@ -204,7 +204,7 @@ def _health_http_status(readiness: Dict[str, Any]) -> int:
 
 
 def _health_payload(plane: StatePlane) -> Dict[str, Any]:
-    plane.health.update_gauge_on_metrics(plane.metrics)
+    plane.health.update_gauges(plane.metrics)  # an explicit read always refreshes
     readiness = plane.health.readiness()
     liveness = plane.health.liveness()
     return {
@@ -1044,7 +1044,7 @@ def create_mcp_http_app(
         if error_response is not None:
             return PlainTextResponse(error_response.body.decode(), status_code=error_response.status_code)
 
-        plane.health.update_gauge_on_metrics(plane.metrics)
+        plane.health.update_gauges(plane.metrics)  # a scrape always sees fresh gauges
         output = plane.metrics.export_prometheus()
         _record_http_request(plane, "metrics", start_time, 200)
         log_event(logger, "info", "metrics_scrape", client_id=client_id, status_code=200)

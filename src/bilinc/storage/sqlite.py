@@ -7,6 +7,7 @@ Supports all 5 brain-mimetic memory types with typed tables.
 from __future__ import annotations
 
 import json
+import logging
 try:
     import pysqlite3 as sqlite3  # macOS: has SQLITE_ENABLE_LOAD_EXTENSION
 except ImportError:
@@ -19,6 +20,7 @@ from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.event_ledger import MemoryEvent, create_memory_event, event_from_dict, stable_json
 from bilinc.storage.backend import StorageBackend
 
+logger = logging.getLogger(__name__)
 
 FTS_V2_TABLE = "mem_fts_v2"
 # Porter keeps English inflections together (``running`` finds ``run``); it
@@ -271,14 +273,16 @@ class SQLiteBackend(StorageBackend):
 
         except Exception:
             pass  # FTS5 not available
-        self._ensure_fts_v2()
+        # Version 2 is the Turkish-aware index; a database without it stays at 1
+        # and the next open tries again.
+        target_version = self.SCHEMA_VERSION if self._ensure_fts_v2() else 1
 
         # Record schema version if not already present
         current = self._conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
-        if current is None or current["version"] < self.SCHEMA_VERSION:
+        if current is None or current["version"] < target_version:
             self._conn.execute(
                 "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
-                (self.SCHEMA_VERSION, time.time())
+                (target_version, time.time())
             )
 
         # Writes prune only the entities they touch. Orphans left by older versions
@@ -294,13 +298,16 @@ class SQLiteBackend(StorageBackend):
             )
         self._conn.commit()
 
-    def _ensure_fts_v2(self) -> None:
+    def _ensure_fts_v2(self) -> bool:
         """Create and fill the Turkish-aware full-text index once per database.
 
         Many processes open the same file, so the check and the one-time fill
         run inside one write transaction: a second process waits, then finds
         the table and only re-asserts the triggers. The legacy ``mem_fts``
         table stays in place for processes still running older code.
+
+        Returns whether the index and its triggers are in place. Recall falls
+        back to the legacy index when they are not.
         """
         c = self._conn
         c.commit()
@@ -339,8 +346,19 @@ class SQLiteBackend(StorageBackend):
                 END
             """)
             c.commit()
-        except Exception:
-            c.rollback()  # FTS5 or the JSON functions are not available
+            return True
+        except sqlite3.OperationalError as exc:
+            c.rollback()
+            reason = str(exc).lower()
+            if "locked" in reason or "busy" in reason:
+                logger.warning("Turkish-aware index not built, database busy; retrying on the next open: %s", exc)
+            else:
+                logger.warning("Turkish-aware index unavailable (FTS5 or JSON functions missing): %s", exc)
+            return False
+        except Exception as exc:
+            c.rollback()
+            logger.warning("Turkish-aware index not built: %s", exc)
+            return False
 
     async def save(self, entry: MemoryEntry) -> bool:
         entry.last_accessed = time.time()

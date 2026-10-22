@@ -196,7 +196,9 @@ class HealthCheck:
 
     # A full check scans the knowledge graph for contradictions and re-verifies
     # the audit chain, which took about 0.3 s per call on a 2.8K-memory store.
-    # Every operation used to pay it; gauges now refresh at most this often.
+    # Every operation used to pay it; the per-operation hook now refreshes at
+    # most this often. Explicit reads (/health, /metrics, the health report)
+    # call update_gauges directly and always see fresh values.
     GAUGE_REFRESH_SECONDS = 30.0
 
     def update_gauge_on_metrics(self, metrics) -> None:

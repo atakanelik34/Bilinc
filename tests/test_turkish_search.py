@@ -1,6 +1,7 @@
 """Turkish-aware search: the shared fold, the SQLite v2 full-text index and local recall."""
 
 import json
+import sqlite3
 
 import pytest
 
@@ -183,3 +184,49 @@ def test_fold_cache_keeps_one_entry_per_memory_and_is_bounded_by_characters(monk
     assert plane._lexical_surface_cache_chars <= 60
     assert "note" not in plane._lexical_surface_cache  # least recently used goes first
     assert "k4" in plane._lexical_surface_cache
+
+
+@pytest.mark.asyncio
+async def test_locked_database_keeps_schema_v1_until_the_index_exists(tmp_path):
+    path = tmp_path / "locked.sqlite"
+    backend = await _backend(path)
+    for name in ("insert", "update", "delete"):
+        backend._conn.execute(f"DROP TRIGGER {FTS_V2_TABLE}_{name}")
+    backend._conn.execute(f"DROP TABLE {FTS_V2_TABLE}")
+    backend._conn.execute("DELETE FROM schema_version")
+    backend._conn.commit()
+
+    holder = sqlite3.connect(str(path))
+    holder.execute("BEGIN IMMEDIATE")  # another process is writing
+    backend._conn.execute("PRAGMA busy_timeout=50")
+    assert backend._ensure_fts_v2() is False
+    assert backend._conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = ?", (FTS_V2_TABLE,)
+    ).fetchone() is None
+    holder.rollback()
+    holder.close()
+    await backend.close()
+
+    reopened = await _backend(path)
+    assert (await reopened.stats())["schema_version"] == 2
+    await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_version_stays_1_when_the_index_cannot_be_built(tmp_path, monkeypatch):
+    monkeypatch.setattr(SQLiteBackend, "_ensure_fts_v2", lambda self: False)
+    backend = await _backend(tmp_path / "nofts.sqlite")
+    assert (await backend.stats())["schema_version"] == 1
+    await backend.close()
+
+
+def test_explicit_health_reads_always_refresh_gauges(monkeypatch):
+    from bilinc.mcp_server.server_v2 import _health_payload
+
+    plane = StatePlane(enable_verification=False, enable_audit=False)
+    calls = []
+    original = plane.health.update_gauges
+    monkeypatch.setattr(plane.health, "update_gauges", lambda metrics: (calls.append(1), original(metrics)))
+    _health_payload(plane)
+    _health_payload(plane)
+    assert len(calls) == 2
