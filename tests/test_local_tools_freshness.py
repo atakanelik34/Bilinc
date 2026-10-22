@@ -78,3 +78,34 @@ def test_hosted_revise_reprojects_entities_and_records_an_event(tmp_path):
         await manager.close()
 
     asyncio.new_event_loop().run_until_complete(scenario())
+
+
+def _fake(length: int, seed: str = "x") -> str:
+    import hashlib as _hashlib
+
+    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    digest = _hashlib.sha256(seed.encode()).digest() * 8
+    return "".join(alphabet[b % len(alphabet)] for b in digest[:length])
+
+
+@pytest.mark.asyncio
+async def test_local_commit_refuses_provider_secrets_and_masks_credential_fields(tmp_path, monkeypatch):
+    from bilinc.mcp_server.server_v2 import _handle_commit_mem
+    from bilinc.security.secret_scan import REDACTED
+
+    monkeypatch.delenv("BILINC_SECRET_SCAN", raising=False)
+    plane = await _agent(tmp_path / "scan.sqlite")
+    leaked = "sk" + "-proj-" + _fake(60)
+
+    refused = _json(await _handle_commit_mem(plane, {"key": "setup", "value": f"use {leaked} for the API"}))
+    assert refused["success"] is False and refused["error"] == "secret_detected"
+    assert await plane.backend.load("setup") is None
+
+    masked = _json(await _handle_commit_mem(
+        plane, {"key": "smtp", "value": json.dumps({"api_key": _fake(28, "api") + "9", "host": "mail"})}))
+    assert masked["success"] is True and masked["warnings"][0]["code"] == "secret_redacted"
+    assert (await plane.backend.load("smtp")).value["api_key"] == REDACTED
+
+    monkeypatch.setenv("BILINC_SECRET_SCAN", "off")
+    allowed = _json(await _handle_commit_mem(plane, {"key": "setup", "value": f"use {leaked}"}))
+    assert allowed["success"] is True

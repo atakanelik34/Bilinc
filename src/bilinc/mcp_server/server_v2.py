@@ -1062,6 +1062,37 @@ def create_mcp_http_app(
 
 # ─── Handler Functions (sync, called from async handlers) ─────────
 
+def _scan_local_write(tool: str, key: str, value: Any, metadata: Any, labels: Dict[str, Any]):
+    """The hosted runtime's write check, applied locally.
+
+    Provider-shaped secrets (API keys, tokens, private keys) are refused and
+    credential fields are masked before anything is stored. Returns
+    ``(value, metadata, warnings, refusal)``; ``refusal`` is a tool result to
+    return instead of writing. ``BILINC_SECRET_SCAN=off`` turns it off.
+    """
+    from bilinc.security.secret_scan import scan_write, scanning_enabled
+
+    if not scanning_enabled():
+        return value, metadata, [], None
+    scan = scan_write(key=key, value=value, metadata=metadata, labels=labels)
+    if scan.rejection:
+        logger.warning(
+            "Refused a memory write that looks like it contains a secret: rule=%s field=%s",
+            scan.rejection.rule,
+            scan.rejection.field,
+        )
+        return value, metadata, [], _result_text({
+            "tool": tool,
+            "key": key,
+            "success": False,
+            "error": "secret_detected",
+            "rule": scan.rejection.rule,
+            "field": scan.rejection.field,
+        })
+    warnings = [{"code": "secret_redacted", "rule": item.rule, "field": item.field} for item in scan.redactions]
+    return scan.value, scan.metadata, warnings, None
+
+
 async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[TextContent]:
     try:
         key = InputValidator.validate_key(args["key"])
@@ -1085,6 +1116,12 @@ async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[Te
 
     if ttl is None and str(source).startswith("hermes_session"):
         ttl = DEFAULT_HERMES_SESSION_TTL_SECONDS
+
+    value, metadata, scan_warnings, refusal = _scan_local_write(
+        "commit_mem", key, value, metadata, {"source": source, "session_id": session_id}
+    )
+    if refusal is not None:
+        return refusal
 
     # Resource limit check
     if hasattr(plane, "working_memory") and memory_type == "working":
@@ -1132,6 +1169,7 @@ async def _handle_commit_mem(plane: StatePlane, args: Dict[str, Any]) -> List[Te
             "removed_keys": result.removed_keys,
             "metadata": metadata,
             "ttl": ttl,
+            **({"warnings": scan_warnings} if scan_warnings else {}),
         })
     else:
         # It's a MemoryEntry (fallback mode)
@@ -1292,6 +1330,15 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
     importance = args.get("importance", 1.0)
     strategy_str = args.get("strategy", "entrenchment")
 
+    value, scanned_metadata, scan_warnings, refusal = _scan_local_write(
+        "revise", key, value, args.get("metadata"),
+        {name: args[name] for name in ("source", "session_id") if args.get(name)},
+    )
+    if refusal is not None:
+        return refusal
+    if scanned_metadata is not None:
+        args = {**args, "metadata": scanned_metadata}
+
     try:
         strategy = ConflictStrategy(strategy_str)
     except ValueError:
@@ -1404,6 +1451,7 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
         "explanation": result.explanation_text,
         "affected_keys": result.affected_keys,
         "removed_keys": result.removed_keys,
+        **({"warnings": scan_warnings} if scan_warnings else {}),
     })
 
 
@@ -2175,6 +2223,13 @@ async def _handle_bilinc_import(plane: StatePlane, args: Dict[str, Any]) -> List
                     metadata = json.loads(metadata)
                 except Exception:
                     metadata = {}
+            value, metadata, _, refusal = _scan_local_write(
+                "bilinc_import", key, value, metadata if isinstance(metadata, dict) else {}, {}
+            )
+            if refusal is not None:
+                failed += 1
+                errors.append({"index": idx, "error": "secret_detected"})
+                continue
             await plane.commit_with_agm_async(
                 key=key,
                 value=value,
