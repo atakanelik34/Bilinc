@@ -11,6 +11,8 @@ from typing import Optional, Tuple
 import numpy as np
 
 DEFAULT_SOCKET = Path.home() / ".bilinc" / "embed.sock"
+# Recall waits at most this long for a query vector, then runs without the signal.
+QUERY_TIMEOUT_SECONDS = 1.0
 
 
 def socket_path() -> Path:
@@ -39,7 +41,7 @@ def request(payload: dict, path: Optional[Path] = None, timeout: float = 2.0) ->
         return None
 
 
-def encode_query(text: str, path: Optional[Path] = None, timeout: float = 2.0) -> Optional[Tuple[str, np.ndarray]]:
+def encode_query(text: str, path: Optional[Path] = None, timeout: float = QUERY_TIMEOUT_SECONDS) -> Optional[Tuple[str, np.ndarray]]:
     """``(model_id, vector)`` for a query, or None when semantic recall is unavailable."""
     reply = request({"op": "encode_query", "text": text}, path=path, timeout=timeout)
     if not reply or "vector" not in reply or "model" not in reply:

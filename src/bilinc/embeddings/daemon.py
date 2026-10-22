@@ -5,7 +5,7 @@ whose text changed since they were embedded, and removes vectors of keys
 that are gone or out of scope. A pass handles a bounded number of keys and
 writes as it goes, so the first backfill is incremental and never holds a
 long transaction. Queries share the encoder with indexing and wait for at
-most one batch.
+most one batch, so indexing batches are kept small.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import base64
 import json
 import logging
 import os
+import stat
 import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -49,7 +50,7 @@ class EmbeddingDaemon:
         *,
         socket_path: Optional[str] = None,
         exclude_prefixes: Iterable[str] = RECOMMENDED_EXCLUDE_PREFIXES,
-        batch_size: int = 16,
+        batch_size: int = 4,
         keys_per_pass: int = 200,
         poll_seconds: float = 10.0,
     ):
@@ -161,12 +162,24 @@ class EmbeddingDaemon:
     async def serve(self) -> None:
         if self.socket_path is None:
             raise ValueError("socket_path is required to serve")
-        self.socket_path.parent.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.socket_path.parent, 0o700)
-        if self.socket_path.exists():
-            self.socket_path.unlink()
-        server = await asyncio.start_unix_server(self._handle, path=str(self.socket_path))
-        os.chmod(self.socket_path, 0o600)
+        parent = self.socket_path.parent
+        if not parent.exists():
+            # Only a directory the daemon creates is made private; an existing
+            # one (a shared /tmp, the home directory) keeps its permissions.
+            parent.mkdir(parents=True, mode=0o700)
+        try:
+            mode = self.socket_path.lstat().st_mode
+        except FileNotFoundError:
+            mode = None
+        if mode is not None:
+            if not stat.S_ISSOCK(mode):
+                raise FileExistsError(f"{self.socket_path} exists and is not a socket")
+            self.socket_path.unlink()  # a stale socket from an earlier run
+        previous_umask = os.umask(0o177)  # the socket is created 0600: no window before a chmod
+        try:
+            server = await asyncio.start_unix_server(self._handle, path=str(self.socket_path))
+        finally:
+            os.umask(previous_umask)
         logger.info("embedding daemon on %s, model %s, db %s", self.socket_path, self.encoder.model_id, self.db_path)
         async with server:
             await asyncio.gather(server.serve_forever(), self.run_indexer())

@@ -139,3 +139,45 @@ def test_socket_is_private_to_the_user(tmp_path):
     with _RunningDaemon(tmp_path / "perm.sqlite") as running:
         assert oct(os.stat(running.socket).st_mode & 0o777) == "0o600"
         assert oct(os.stat(running.socket.parent).st_mode & 0o777) == "0o700"
+
+
+@pytest.mark.asyncio
+async def test_recall_falls_back_quickly_when_the_daemon_hangs(tmp_path, monkeypatch):
+    import socket as socket_module
+
+    db = tmp_path / "hung.sqlite"
+    plane = StatePlane(backend=await _backend(db), enable_verification=False, enable_audit=False)
+    await plane.init()
+    await plane.backend.save(MemoryEntry(key="trip", value="We booked flights to Lisbon"))
+    EmbeddingDaemon(str(db), HashingEncoder()).index_once()  # vectors exist, so recall will ask the socket
+
+    directory = Path(tempfile.mkdtemp(prefix="bhung", dir="/tmp"))
+    path = directory / "h.sock"
+    server = socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM)
+    server.bind(str(path))
+    server.listen(1)  # accepts connections, never replies
+    monkeypatch.setenv("BILINC_EMBED_SOCKET", str(path))
+    try:
+        started = time.monotonic()
+        results = await plane.recall_intelligent("Lisbon flights", limit=2)
+        elapsed = time.monotonic() - started
+    finally:
+        server.close()
+        shutil.rmtree(directory, ignore_errors=True)
+    assert results[0]["key"] == "trip" and results[0]["signals"]["semantic"] == 0
+    assert elapsed < client.QUERY_TIMEOUT_SECONDS + 1.0
+
+
+def test_daemon_leaves_existing_directories_and_files_alone(tmp_path):
+    directory = Path(tempfile.mkdtemp(prefix="bperm", dir="/tmp"))
+    try:
+        os.chmod(directory, 0o755)
+        not_a_socket = directory / "e.sock"
+        not_a_socket.write_text("keep me")
+        daemon = EmbeddingDaemon(str(tmp_path / "x.sqlite"), HashingEncoder(), socket_path=str(not_a_socket))
+        with pytest.raises(FileExistsError):
+            asyncio.new_event_loop().run_until_complete(daemon.serve())
+        assert not_a_socket.read_text() == "keep me"
+        assert oct(os.stat(directory).st_mode & 0o777) == "0o755"
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)

@@ -838,7 +838,7 @@ class StatePlane:
                     top_k=max(limit * 3, 10),
                     candidate_keys=candidate_keys,
                 )
-            semantic_ranked, semantic_indexed = self._rank_semantic_signal(
+            semantic_ranked, semantic_indexed = await self._rank_semantic_signal_async(
                 query,
                 top_k=max(limit * 10, 50),
                 candidate_keys=candidate_keys,
@@ -2428,34 +2428,70 @@ class StatePlane:
         top_k: int,
         candidate_keys: Optional[set[str]] = None,
     ) -> Tuple[List[str], bool]:
-        """Semantic ranking and whether it came from persisted vectors.
+        """Semantic ranking and whether it came from persisted vectors (synchronous form).
 
         Persisted vectors win when the embedding daemon keeps them for this
         database and answers; otherwise the explicitly configured in-process
         path runs as before.
         """
-        indexed = self._rank_semantic_keys_from_index(query, top_k, candidate_keys)
+        encoded = None
+        if self._semantic_index_available():
+            from bilinc.embeddings import client
+
+            encoded = client.encode_query(query)
+        indexed = self._rank_semantic_keys_from_vector(encoded, top_k, candidate_keys)
         if indexed is not None:
             return indexed, True
         return self._rank_semantic_keys(query, top_k, candidate_keys), False
 
-    def _rank_semantic_keys_from_index(
+    async def _rank_semantic_signal_async(
         self,
         query: str,
         top_k: int,
         candidate_keys: Optional[set[str]] = None,
+    ) -> Tuple[List[str], bool]:
+        """As ``_rank_semantic_signal``, with the socket wait off the event loop.
+
+        Only the query encoding (a blocking socket call with a short timeout)
+        runs in a thread; database reads stay on the loop's thread, which owns
+        the connection.
+        """
+        encoded = None
+        if self._semantic_index_available():
+            from bilinc.embeddings import client
+
+            encoded = await asyncio.to_thread(client.encode_query, query)
+        indexed = self._rank_semantic_keys_from_vector(encoded, top_k, candidate_keys)
+        if indexed is not None:
+            return indexed, True
+        return self._rank_semantic_keys(query, top_k, candidate_keys), False
+
+    def _semantic_index_available(self) -> bool:
+        conn = self._sqlite_connection()
+        if conn is None:
+            return False
+        try:
+            from bilinc.embeddings import store
+
+            return store.table_exists(conn)
+        except Exception:
+            return False
+
+    def _rank_semantic_keys_from_vector(
+        self,
+        encoded,
+        top_k: int,
+        candidate_keys: Optional[set[str]] = None,
     ) -> Optional[List[str]]:
+        """Rank memories by their persisted vectors against an encoded query; None when unusable."""
+        if encoded is None:
+            return None
         conn = self._sqlite_connection()
         if conn is None:
             return None
         try:
-            from bilinc.embeddings import client, store
+            from bilinc.embeddings import store
 
-            if not store.table_exists(conn):
-                return None
-            encoded = client.encode_query(query)
-            if encoded is None:
-                return None
             model, vector = encoded
             keys, matrix = self._embedding_matrix(conn, model)
             if not keys or matrix.shape[1] != vector.shape[0]:

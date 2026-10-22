@@ -20,7 +20,7 @@ def main(argv=None) -> int:
     serve.add_argument("--db", default=os.environ.get("BILINC_DB_PATH", str(Path.home() / "bilinc.db")))
     serve.add_argument("--socket", default=str(client.socket_path()))
     serve.add_argument("--threads", type=int, default=2)
-    serve.add_argument("--batch", type=int, default=16)
+    serve.add_argument("--batch", type=int, default=4)
     serve.add_argument("--poll", type=float, default=10.0)
     serve.add_argument(
         "--exclude-prefix", action="append", default=None,
