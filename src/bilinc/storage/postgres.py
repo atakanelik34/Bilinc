@@ -18,7 +18,7 @@ import json
 import re
 import time
 import logging
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 try:
     import asyncpg
 except ImportError:
@@ -90,6 +90,11 @@ def fts_or_query(query: str) -> str:
     """OR every distinct folded term, like the local FTS5 path; terms carry no tsquery syntax."""
     terms = list(dict.fromkeys(_FTS_TERM.findall(fold_text(query))))
     return " | ".join(terms[:FTS_MAX_QUERY_TERMS])
+
+
+def _vector_literal(vector: Sequence[float]) -> str:
+    """pgvector's text form; works whether or not the connection registered the codec."""
+    return "[" + ",".join(repr(float(x)) for x in vector) + "]"
 
 
 def _decode_json_text(raw: Any) -> Any:
@@ -253,6 +258,22 @@ class PostgresBackend(StorageBackend):
                 );
                 CREATE INDEX IF NOT EXISTS idx_entity_mentions_entity_id ON entity_mentions(entity_id);
                 CREATE INDEX IF NOT EXISTS idx_entity_mentions_memory_key ON entity_mentions(memory_key);
+            """)
+            # Persisted memory vectors (see bilinc.embeddings). The column has no
+            # fixed dimension so the model can change; ``dim`` keeps rows of one
+            # model comparable. Only the hosted indexer writes it.
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS memory_embeddings (
+                    memory_key TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    chunk INTEGER NOT NULL,
+                    text_sha TEXT NOT NULL,
+                    dim INTEGER NOT NULL,
+                    vector vector NOT NULL,
+                    updated_at DOUBLE PRECISION NOT NULL,
+                    PRIMARY KEY (memory_key, model, chunk)
+                );
+                CREATE INDEX IF NOT EXISTS idx_memory_embeddings_model ON memory_embeddings(model);
             """)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS memory_events (
@@ -1036,8 +1057,122 @@ class PostgresBackend(StorageBackend):
                 await conn.execute("DELETE FROM bilinc_claims WHERE memory_key = $1", key)
                 # A forgotten memory must not keep entity links, as in the SQLite backend.
                 await conn.execute("DELETE FROM entity_mentions WHERE memory_key = $1", key)
+                await conn.execute("DELETE FROM memory_embeddings WHERE memory_key = $1", key)
                 result = await conn.execute("DELETE FROM bilinc_entries WHERE key = $1", key)
             return result == "DELETE 1"
+
+    # ------------------------------------------------------------ embeddings
+
+    async def embedding_candidates(
+        self, model: str, limit: int, exclude_prefixes: Sequence[str] = ()
+    ) -> List[Tuple[str, Any, Optional[float], Optional[str]]]:
+        """Entries the indexer must look at: never embedded for ``model``, or changed since.
+
+        ``(key, decoded value, updated_at, indexed text_sha or None)``. An entry
+        whose text did not change is confirmed with ``touch_embeddings``.
+        """
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT e.key, e.value, e.updated_at, m.text_sha FROM bilinc_entries e "
+                "LEFT JOIN memory_embeddings m ON m.memory_key = e.key AND m.model = $1 AND m.chunk = 0 "
+                "WHERE (m.memory_key IS NULL OR e.updated_at > m.updated_at) "
+                "AND NOT EXISTS (SELECT 1 FROM unnest($3::text[]) p WHERE starts_with(e.key, p)) "
+                "ORDER BY e.updated_at DESC NULLS LAST LIMIT $2",
+                model,
+                int(limit),
+                list(exclude_prefixes),
+            )
+        return [(row["key"], _decode_json_text(row["value"]), row["updated_at"], row["text_sha"]) for row in rows]
+
+    async def touch_embeddings(self, key: str, model: str, updated_at: Optional[float]) -> bool:
+        """Mark a key's vectors current when its text is unchanged (only if the entry still is)."""
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE memory_embeddings SET updated_at = $3 WHERE memory_key = $1 AND model = $2 "
+                "AND EXISTS (SELECT 1 FROM bilinc_entries WHERE key = $1 AND updated_at IS NOT DISTINCT FROM $4)",
+                key,
+                model,
+                max(time.time(), float(updated_at or 0)),
+                updated_at,
+            )
+        return int(result.split()[-1]) > 0
+
+    async def write_embeddings(
+        self, key: str, model: str, sha: str, vectors: Sequence[Sequence[float]], updated_at: Optional[float]
+    ) -> bool:
+        """Replace a key's vectors, only if the entry is unchanged since it was read.
+
+        A forget or an edit made while the text was being embedded wins: the
+        vectors of a value that is gone or has changed are never written.
+        """
+        if not self._initialized:
+            await self.init()
+        # Never older than the entry, so the candidate query does not pick it again.
+        now = max(time.time(), float(updated_at or 0))
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                current = await conn.fetchval(
+                    "SELECT 1 FROM bilinc_entries WHERE key = $1 AND updated_at IS NOT DISTINCT FROM $2 FOR SHARE",
+                    key,
+                    updated_at,
+                )
+                if current is None:
+                    return False
+                await conn.execute("DELETE FROM memory_embeddings WHERE memory_key = $1 AND model = $2", key, model)
+                await conn.executemany(
+                    "INSERT INTO memory_embeddings (memory_key, model, chunk, text_sha, dim, vector, updated_at) "
+                    "VALUES ($1, $2, $3, $4, $5, $6::text::vector, $7)",
+                    [
+                        (key, model, chunk, sha, len(vector), _vector_literal(vector), now)
+                        for chunk, vector in enumerate(vectors)
+                    ],
+                )
+        return True
+
+    async def prune_embeddings(self, keep_model: str, exclude_prefixes: Sequence[str] = ()) -> int:
+        """Remove vectors of other models, of keys no longer stored, and of keys out of scope."""
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM memory_embeddings m WHERE m.model <> $1 "
+                "OR NOT EXISTS (SELECT 1 FROM bilinc_entries e WHERE e.key = m.memory_key) "
+                "OR EXISTS (SELECT 1 FROM unnest($2::text[]) p WHERE starts_with(m.memory_key, p))",
+                keep_model,
+                list(exclude_prefixes),
+            )
+        return int(result.split()[-1])
+
+    async def semantic_search(
+        self,
+        vector: Sequence[float],
+        model: str,
+        limit: int = 50,
+        allowed_keys: Optional[Iterable[str]] = None,
+    ) -> List[Tuple[str, float]]:
+        """``[(key, cosine), ...]`` best first; a memory scores as its best chunk."""
+        if not self._initialized:
+            await self.init()
+        params: List[Any] = [_vector_literal(vector), model, len(vector)]
+        scope = ""
+        if allowed_keys is not None:
+            allowed = list(allowed_keys)
+            if not allowed:
+                return []
+            params.append(allowed)
+            scope = "AND memory_key = ANY($4::text[])"
+        params.append(int(limit))
+        sql = (
+            "SELECT memory_key, max(1 - (vector <=> $1::text::vector)) AS score FROM memory_embeddings "
+            f"WHERE model = $2 AND dim = $3 {scope} GROUP BY memory_key ORDER BY score DESC LIMIT ${len(params)}"
+        )
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [(row["memory_key"], float(row["score"])) for row in rows]
 
     async def purge_memory_event_payloads(self, memory_key: str) -> int:
         """Replace the payload of every event for a key with a purge marker (see the SQLite backend)."""
