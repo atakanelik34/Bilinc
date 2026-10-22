@@ -44,6 +44,15 @@ logger = logging.getLogger(__name__)
 RECOMMENDED_EXCLUDE_PREFIXES = ("session_archive:", "hermes_turn_")
 
 
+def _is_outage(exc: Exception) -> bool:
+    """A remote encoder that is unreachable or failing, as opposed to rejecting this input."""
+    from bilinc.embeddings.encoder import WorkersAIError
+
+    if not isinstance(exc, WorkersAIError):
+        return False
+    return exc.status is None or exc.status >= 500 or exc.status in (408, 429)
+
+
 class EmbeddingDaemon:
     FAILURE_BACKOFF = 60.0
     FAILURE_BACKOFF_MAX = 3600.0
@@ -139,6 +148,12 @@ class EmbeddingDaemon:
                 self._failed.pop(key, None)
                 failures_in_a_row = 0
             except Exception as exc:
+                if _is_outage(exc):
+                    # Network, timeout or server trouble says nothing about this
+                    # memory: stop the pass and let the poll interval wait.
+                    logger.warning("embedding encoder unavailable (%s); retrying next pass", exc)
+                    tried -= 1  # not attempted for real: still to do
+                    break
                 delay = min(self.FAILURE_BACKOFF_MAX, 2 * self._failed.get(key, (None, 0, self.FAILURE_BACKOFF / 2))[2])
                 self._failed[key] = (sha, time.time() + delay, delay)
                 failures_in_a_row += 1
@@ -165,13 +180,14 @@ class EmbeddingDaemon:
         finally:
             conn.close()
         remaining = len(todo) - tried
+        not_done = set(todo[tried:]) | set(self._failed)
         self.last_pass = {
             "embedded": written,
             "removed": removed,
             # Only a pass that made progress asks for another right away.
             "pending": remaining if written else 0,
             "failed": len(self._failed),
-            "indexed": len(wanted) - remaining - len(self._failed),
+            "indexed": len(wanted) - len(not_done) - (len(embedded) - written),
         }
         return self.last_pass
 

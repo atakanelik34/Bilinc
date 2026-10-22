@@ -44,14 +44,14 @@ def main(argv=None) -> int:
         from bilinc.embeddings.encoder import WORKERS_AI_DEFAULT_MODEL, WorkersAIEncoder
 
         encoder = WorkersAIEncoder(args.model or WORKERS_AI_DEFAULT_MODEL)
-        batch = args.batch or 32
+        batch = 32 if args.batch is None else args.batch
     else:
         if args.model:
             parser.error("--model applies to --encoder workers-ai only")
         from bilinc.embeddings.encoder import OnnxE5Encoder
 
         encoder = OnnxE5Encoder(threads=args.threads)
-        batch = args.batch or 4
+        batch = 4 if args.batch is None else args.batch
     daemon = EmbeddingDaemon(
         args.db,
         encoder,

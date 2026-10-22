@@ -294,3 +294,32 @@ async def test_a_failing_encoder_is_not_called_for_every_memory(tmp_path):
     result = EmbeddingDaemon(str(db), encoder, keys_per_pass=10).index_once()
     assert encoder.calls == EmbeddingDaemon.MAX_FAILURES_PER_PASS
     assert result["pending"] == 0  # no progress: wait for the next poll, do not spin
+
+
+@pytest.mark.asyncio
+async def test_an_outage_stops_the_pass_without_blaming_memories(tmp_path):
+    from bilinc.embeddings.encoder import WorkersAIError
+
+    class Down(HashingEncoder):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+            self.up = False
+
+        def encode(self, texts):
+            self.calls += 1
+            if not self.up:
+                raise WorkersAIError("Workers AI request failed: URLError", None)
+            return super().encode(texts)
+
+    db = tmp_path / "local.sqlite"
+    backend = await _backend(db)
+    for i in range(5):
+        await backend.save(MemoryEntry(key=f"k:{i}", value=f"note {i}"))
+    encoder = Down()
+    daemon = EmbeddingDaemon(str(db), encoder, keys_per_pass=10)
+    down = daemon.index_once()
+    assert encoder.calls == 1 and down["failed"] == 0 and down["pending"] == 0 and down["indexed"] == 0
+    encoder.up = True
+    up = daemon.index_once()  # back online: everything is embedded at once
+    assert up["embedded"] == 5 and up["indexed"] == 5
