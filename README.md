@@ -144,7 +144,7 @@ The remote connector at `https://mcp.bilinc.space/mcp` has ten tools; a read-onl
 
 <p align="center"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc/9774f8a97fb16b16cea10b974e9179e6f41df826/docs/assets/forget-and-purge.png" alt="Comparison of forget and forget --purge. Both stop recall and hide earlier values in memory history. After forget, saved checkpoints still contain the memory and the audit trail keeps each change. After purge, the memory is removed from every checkpoint and its values are removed from the audit trail; the key name and a fingerprint of each change stay. Encrypted backups keep earlier copies until they expire in both cases." width="100%"></p>
 
-New in 2.5.0: `client.forget(key, reason=..., purge=True)`, `bilinc forget --key ... --reason ... --purge`, or `"purge": true` in the REST API also removes the memory's stored content from storage and history. It works on a memory you forgot earlier and cannot be undone. See the [privacy policy](https://bilinc.space/privacy) for what is kept and for how long.
+Since 2.5.0: `client.forget(key, reason=..., purge=True)`, `bilinc forget --key ... --reason ... --purge`, or `"purge": true` in the REST API also removes the memory's stored content from storage and history. It works on a memory you forgot earlier and cannot be undone. See the [privacy policy](https://bilinc.space/privacy) for what is kept and for how long.
 
 ## Hosted API
 
@@ -163,11 +163,12 @@ All endpoints live under `https://bilinc.space`. Memory operations need an API k
 
 Send an `Idempotency-Key` header on any write you might retry: the same key with the same payload replays the original result and is billed once; a different payload is refused with `409 idempotency_conflict`. Saves that contain a credential, such as an API key, token or private key, are refused with `secret_detected` and the value is never echoed back.
 
-## What's new in 2.5.0
+## What's new in 2.6.0
 
-- **Purge**: forget can also remove a memory's content from storage and history.
-- **Secret scan**: hosted saves are checked for credentials before anything is stored.
-- **Recall**: hosted search ranks full-text matches by relevance and finds Turkish and other non-ASCII words.
+- **Sorted lists**: list memories newest or oldest first, and filter them by which app saved them, from the SDK, the CLI, the `bilinc` MCP adapter and the dashboard.
+- **Turkish search**: hosted search ignores case, Turkish dotted and dotless I, and diacritics, so `girisimci` finds `Girişimci`.
+- **Clearer write results**: when a credential-looking field is stored redacted, the response says which field.
+- **Purge from the MCP adapter**: the `bilinc` stdio MCP adapter's `forget` tool takes `purge`.
 
 Every release: [changelog](https://bilinc.space/changelog).
 
