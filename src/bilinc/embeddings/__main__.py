@@ -19,6 +19,11 @@ def main(argv=None) -> int:
     serve = sub.add_parser("serve", help="run the daemon")
     serve.add_argument("--db", default=os.environ.get("BILINC_DB_PATH", str(Path.home() / "bilinc.db")))
     serve.add_argument("--socket", default=str(client.socket_path()))
+    serve.add_argument(
+        "--encoder", choices=("onnx-e5", "workers-ai"), default="onnx-e5",
+        help="onnx-e5 runs the model here; workers-ai calls Cloudflare (memory text leaves this machine)",
+    )
+    serve.add_argument("--model", default=None, help="Workers AI model (default @cf/baai/bge-m3)")
     serve.add_argument("--threads", type=int, default=2)
     serve.add_argument("--batch", type=int, default=4)
     serve.add_argument("--poll", type=float, default=10.0)
@@ -35,11 +40,17 @@ def main(argv=None) -> int:
         print(json.dumps(reply or {"running": False}, indent=2))
         return 0 if reply else 1
 
-    from bilinc.embeddings.encoder import OnnxE5Encoder
+    if args.encoder == "workers-ai":
+        from bilinc.embeddings.encoder import WORKERS_AI_DEFAULT_MODEL, WorkersAIEncoder
 
+        encoder = WorkersAIEncoder(args.model or WORKERS_AI_DEFAULT_MODEL)
+    else:
+        from bilinc.embeddings.encoder import OnnxE5Encoder
+
+        encoder = OnnxE5Encoder(threads=args.threads)
     daemon = EmbeddingDaemon(
         args.db,
-        OnnxE5Encoder(threads=args.threads),
+        encoder,
         socket_path=args.socket,
         exclude_prefixes=RECOMMENDED_EXCLUDE_PREFIXES if args.exclude_prefix is None else args.exclude_prefix,
         batch_size=args.batch,
