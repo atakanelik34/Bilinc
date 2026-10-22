@@ -109,6 +109,12 @@ class StatePlane:
     # perturbing queries that already have strong lexical coverage.  It is
     # enabled only by an explicit deployment flag and is otherwise inert.
     INTELLIGENT_RECALL_ADAPTIVE_SEMANTIC_WEIGHT = 0.12
+    # Weight of the semantic signal when it comes from persisted vectors kept by
+    # the embedding daemon (bilinc.embeddings, multilingual-e5-small). Chosen on
+    # LongMemEval dev (2026-10-22): 0.25 and 0.35 both improved R_all@5 and
+    # nDCG@5 with paired confidence intervals above zero; 0.35 was the best.
+    # BILINC_SEMANTIC_RRF_WEIGHT overrides it, as for the in-process path.
+    INTELLIGENT_RECALL_INDEXED_SEMANTIC_WEIGHT = 0.35
     INTELLIGENT_RECALL_SEMANTIC_LEXICAL_COVERAGE_THRESHOLD = 0.5
     # Graph continuity can recover a memory that does not mention the query
     # entity directly, but only through a bounded bridge path. Keep this a
@@ -832,7 +838,7 @@ class StatePlane:
                     top_k=max(limit * 3, 10),
                     candidate_keys=candidate_keys,
                 )
-            semantic_ranked = self._rank_semantic_keys(
+            semantic_ranked, semantic_indexed = await self._rank_semantic_signal_async(
                 query,
                 top_k=max(limit * 10, 50),
                 candidate_keys=candidate_keys,
@@ -857,6 +863,7 @@ class StatePlane:
                 query,
                 candidates,
                 lexical_ranked,
+                indexed=semantic_indexed,
             )
             temporal_ranked = self._rank_temporal_keys(
                 query,
@@ -2312,6 +2319,7 @@ class StatePlane:
         query: str,
         candidates: Dict[str, MemoryEntry],
         lexical_ranked: List[str],
+        indexed: bool = False,
     ) -> float:
         """Return the semantic RRF weight for an explicitly adaptive deployment.
 
@@ -2321,7 +2329,7 @@ class StatePlane:
         weight.  The environment flag keeps this experiment opt-in and
         preserves the existing default path byte-for-byte in behavior.
         """
-        base_weight = self._semantic_recall_rrf_weight()
+        base_weight = self._semantic_recall_rrf_weight(indexed=indexed)
         enabled = os.environ.get("BILINC_SEMANTIC_ADAPTIVE_WEIGHT", "").strip().lower()
         if enabled not in {"1", "true", "yes", "on"}:
             return base_weight
@@ -2344,17 +2352,18 @@ class StatePlane:
             return 0.0
         return self.INTELLIGENT_RECALL_ADAPTIVE_SEMANTIC_WEIGHT
 
-    def _semantic_recall_rrf_weight(self) -> float:
-        """Resolve an opt-in semantic RRF weight without changing defaults."""
+    def _semantic_recall_rrf_weight(self, indexed: bool = False) -> float:
+        """Resolve the semantic RRF weight: the env override, else the default for the signal's source."""
+        default = self.INTELLIGENT_RECALL_INDEXED_SEMANTIC_WEIGHT if indexed else self.INTELLIGENT_RECALL_SEMANTIC_WEIGHT
         raw = os.environ.get("BILINC_SEMANTIC_RRF_WEIGHT", "").strip()
         if not raw:
-            return self.INTELLIGENT_RECALL_SEMANTIC_WEIGHT
+            return default
         try:
             weight = float(raw)
         except (TypeError, ValueError):
-            return self.INTELLIGENT_RECALL_SEMANTIC_WEIGHT
+            return default
         if not math.isfinite(weight):
-            return self.INTELLIGENT_RECALL_SEMANTIC_WEIGHT
+            return default
         return min(max(weight, 0.0), 1.0)
 
     def _rank_hybrid_keys(
@@ -2412,6 +2421,102 @@ class StatePlane:
             logger.warning("Postgres full-text recall failed: %s", type(exc).__name__)
             return []
         return [key for _, key, _ in rows if key]
+
+    def _rank_semantic_signal(
+        self,
+        query: str,
+        top_k: int,
+        candidate_keys: Optional[set[str]] = None,
+    ) -> Tuple[List[str], bool]:
+        """Semantic ranking and whether it came from persisted vectors (synchronous form).
+
+        Persisted vectors win when the embedding daemon keeps them for this
+        database and answers; otherwise the explicitly configured in-process
+        path runs as before.
+        """
+        encoded = None
+        if self._semantic_index_available():
+            from bilinc.embeddings import client
+
+            encoded = client.encode_query(query)
+        indexed = self._rank_semantic_keys_from_vector(encoded, top_k, candidate_keys)
+        if indexed is not None:
+            return indexed, True
+        return self._rank_semantic_keys(query, top_k, candidate_keys), False
+
+    async def _rank_semantic_signal_async(
+        self,
+        query: str,
+        top_k: int,
+        candidate_keys: Optional[set[str]] = None,
+    ) -> Tuple[List[str], bool]:
+        """As ``_rank_semantic_signal``, with the socket wait off the event loop.
+
+        Only the query encoding (a blocking socket call with a short timeout)
+        runs in a thread; database reads stay on the loop's thread, which owns
+        the connection.
+        """
+        encoded = None
+        if self._semantic_index_available():
+            from bilinc.embeddings import client
+
+            encoded = await asyncio.to_thread(client.encode_query, query)
+        indexed = self._rank_semantic_keys_from_vector(encoded, top_k, candidate_keys)
+        if indexed is not None:
+            return indexed, True
+        return self._rank_semantic_keys(query, top_k, candidate_keys), False
+
+    def _semantic_index_available(self) -> bool:
+        conn = self._sqlite_connection()
+        if conn is None:
+            return False
+        try:
+            from bilinc.embeddings import store
+
+            return store.table_exists(conn)
+        except Exception:
+            return False
+
+    def _rank_semantic_keys_from_vector(
+        self,
+        encoded,
+        top_k: int,
+        candidate_keys: Optional[set[str]] = None,
+    ) -> Optional[List[str]]:
+        """Rank memories by their persisted vectors against an encoded query; None when unusable."""
+        if encoded is None:
+            return None
+        conn = self._sqlite_connection()
+        if conn is None:
+            return None
+        try:
+            from bilinc.embeddings import store
+
+            model, vector = encoded
+            keys, matrix = self._embedding_matrix(conn, model)
+            if not keys or matrix.shape[1] != vector.shape[0]:
+                return None
+            best = store.best_per_key(keys, matrix @ vector)
+            ranked = sorted(
+                ((key, score) for key, score in best.items() if candidate_keys is None or key in candidate_keys),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+            return [key for key, _ in ranked[:top_k]]
+        except Exception:
+            return None
+
+    def _embedding_matrix(self, conn, model: str):
+        """The persisted vectors for a model, reloaded only when the table changed."""
+        from bilinc.embeddings import store
+
+        signature = (model, store.signature(conn, model))
+        cached = getattr(self, "_embedding_cache", None)
+        if cached is None or cached[0] != signature:
+            keys, matrix = store.load(conn, model)
+            cached = (signature, keys, matrix)
+            self._embedding_cache = cached
+        return cached[1], cached[2]
 
     def _rank_semantic_keys(
         self,
