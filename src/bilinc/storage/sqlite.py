@@ -1164,22 +1164,39 @@ class SQLiteBackend(StorageBackend):
         updated_before: Optional[float] = None,
         sources: Optional[List[str]] = None,
         after_key: Optional[str] = None,
+        after_updated: Optional[float] = None,
+        order: str = "key",
         limit: int = 50,
     ) -> List[MemoryEntry]:
-        """Return one key-ordered page of entries.
+        """Return one page of entries, ordered by key (default) or by update time.
 
         Ordered by key so a cursor (the last key seen) stays stable while other
         writes land: new keys appear in their sorted place, never shift a page.
+        ``order="newest"`` / ``"oldest"`` sort by ``updated_at`` (missing = 0),
+        then key; the cursor is then the last entry's ``(updated_at, key)``
+        passed as ``after_updated`` and ``after_key``.
         ``sources`` keeps only entries whose effective source (the source
         column, else metadata.source, else '') is one of the given strings.
         """
         clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before, sources)
-        if after_key is not None:
-            clauses.append("key > ?")
-            params.append(after_key)
+        if order == "key":
+            if after_key is not None:
+                clauses.append("key > ?")
+                params.append(after_key)
+            order_by = "key ASC"
+        elif order in ("newest", "oldest"):
+            # Keyset paging on (updated time, key): stable while other writes land.
+            before, direction = ("<", "DESC") if order == "newest" else (">", "ASC")
+            if after_key is not None:
+                stamp = float(after_updated or 0.0)
+                clauses.append(f"(COALESCE(updated_at, 0) {before} ? OR (COALESCE(updated_at, 0) = ? AND key > ?))")
+                params.extend([stamp, stamp, after_key])
+            order_by = f"COALESCE(updated_at, 0) {direction}, key ASC"
+        else:
+            raise ValueError(f"unknown list order: {order}")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._get_conn().execute(
-            f"SELECT * FROM memories {where} ORDER BY key ASC LIMIT ?",
+            f"SELECT * FROM memories {where} ORDER BY {order_by} LIMIT ?",
             (*params, max(1, int(limit))),
         ).fetchall()
         return [self._row_to_entry(r) for r in rows]

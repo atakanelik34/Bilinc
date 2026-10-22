@@ -1278,23 +1278,36 @@ class PostgresBackend(StorageBackend):
         updated_before: Optional[float] = None,
         sources: Optional[List[str]] = None,
         after_key: Optional[str] = None,
+        after_updated: Optional[float] = None,
+        order: str = "key",
         limit: int = 50,
     ) -> List[MemoryEntry]:
-        """Return one key-ordered page of entries (see SQLiteBackend.list_page)."""
+        """Return one page of entries, by key or update time (see SQLiteBackend.list_page)."""
         if not self._initialized:
             await self.init()
         clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before, sources)
         # COLLATE "C" (byte order) on both the cursor comparison and ORDER BY,
         # so paging agrees with SQLite regardless of the database's locale.
-        if after_key is not None:
-            params.append(after_key)
-            clauses.append(f'key COLLATE "C" > ${len(params)}')
+        if order == "key":
+            if after_key is not None:
+                params.append(after_key)
+                clauses.append(f'key COLLATE "C" > ${len(params)}')
+            order_by = 'key COLLATE "C" ASC'
+        elif order in ("newest", "oldest"):
+            before, direction = ("<", "DESC") if order == "newest" else (">", "ASC")
+            if after_key is not None:
+                params.extend([float(after_updated or 0.0), after_key])
+                stamp, key_at = f"${len(params) - 1}", f"${len(params)}"
+                clauses.append(
+                    f"(COALESCE(updated_at, 0) {before} {stamp} "
+                    f'OR (COALESCE(updated_at, 0) = {stamp} AND key COLLATE "C" > {key_at}))'
+                )
+            order_by = f'COALESCE(updated_at, 0) {direction}, key COLLATE "C" ASC'
+        else:
+            raise ValueError(f"unknown list order: {order}")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(max(1, int(limit)))
-        sql = (
-            f"SELECT * FROM bilinc_entries {where} "
-            f'ORDER BY key COLLATE "C" ASC LIMIT ${len(params)}'
-        )
+        sql = f"SELECT * FROM bilinc_entries {where} ORDER BY {order_by} LIMIT ${len(params)}"
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
             return [self._row_to_entry(r) for r in rows]

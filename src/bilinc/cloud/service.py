@@ -36,6 +36,8 @@ SIDECAR_CAPABILITIES = [
     # ListRequest.sources: an older sidecar would silently ignore the filter
     # and return every memory, so the control plane must check for this.
     "memory_list_source",
+    # ListRequest.order ("newest"/"oldest"): an older sidecar would ignore it and page by key.
+    "memory_list_order",
     # Commit and revise reject provider-shaped secrets with `secret_detected`
     # (422) and redact credential fields with a `warnings` entry.
     "secret_scan",
@@ -109,6 +111,7 @@ class ListRequest(BaseModel):
     cursor: str | None = Field(default=None, max_length=MAX_CURSOR_LENGTH)
     limit: int = Field(default=50, ge=1, le=MAX_LIST_LIMIT)
     values: Literal["full", "preview", "none"] = "preview"
+    order: Literal["key", "newest", "oldest"] = "key"
 
 
 class SnapshotCreateRequest(BaseModel):

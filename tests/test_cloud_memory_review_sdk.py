@@ -566,3 +566,34 @@ def test_cli_history_says_not_stored_unless_the_newest_change_is_a_forget(cli, c
     assert cli.main(["history", "gone"]) == 0
     out = capsys.readouterr().out
     assert "not currently stored" in out and "forgotten" not in out
+
+
+def test_list_memories_sends_sources_and_order_only_when_given():
+    transport = RecordingTransport({"entries": [], "nextCursor": None, "total": 0})
+    client = _client(transport)
+    client.list_memories(sources=["claude-code", ""], order="newest")
+    client.list_memories()
+    assert transport.calls[0]["body"]["sources"] == ["claude-code", ""]
+    assert transport.calls[0]["body"]["order"] == "newest"
+    assert "sources" not in transport.calls[1]["body"] and "order" not in transport.calls[1]["body"]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"order": "sideways"}, {"sources": "claude"}, {"sources": []}, {"sources": ["x" * 257]}, {"sources": ["a\x00"]}],
+)
+def test_list_memories_rejects_bad_order_and_sources(kwargs):
+    from bilinc.client import BilincValidationError
+
+    transport = RecordingTransport({"entries": [], "nextCursor": None, "total": 0})
+    with pytest.raises(BilincValidationError):
+        _client(transport).list_memories(**kwargs)
+    assert transport.calls == []
+
+
+def test_cli_list_order_and_sources_reach_the_client_and_the_hint(cli, capsys):
+    assert cli.main(["list", "--order", "newest", "--source", "claude code", "--source", ""]) == 0
+    out = capsys.readouterr().out
+    _, kwargs = FakeClient.instances[0].calls[0]
+    assert kwargs["order"] == "newest" and kwargs["sources"] == ["claude code", ""]
+    assert "--source 'claude code' --source '' --order newest" in out

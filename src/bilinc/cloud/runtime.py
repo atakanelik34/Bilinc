@@ -280,6 +280,42 @@ def decode_cursor(cursor: str) -> str:
     return key
 
 
+LIST_ORDERS = ("key", "newest", "oldest")
+
+
+def encode_order_cursor(order: str, updated_at: float | None, key: str) -> str:
+    """A cursor for an update-time order: the last entry's (updated_at, key), bound to the order."""
+    payload = json.dumps({"o": order, "u": float(updated_at or 0.0), "k": key}, separators=(",", ":"))
+    return encode_cursor(payload)
+
+
+def decode_order_cursor(cursor: str, order: str) -> tuple[float, str]:
+    """Decode a cursor issued for ``order``; one from another order is malformed."""
+    try:
+        payload = json.loads(decode_cursor(cursor))
+    except ValueError as exc:
+        raise ValueError("invalid_cursor") from exc
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"o", "u", "k"}
+        or payload["o"] != order
+        or not isinstance(payload["k"], str)
+        or not payload["k"]
+        or isinstance(payload["u"], bool)
+        or not isinstance(payload["u"], (int, float))
+    ):
+        raise ValueError("invalid_cursor")
+    return float(payload["u"]), payload["k"]
+
+
+def _is_order_cursor_payload(key: str) -> bool:
+    try:
+        payload = json.loads(key)
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and set(payload) == {"o", "u", "k"}
+
+
 def _audit_json(raw: Any) -> Any:
     if raw is None or isinstance(raw, (dict, list)):
         return raw
@@ -686,10 +722,14 @@ class ProjectRuntimeManager:
         cursor: str | None = None,
         limit: int = 50,
         values: str = "preview",
+        order: str = "key",
     ) -> dict[str, Any]:
-        """Return one key-ordered page of stored memories. Read-only.
+        """Return one page of stored memories. Read-only.
 
-        Paging is by key, so a cursor stays valid while other writes land.
+        ``order`` is ``"key"`` (default), ``"newest"`` (most recently updated
+        first) or ``"oldest"``. Paging is keyset-based in every order, so a
+        cursor stays valid while other writes land; a cursor is bound to the
+        order it was issued under.
         ``total`` counts every entry matching the filters, not just this page.
 
         ``sources`` keeps only entries whose effective source -- the value
@@ -700,7 +740,7 @@ class ProjectRuntimeManager:
         page, ``total`` and ``next_cursor`` all respect it; reuse a cursor
         with the same filters it was issued under.
         """
-        if values not in VALUE_MODES:
+        if values not in VALUE_MODES or order not in LIST_ORDERS:
             raise ValueError("invalid_request")
         if memory_type is not None:
             _coerce_memory_types([memory_type])
@@ -721,7 +761,15 @@ class ProjectRuntimeManager:
             raise ValueError("invalid_request")
 
         # An explicit empty cursor is malformed, not "start over".
-        after_key = decode_cursor(cursor) if cursor is not None else None
+        after_key: str | None = None
+        after_updated: float | None = None
+        if cursor is not None:
+            if order == "key":
+                after_key = decode_cursor(cursor)
+                if _is_order_cursor_payload(after_key):
+                    raise ValueError("invalid_cursor")  # issued for an update-time order
+            else:
+                after_updated, after_key = decode_order_cursor(cursor, order)
         bound = max(1, int(limit))
         filters = {
             "prefix": prefix or None,
@@ -733,7 +781,11 @@ class ProjectRuntimeManager:
             # Only passed when set, so an unfiltered list calls the backend
             # exactly as before.
             filters["sources"] = sources
-        page = await backend.list_page(**filters, after_key=after_key, limit=bound + 1)
+        paging: dict[str, Any] = {"after_key": after_key}
+        if order != "key":
+            # Only passed when set, so a key-ordered list calls the backend exactly as before.
+            paging.update(order=order, after_updated=after_updated)
+        page = await backend.list_page(**filters, **paging, limit=bound + 1)
         has_more = len(page) > bound
         page = page[:bound]
 
@@ -755,7 +807,14 @@ class ProjectRuntimeManager:
 
         result = {
             "entries": entries,
-            "next_cursor": encode_cursor(page[-1].key) if has_more and page else None,
+            "next_cursor": (
+                None
+                if not (has_more and page)
+                else encode_cursor(page[-1].key)
+                if order == "key"
+                else encode_order_cursor(order, page[-1].updated_at, page[-1].key)
+            ),
+            "order": order,
             "total": await backend.count_filtered(**filters),
             "values": values,
             "state_version": state_version(plane),

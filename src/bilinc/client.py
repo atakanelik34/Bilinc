@@ -195,6 +195,9 @@ MAX_LIST_LIMIT = 100
 #: How much of each stored value history and list return: the whole value, a
 #: short single-string preview, or nothing (keys and metadata only).
 VALUE_MODES = ("full", "preview", "none")
+LIST_ORDERS = ("key", "newest", "oldest")
+MAX_LIST_SOURCES = 20
+MAX_SOURCE_LENGTH = 256
 
 #: Bounded retries for read-only calls. Mutations are never retried
 #: automatically: billing idempotency alone does not prove that a retried write
@@ -291,6 +294,20 @@ def _optional_text(value: Any, field: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise _invalid(field, "must be a non-empty string when provided")
     return value.strip()
+
+
+def _require_sources(value: Any) -> list[str]:
+    """A non-empty list of exact source strings ("" selects memories saved without one)."""
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise _invalid("sources", "must be a list of strings")
+    items = list(value)
+    if (
+        not items
+        or len(items) > MAX_LIST_SOURCES
+        or any(not isinstance(item, str) or len(item) > MAX_SOURCE_LENGTH or "\x00" in item for item in items)
+    ):
+        raise _invalid("sources", f"must be 1-{MAX_LIST_SOURCES} strings of at most {MAX_SOURCE_LENGTH} characters")
+    return items
 
 
 def _optional_raw_text(value: Any, field: str) -> str | None:
@@ -710,12 +727,20 @@ class CloudClient:
         cursor: str | None = None,
         limit: int = 50,
         values: str = "preview",
+        sources: list[str] | None = None,
+        order: str | None = None,
     ) -> dict[str, Any]:
-        """Return one page of stored memories, ordered by key.
+        """Return one page of stored memories.
 
         Read-only and not billed. ``total`` counts every memory matching the
         filters; pass ``nextCursor`` back as ``cursor`` for the next page, or
         use :meth:`iter_memories` to walk every page.
+
+        ``order`` is ``"key"`` (the default), ``"newest"`` (most recently
+        updated first) or ``"oldest"``; a cursor only continues the order it
+        came from. ``sources`` keeps memories saved by one of the given
+        sources exactly (``""`` = no source; hosted saves without one read
+        ``"bilinc_cloud"``).
         """
 
         payload: dict[str, Any] = {
@@ -729,6 +754,10 @@ class CloudClient:
         _put_optional(payload, "updatedAfter", _optional_timestamp(updated_after, "updated_after"))
         _put_optional(payload, "updatedBefore", _optional_timestamp(updated_before, "updated_before"))
         _put_optional(payload, "cursor", _optional_text(cursor, "cursor"))
+        if sources is not None:
+            payload["sources"] = _require_sources(sources)
+        if order is not None:
+            payload["order"] = _require_choice(order, "order", LIST_ORDERS)
 
         return self._read("/api/cloud/memory/list", payload)
 
@@ -742,6 +771,8 @@ class CloudClient:
         page_size: int = MAX_LIST_LIMIT,
         values: str = "preview",
         cursor: str | None = None,
+        sources: list[str] | None = None,
+        order: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield every stored memory matching the filters, page by page.
 
@@ -764,6 +795,8 @@ class CloudClient:
                     cursor=cursor,
                     limit=sizes[size_index],
                     values=values,
+                    sources=sources,
+                    order=order,
                 )
             except BilincValidationError as exc:
                 if not _is_response_too_large(exc) or size_index == len(sizes) - 1:
