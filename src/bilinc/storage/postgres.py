@@ -277,8 +277,15 @@ class PostgresBackend(StorageBackend):
                     PRIMARY KEY (memory_key, model, chunk)
                 );
                 CREATE INDEX IF NOT EXISTS idx_memory_embeddings_model ON memory_embeddings(model);
-                ALTER TABLE memory_embeddings ALTER COLUMN updated_at DROP NOT NULL;
             """)
+            # Tables from an early build declared it NOT NULL. Altering takes an
+            # exclusive lock, so only when needed (concurrent inits would deadlock).
+            if await conn.fetchval(
+                "SELECT is_nullable = 'NO' FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'memory_embeddings' "
+                "AND column_name = 'updated_at'"
+            ):
+                await conn.execute("ALTER TABLE memory_embeddings ALTER COLUMN updated_at DROP NOT NULL")
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS memory_events (
                     id TEXT PRIMARY KEY,

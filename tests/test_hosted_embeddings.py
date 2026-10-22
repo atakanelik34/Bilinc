@@ -12,12 +12,14 @@ import uuid
 
 import pytest
 
-from bilinc.core.models import MemoryEntry, MemoryType
-from bilinc.core.stateplane import StatePlane
-from bilinc.embeddings.encoder import HashingEncoder
-from bilinc.embeddings.hosted import HostedIndexer, build_encoder
-from bilinc.storage.postgres import PostgresBackend
-from bilinc.storage.postgres_tenancy import TENANT_TABLES
+pytest.importorskip("numpy")
+
+from bilinc.core.models import MemoryEntry, MemoryType  # noqa: E402
+from bilinc.core.stateplane import StatePlane  # noqa: E402
+from bilinc.embeddings.encoder import HashingEncoder  # noqa: E402
+from bilinc.embeddings.hosted import HostedIndexer, build_encoder  # noqa: E402
+from bilinc.storage.postgres import PostgresBackend  # noqa: E402
+from bilinc.storage.postgres_tenancy import TENANT_TABLES  # noqa: E402
 
 DSN = os.getenv("BILINC_TEST_POSTGRES_DSN")
 needs_postgres = pytest.mark.skipif(not DSN, reason="BILINC_TEST_POSTGRES_DSN not set")
