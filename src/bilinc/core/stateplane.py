@@ -3136,7 +3136,27 @@ class StatePlane:
         import asyncio
         return asyncio.run(self.forget(key))
 
-    async def forget(self, key: str) -> bool:
+    def _sync_cached_state(self, key: str, entry: Optional[MemoryEntry]) -> None:
+        """Bring the in-process belief set and graph in line with what the backend now holds.
+
+        ``entry`` is the stored state after a change, or None once the key is
+        gone. A forgotten belief left in the AGM cache would make the next
+        write to the same key count as a revision of the forgotten value.
+        """
+        agm = getattr(self, "agm_engine", None)
+        if agm:
+            if entry is None:
+                agm.contract(key)
+            else:
+                agm.belief_state.add_belief(entry)
+                agm.set_entrenchment(key, float(entry.importance))
+        graph = getattr(self, "knowledge_graph", None)
+        if graph is not None:
+            graph.forget_memory(key)
+            if entry is not None:
+                graph.ingest_memory_entry(entry)
+
+    async def forget(self, key: str, reason: Optional[str] = None) -> bool:
         start_time = time.perf_counter()
         try:
             wm_entry = self.working_memory.get(key)
@@ -3146,12 +3166,19 @@ class StatePlane:
             if self.backend:
                 existing = await self.backend.load(key)
                 result = await self.backend.delete(key)
+            agm = getattr(self, "agm_engine", None)
+            existing_belief = agm.belief_state.get_belief(key) if agm else None
+            self._sync_cached_state(key, None)
             if self.enable_audit:
+                before = existing or wm_entry or existing_belief
+                metadata = {"deleted": result}
+                if reason is not None:
+                    metadata["reason"] = reason
                 self.audit.log(
                     OpType.FORGET,
                     key,
-                    before_value=existing.to_dict() if existing else (wm_entry.to_dict() if wm_entry else None),
-                    metadata={"deleted": result},
+                    before_value=before.to_dict() if before else None,
+                    metadata=metadata,
                 )
             await self._append_memory_event(
                 operation=EventOperation.FORGET.value,

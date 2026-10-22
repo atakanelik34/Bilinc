@@ -1242,33 +1242,22 @@ async def _handle_forget(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
     key = args["key"]
     reason = args.get("reason", "manual")
 
-    removed = False
-    existing_backend = await plane.backend.load(key) if plane.backend else None
-    existing_belief = None
+    agm = getattr(plane, "agm_engine", None)
+    had_belief = bool(agm and agm.belief_state.get_belief(key))
+    in_working_memory = hasattr(plane, "working_memory") and plane.working_memory.get(key) is not None
+    stored = await plane.backend.load(key) if plane.backend else None
 
-    # Remove from AGM
-    if hasattr(plane, "agm_engine") and plane.agm_engine:
-        existing_belief = plane.agm_engine.belief_state.get_belief(key)
-        result = plane.agm_engine.contract(key)
-        removed = result.success
-    if hasattr(plane, "working_memory"):
-        plane.working_memory.remove(key)
-    if plane.backend:
-        removed = await plane.backend.delete(key) or removed
-    if plane.enable_audit and plane.audit and (existing_backend or existing_belief):
-        plane.audit.log(
-            OpType.FORGET,
-            key,
-            before_value=(existing_backend.to_dict() if existing_backend else existing_belief.to_dict()),
-            metadata={"reason": reason, "deleted": removed},
-        )
+    backend_removed = False
+    if stored is not None or had_belief or in_working_memory:
+        # One path for every caller: backend row, belief cache, graph, audit and event.
+        backend_removed = await plane.forget(key, reason=reason)
 
     return _result_text({
         "tool": "forget",
         "key": key,
         "reason": reason,
-        "removed": removed,
-        "backend_removed": removed,
+        "removed": backend_removed or had_belief or in_working_memory,
+        "backend_removed": backend_removed,
     })
 
 
