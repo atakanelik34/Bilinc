@@ -449,6 +449,9 @@ class SQLiteBackend(StorageBackend):
         touched = self._entity_ids_for_memory_key(conn, key)
         conn.execute("DELETE FROM entity_mentions WHERE memory_key = ?", (key,))
         self._prune_orphan_entities(conn, touched)
+        # Vectors are derived from the value; they go with it, not on the daemon's next pass.
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_embeddings'").fetchone():
+            conn.execute("DELETE FROM memory_embeddings WHERE memory_key = ?", (key,))
         r = conn.execute("DELETE FROM memories WHERE key = ?", (key,))
         conn.commit()
         return r.rowcount > 0
