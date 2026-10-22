@@ -21,7 +21,8 @@ import os
 import re
 import json
 import time
-from typing import Any, Dict, List, Optional
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Tuple
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.event_ledger import EventOperation
 from bilinc.core.working_memory import WorkingMemory
@@ -31,6 +32,7 @@ from bilinc.core.verifier import StateVerifier
 from bilinc.core.audit import AuditTrail, OpType
 from bilinc.core.decay import compute_new_strength, should_prune
 from bilinc.core.rerank import rerank_config, rerank_keys
+from bilinc.core.text_fold import TURKISH_STOPWORDS, fold_text, folded_terms, query_stopwords, search_terms
 from bilinc.core.temporal import (
     classify_temporal_query,
     entry_event_timestamp,
@@ -241,12 +243,7 @@ class StatePlane:
             # tokenizer (for example, ``system's`` -> ``system`` + ``s``).
             "s",
         }
-    )
-    # Turkish function words, dropped from Postgres full-text queries only
-    # (the English list above already applies there too).
-    PG_FTS_EXTRA_STOPWORDS = frozenset(
-        {"ve", "veya", "ile", "bir", "bu", "şu", "o", "da", "de", "ki", "mi", "mı", "mu", "mü", "ne", "için", "gibi", "ama", "çok", "daha"}
-    )
+    ) | TURKISH_STOPWORDS
     REFLECTION_DEFAULT_THRESHOLD = 0.55
     REFLECTION_MAX_PASSES = 3
     RECALL_EXPLAIN_SENSITIVE_KEYS = {
@@ -279,6 +276,9 @@ class StatePlane:
         self.verifier = StateVerifier() if enable_verification else None
         self.audit = self._build_audit_trail() if enable_audit else None
         self._ops_count = 0
+        # Folded lexical surface per memory key: (fingerprint, folded text, tokens). See _lexical_surface.
+        self._lexical_surface_cache: "OrderedDict[str, Tuple[Tuple[int, int], str, frozenset]]" = OrderedDict()
+        self._lexical_surface_cache_chars = 0
 
         # Observability (Phase 4)
         self.metrics = MetricsCollector()
@@ -1207,7 +1207,7 @@ class StatePlane:
     ) -> List[str]:
         reasons: List[str] = []
         tokens = set(self._tokenize_query(query))
-        text = f"{entry.key} {entry.value}".lower()
+        text = fold_text(f"{entry.key} {entry.value}")
         matching_tokens = sorted(token for token in tokens if token and token in text)
         if signals.get("lexical", 0.0) > 0:
             token_note = f" ({', '.join(matching_tokens[:5])})" if matching_tokens else ""
@@ -1941,7 +1941,8 @@ class StatePlane:
         return True
 
     def _tokenize_query(self, query: str) -> List[str]:
-        return [token for token in re.findall(r"[a-zA-Z0-9_]+", query.lower()) if token]
+        """Folded letter/digit terms, so Turkish words stay whole (see ``text_fold``)."""
+        return [token for token in search_terms(query) if token]
 
     @staticmethod
     def _normalize_lexical_token(token: str) -> str:
@@ -1968,6 +1969,37 @@ class StatePlane:
         if normalized.endswith("s") and len(normalized) > 3:
             return normalized[:-1]
         return normalized
+
+    # Upper bound on folded characters kept across all cached memories.
+    LEXICAL_SURFACE_CACHE_MAX_CHARS = 32_000_000
+
+    def _lexical_surface(self, entry: MemoryEntry) -> Tuple[str, frozenset]:
+        """The folded surface text of a memory and its normalized tokens, cached.
+
+        Recall scores every candidate on every pass, and folding is the costly
+        step. There is one entry per memory key, checked against a fingerprint
+        of the unfolded text, so an edited memory replaces its entry instead of
+        reading a stale fold. The cache is bounded by folded characters and
+        evicts least recently used memories first.
+        """
+        surface = self._retrieval_surface_text(entry)
+        fingerprint = (len(surface), hash(surface))
+        cache = self._lexical_surface_cache
+        cached = cache.get(entry.key)
+        if cached is not None and cached[0] == fingerprint:
+            cache.move_to_end(entry.key)
+            return cached[1], cached[2]
+        folded = fold_text(surface)
+        tokens = frozenset(self._normalize_lexical_token(token) for token in folded_terms(folded) if token)
+        if cached is not None:
+            self._lexical_surface_cache_chars -= len(cached[1])
+        cache[entry.key] = (fingerprint, folded, tokens)
+        cache.move_to_end(entry.key)
+        self._lexical_surface_cache_chars += len(folded)
+        while self._lexical_surface_cache_chars > self.LEXICAL_SURFACE_CACHE_MAX_CHARS and len(cache) > 1:
+            _, (_, evicted, _) = cache.popitem(last=False)
+            self._lexical_surface_cache_chars -= len(evicted)
+        return folded, tokens
 
     def _normalized_lexical_tokens(self, text: str) -> set[str]:
         return {
@@ -2089,7 +2121,7 @@ class StatePlane:
             return 0.0
         coverage: set[str] = set()
         for result in results:
-            text = f"{result.get('key', '')} {result.get('value', '')}".lower()
+            text = fold_text(f"{result.get('key', '')} {result.get('value', '')}")
             for token in tokens:
                 if token in text:
                     coverage.add(token)
@@ -2126,31 +2158,28 @@ class StatePlane:
             "perf": "performance",
             "obs": "observability",
         }
-        tokens = self._tokenize_query(query)
+        # Keep the words as written: a folded rewrite would lose the Turkish
+        # letters that later passes use to read the query as Turkish.
         expanded_tokens: List[str] = []
-        for token in tokens:
-            expanded_tokens.append(token)
-            mapped = expansions.get(token)
+        for term in re.findall(r"[^\W_]+", query or ""):
+            expanded_tokens.append(term)
+            mapped = expansions.get(fold_text(term))
             if mapped and mapped not in expanded_tokens:
                 expanded_tokens.append(mapped)
         return " ".join(expanded_tokens)
 
     def _rank_lexical_keys(self, query: str, candidates: Dict[str, MemoryEntry]) -> List[str]:
+        stopwords = query_stopwords(query, self.LEXICAL_QUERY_STOPWORDS)
         tokens = {
             token
             for token in self._tokenize_query(query)
-            if token not in self.LEXICAL_QUERY_STOPWORDS
+            if token not in stopwords
         }
         if not tokens:
             return []
-        surface_texts = {
-            key: self._retrieval_surface_text(entry).lower()
-            for key, entry in candidates.items()
-        }
-        normalized_surfaces = {
-            key: self._normalized_lexical_tokens(text)
-            for key, text in surface_texts.items()
-        }
+        surfaces = {key: self._lexical_surface(entry) for key, entry in candidates.items()}
+        surface_texts = {key: surface[0] for key, surface in surfaces.items()}
+        normalized_surfaces = {key: surface[1] for key, surface in surfaces.items()}
         # Use corpus specificity as a bounded tie-breaker. Coverage remains
         # primary, while ubiquitous conversational words no longer decide the
         # order when several memories match the same number of query terms.
@@ -2218,9 +2247,8 @@ class StatePlane:
             return []
         scored: List[tuple[str, float]] = []
         for key, entry in candidates.items():
-            text = self._retrieval_surface_text(entry).casefold()
+            text, normalized_surface = self._lexical_surface(entry)
             matching_tokens = [token for token in tokens if token in text]
-            normalized_surface = self._normalized_lexical_tokens(text)
             normalized_matches = [
                 self._normalize_lexical_token(token)
                 for token in tokens
@@ -2302,7 +2330,7 @@ class StatePlane:
             entry = candidates.get(key)
             if entry is None:
                 continue
-            text = self._retrieval_surface_text(entry).lower()
+            text = self._lexical_surface(entry)[0]
             coverage = sum(1 for token in tokens if token in text) / len(tokens)
             best_coverage = max(best_coverage, coverage)
 
@@ -2351,11 +2379,11 @@ class StatePlane:
         outweigh content words; they are dropped unless nothing else is left.
         """
         terms = list(dict.fromkeys(re.findall(r"[^\W_]+", query or "", flags=re.UNICODE)))
+        stopwords = query_stopwords(query, self.LEXICAL_QUERY_STOPWORDS)
         content = [
             term
             for term in terms
-            if term.casefold() not in self.LEXICAL_QUERY_STOPWORDS
-            and term.casefold() not in self.PG_FTS_EXTRA_STOPWORDS
+            if fold_text(term) not in stopwords
         ]
         return " ".join(content or terms)
 
@@ -2859,6 +2887,7 @@ class StatePlane:
             vs = VectorStore(conn)
             self._cached_vector_store = vs
             self._cached_hybrid_search = HybridSearch(conn, vs)
+            self._cached_hybrid_search.query_stopwords = self.LEXICAL_QUERY_STOPWORDS
             return self._cached_hybrid_search
         except Exception:
             return None

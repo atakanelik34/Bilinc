@@ -7,6 +7,7 @@ Supports all 5 brain-mimetic memory types with typed tables.
 from __future__ import annotations
 
 import json
+import logging
 try:
     import pysqlite3 as sqlite3  # macOS: has SQLITE_ENABLE_LOAD_EXTENSION
 except ImportError:
@@ -19,6 +20,39 @@ from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.event_ledger import MemoryEvent, create_memory_event, event_from_dict, stable_json
 from bilinc.storage.backend import StorageBackend
 
+logger = logging.getLogger(__name__)
+
+FTS_V2_TABLE = "mem_fts_v2"
+# Porter keeps English inflections together (``running`` finds ``run``); it
+# runs after unicode61 has folded case and diacritics. Turkish suffixes are
+# handled at query time with prefix terms (see ``HybridSearch.keyword_search``).
+FTS_V2_TOKENIZER = "porter unicode61 remove_diacritics 2"
+
+
+def FTS_V2_TEXT_SQL(column: str) -> str:
+    """SQL for the text ``mem_fts_v2`` indexes from a ``memories.value`` column.
+
+    Values are stored as ``json.dumps`` output, which escapes every non-ASCII
+    character (``girişimci`` is stored as ``giri\\u015fimci``), so indexing the
+    raw column made Turkish words unsearchable. This decodes the JSON in SQL:
+    every string and number in the value, in document order. A value that is
+    not JSON is indexed as it is. The fold lives in SQL rather than in Python
+    so rows written by older code, or by tools that write the table directly,
+    are indexed the same way. ``unicode61 remove_diacritics 2`` then ignores
+    case and diacritics; the dotless ``ı`` has no decomposition, so it is
+    replaced here (see ``bilinc.core.text_fold``).
+    """
+    decoded = (
+        f"CASE WHEN json_valid({column}) THEN "
+        f"(SELECT group_concat(atom, ' ') FROM json_tree({column}) WHERE type IN ('text', 'integer', 'real')) "
+        f"ELSE COALESCE({column}, '') END"
+    )
+    return f"replace(replace(COALESCE({decoded}, ''), 'ı', 'i'), 'İ', 'i')"
+
+
+def FTS_V2_KEY_SQL(column: str) -> str:
+    return f"replace(replace(COALESCE({column}, ''), 'ı', 'i'), 'İ', 'i')"
+
 
 class SQLiteBackend(StorageBackend):
     """
@@ -29,7 +63,7 @@ class SQLiteBackend(StorageBackend):
     - Schema versioning with automatic migrations
     """
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
     # A full sweep leaves recently saved or relinked entities alone (by updated_at):
     # another process may be about to link a mention to one.
     ORPHAN_SWEEP_MIN_AGE_SECONDS = 3600.0
@@ -239,13 +273,16 @@ class SQLiteBackend(StorageBackend):
 
         except Exception:
             pass  # FTS5 not available
+        # Version 2 is the Turkish-aware index; a database without it stays at 1
+        # and the next open tries again.
+        target_version = self.SCHEMA_VERSION if self._ensure_fts_v2() else 1
 
         # Record schema version if not already present
         current = self._conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
-        if current is None or current["version"] < self.SCHEMA_VERSION:
+        if current is None or current["version"] < target_version:
             self._conn.execute(
                 "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
-                (self.SCHEMA_VERSION, time.time())
+                (target_version, time.time())
             )
 
         # Writes prune only the entities they touch. Orphans left by older versions
@@ -260,7 +297,69 @@ class SQLiteBackend(StorageBackend):
                 "INSERT OR IGNORE INTO maintenance (name, done_at) VALUES ('orphan_entity_sweep', ?)", (time.time(),)
             )
         self._conn.commit()
-    
+
+    def _ensure_fts_v2(self) -> bool:
+        """Create and fill the Turkish-aware full-text index once per database.
+
+        Many processes open the same file, so the check and the one-time fill
+        run inside one write transaction: a second process waits, then finds
+        the table and only re-asserts the triggers. The legacy ``mem_fts``
+        table stays in place for processes still running older code.
+
+        Returns whether the index and its triggers are in place. Recall falls
+        back to the legacy index when they are not.
+        """
+        c = self._conn
+        c.commit()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            exists = c.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (FTS_V2_TABLE,)
+            ).fetchone()
+            if exists is None:
+                c.execute(
+                    f"CREATE VIRTUAL TABLE {FTS_V2_TABLE} "
+                    f"USING fts5(key, body, tokenize='{FTS_V2_TOKENIZER}')"
+                )
+                c.execute(
+                    f"INSERT INTO {FTS_V2_TABLE}(rowid, key, body) "
+                    f"SELECT rowid, {FTS_V2_KEY_SQL('memories.key')}, {FTS_V2_TEXT_SQL('memories.value')} FROM memories"
+                )
+            c.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS {FTS_V2_TABLE}_insert AFTER INSERT ON memories BEGIN
+                    INSERT INTO {FTS_V2_TABLE}(rowid, key, body)
+                    VALUES (new.rowid, {FTS_V2_KEY_SQL('new.key')}, {FTS_V2_TEXT_SQL('new.value')});
+                END
+            """)
+            # Only key and value feed the index; decay passes rewrite strength
+            # columns often and must not re-index the row each time.
+            c.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS {FTS_V2_TABLE}_update AFTER UPDATE OF key, value ON memories BEGIN
+                    DELETE FROM {FTS_V2_TABLE} WHERE rowid = old.rowid;
+                    INSERT INTO {FTS_V2_TABLE}(rowid, key, body)
+                    VALUES (new.rowid, {FTS_V2_KEY_SQL('new.key')}, {FTS_V2_TEXT_SQL('new.value')});
+                END
+            """)
+            c.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS {FTS_V2_TABLE}_delete AFTER DELETE ON memories BEGIN
+                    DELETE FROM {FTS_V2_TABLE} WHERE rowid = old.rowid;
+                END
+            """)
+            c.commit()
+            return True
+        except sqlite3.OperationalError as exc:
+            c.rollback()
+            reason = str(exc).lower()
+            if "locked" in reason or "busy" in reason:
+                logger.warning("Turkish-aware index not built, database busy; retrying on the next open: %s", exc)
+            else:
+                logger.warning("Turkish-aware index unavailable (FTS5 or JSON functions missing): %s", exc)
+            return False
+        except Exception as exc:
+            c.rollback()
+            logger.warning("Turkish-aware index not built: %s", exc)
+            return False
+
     async def save(self, entry: MemoryEntry) -> bool:
         entry.last_accessed = time.time()
         entry.access_count += 1
@@ -1057,23 +1156,59 @@ class SQLiteBackend(StorageBackend):
         rows = self._get_conn().execute("SELECT memory_type, COUNT(*) as cnt FROM memories GROUP BY memory_type")
         return {r["memory_type"]: r["cnt"] for r in rows}
     
+    def _has_fts_v2(self) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (FTS_V2_TABLE,)
+        ).fetchone()
+        return row is not None
+
     def fts_rebuild(self):
-        """Rebuild FTS5 index from memories table. Call during consolidation."""
+        """Rebuild the full-text indexes from the memories table. Call during consolidation.
+
+        Rebuilds the Turkish-aware index when the database has it, and the
+        legacy ``mem_fts`` index that older processes and schema-v1 databases use.
+        """
+        c = self._conn
         try:
-            self._conn.execute("INSERT INTO mem_fts(mem_fts) VALUES('rebuild')")
-            self._conn.commit()
+            c.commit()
+            c.execute("BEGIN IMMEDIATE")
+            if self._has_fts_v2():
+                c.execute(f"DELETE FROM {FTS_V2_TABLE}")
+                c.execute(
+                    f"INSERT INTO {FTS_V2_TABLE}(rowid, key, body) "
+                    f"SELECT rowid, {FTS_V2_KEY_SQL('memories.key')}, {FTS_V2_TEXT_SQL('memories.value')} FROM memories"
+                )
+            if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mem_fts'").fetchone():
+                c.execute("INSERT INTO mem_fts(mem_fts) VALUES('rebuild')")
+            c.commit()
             return True
         except Exception:
+            c.rollback()
             return False
 
     def fts_search(self, query: str, limit: int = 10):
-        """Direct FTS5 search. Returns (rowid, key, rank) tuples."""
+        """Direct full-text search. Returns (rowid, key, rank) tuples.
+
+        Uses the Turkish-aware index when the database has it, otherwise the
+        legacy index, as ``HybridSearch.keyword_search`` does.
+        """
+        from bilinc.core.text_fold import search_terms
+
         try:
-            fts_query = ' OR '.join(query.split())
-            return self._conn.execute("""
-                SELECT rowid, key, rank FROM mem_fts
-                WHERE mem_fts MATCH ?
-                ORDER BY rank LIMIT ?
+            if not self._has_fts_v2():
+                fts_query = " OR ".join(query.split())
+                return self._conn.execute("""
+                    SELECT rowid, key, rank FROM mem_fts
+                    WHERE mem_fts MATCH ?
+                    ORDER BY rank LIMIT ?
+                """, (fts_query, limit)).fetchall()
+            fts_query = " OR ".join(f'"{term}"' for term in dict.fromkeys(search_terms(query)))
+            if not fts_query:
+                return []
+            return self._conn.execute(f"""
+                SELECT m.rowid, m.key, f.rank FROM {FTS_V2_TABLE} f JOIN memories m ON m.rowid = f.rowid
+                WHERE {FTS_V2_TABLE} MATCH ?
+                ORDER BY f.rank LIMIT ?
             """, (fts_query, limit)).fetchall()
         except Exception:
             return []

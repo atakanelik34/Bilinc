@@ -21,8 +21,21 @@ from threading import RLock
 import time
 from typing import Dict, List, Optional, Tuple
 
+from bilinc.core.text_fold import fold_text, is_turkish_query, query_stopwords
+
 # Upper bound on OR-ed terms in one FTS5 MATCH query.
 FTS_MAX_QUERY_TERMS = 64
+# In a Turkish query, terms at least this long also match longer words that
+# start with them, so a stem finds its suffixed forms (``basvuru`` finds
+# ``basvurusu``). Shorter terms stay exact: ``ai`` must not match ``ajan``.
+# English queries rely on the index's Porter stemmer instead; prefix terms
+# measurably hurt them (LongMemEval dev, 2026-10-22).
+FTS_PREFIX_MIN_CHARS = 4
+# bm25 column weights for (key, body) in the Turkish-aware index. Keys are
+# short, deliberate topic labels ("project:atlas:launch-plan"); a match
+# there says more than one word somewhere in a long transcript.
+FTS_KEY_WEIGHT = 10.0
+FTS_BODY_WEIGHT = 1.0
 
 
 def serialize_float32(vector: List[float]) -> bytes:
@@ -301,6 +314,28 @@ class HybridSearch:
         self._semantic_config: Optional[Tuple[str, str, str]] = None
         self._semantic_disabled = False
         self._semantic_lock = RLock()
+        self._folded_fts: Optional[bool] = None
+        # Folded function words dropped from full-text queries. Every term is
+        # OR-ed, so words like "what" or "mi" match nearly every long memory
+        # and push session logs above the memory that was asked about.
+        self.query_stopwords: frozenset = frozenset()
+
+    def _has_folded_fts(self) -> bool:
+        """Whether the database has the Turkish-aware index (schema v2).
+
+        Only a positive answer is cached: another process may build the index
+        after this object was created, and the lookup is cheap.
+        """
+        if self._folded_fts:
+            return True
+        try:
+            row = self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mem_fts_v2'"
+            ).fetchone()
+            self._folded_fts = row is not None
+        except Exception:
+            self._folded_fts = False
+        return self._folded_fts
 
     def _rowids_for_allowed_keys(self, allowed_keys: Optional[set[str]]) -> Optional[set[int]]:
         if allowed_keys is None:
@@ -421,7 +456,8 @@ class HybridSearch:
         allowed_keys: Optional[set[str]] = None,
     ) -> List[Tuple[int, float]]:
         """FTS5 search with query expansion and LIKE fallback."""
-        expanded = expand_query(query)
+        folded_index = self._has_folded_fts()
+        expanded = expand_query(fold_text(query) if folded_index else query)
         allowed_rowids = self._rowids_for_allowed_keys(allowed_keys)
         if allowed_rowids is not None and not allowed_rowids:
             return []
@@ -432,17 +468,31 @@ class HybridSearch:
             # Keep every distinct term (bounded): conversational questions open
             # with filler ("I wanted to follow up on our previous conversation
             # about ..."), so a short prefix cap dropped all content words.
-            terms = list(dict.fromkeys(re.findall(r"[\w]+", expanded, flags=re.UNICODE)))
-            fts_query = " OR ".join(f'"{term}"' for term in terms[:FTS_MAX_QUERY_TERMS])
+            if folded_index:
+                terms = list(dict.fromkeys(re.findall(r"[^\W_]+", expanded, flags=re.UNICODE)))
+                stopwords = query_stopwords(query, self.query_stopwords)
+                terms = [term for term in terms if term not in stopwords] or terms
+                prefix_min = FTS_PREFIX_MIN_CHARS if is_turkish_query(query) else None
+                fts_query = " OR ".join(
+                    f'"{term}"*' if prefix_min is not None and len(term) >= prefix_min else f'"{term}"'
+                    for term in terms[:FTS_MAX_QUERY_TERMS]
+                )
+                table = "mem_fts_v2"
+                rank = f"bm25(mem_fts_v2, {FTS_KEY_WEIGHT}, {FTS_BODY_WEIGHT})"
+            else:
+                terms = list(dict.fromkeys(re.findall(r"[\w]+", expanded, flags=re.UNICODE)))
+                fts_query = " OR ".join(f'"{term}"' for term in terms[:FTS_MAX_QUERY_TERMS])
+                table = "mem_fts"
+                rank = "rank"
             if not fts_query:
                 return []
             if allowed_rowids is None:
-                results = self.conn.execute("""
-                    SELECT rowid, rank FROM mem_fts WHERE mem_fts MATCH ? ORDER BY rank LIMIT ?
+                results = self.conn.execute(f"""
+                    SELECT rowid, {rank} AS score FROM {table} WHERE {table} MATCH ? ORDER BY score LIMIT ?
                 """, (fts_query, top_k)).fetchall()
             else:
-                results = self.conn.execute("""
-                    SELECT rowid, rank FROM mem_fts WHERE mem_fts MATCH ? ORDER BY rank
+                results = self.conn.execute(f"""
+                    SELECT rowid, {rank} AS score FROM {table} WHERE {table} MATCH ? ORDER BY score
                 """, (fts_query,)).fetchall()
                 results = [row for row in results if int(row[0]) in allowed_rowids]
             if results:

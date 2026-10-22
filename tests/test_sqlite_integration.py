@@ -66,13 +66,13 @@ class TestSQLiteBackendInit:
         b = _make_backend(tmp_db_path)
         row = b._conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
         assert row is not None
-        assert row["version"] == 1
+        assert row["version"] == 2
         _run(b.close())
 
     def test_schema_version_recorded(self, tmp_db_path: str):
         b = _make_backend(tmp_db_path)
         stats = _run(b.stats())
-        assert stats["schema_version"] == 1
+        assert stats["schema_version"] == 2
         _run(b.close())
 
     def test_wal_mode_enabled(self, tmp_db_path: str):
@@ -143,7 +143,7 @@ class TestSQLiteBackendCRUD:
         _run(b.save(MemoryEntry(key="e1", value="v2", memory_type=MemoryType.EPISODIC)))
         stats = _run(b.stats())
         assert stats["total_entries"] == 2
-        assert stats["schema_version"] == 1
+        assert stats["schema_version"] == 2
         _run(b.close())
 
 

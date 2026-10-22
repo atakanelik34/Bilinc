@@ -87,7 +87,7 @@ class TestHealthCheck:
         post_init = plane.health.readiness()
         assert post_init["status"] == "healthy"
         assert post_init["components"]["backend"]["status"] == "ok"
-        assert post_init["components"]["backend"]["schema_version"] == 1
+        assert post_init["components"]["backend"]["schema_version"] == 2
 
     def test_liveness_can_be_degraded_while_readiness_failed(self, tmp_path):
         plane = StatePlane(
