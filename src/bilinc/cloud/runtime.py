@@ -531,10 +531,16 @@ class ProjectRuntimeManager:
             return await self._build_semantic_encoder()
 
     async def _build_semantic_encoder(self) -> Any:
-        from bilinc.embeddings.hosted import HostedIndexer, build_encoder
-
+        choice = (os.getenv("BILINC_CLOUD_EMBEDDINGS") or "").strip().lower()
+        if choice in {"", "0", "off", "false", "no"}:
+            # Off: never import the embedding stack (numpy and the model
+            # libraries are not needed, and may not be installed).
+            self._encoder_failed = True
+            return None
         try:
-            encoder = await asyncio.to_thread(build_encoder, os.getenv("BILINC_CLOUD_EMBEDDINGS"))
+            from bilinc.embeddings.hosted import HostedIndexer, build_encoder
+
+            encoder = await asyncio.to_thread(build_encoder, choice)
         except Exception as exc:
             # Recall keeps working without the signal; the log says why.
             logger.error("Semantic recall disabled: encoder failed to load (%s)", type(exc).__name__)
