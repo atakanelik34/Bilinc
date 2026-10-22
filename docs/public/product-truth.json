@@ -2,10 +2,10 @@
   "schema_version": 1,
   "canonical_repository": "https://github.com/ReARCLabs/bilinc",
   "source_commit": "04ff9fb092b34bf99a9195a3098203d1f1f3c5dd",
-  "verified_at": "2026-10-21",
+  "verified_at": "2026-10-22",
   "package": {
     "name": "bilinc",
-    "version": "2.5.0",
+    "version": "2.6.0",
     "requires_python": ">=3.10",
     "license": "BUSL-1.1",
     "install": "pip install bilinc",

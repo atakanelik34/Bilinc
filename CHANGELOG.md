@@ -2,6 +2,25 @@
 
 All notable changes to Bilinc.
 
+## [2.6.0] — 2026-10-22
+
+### Added
+
+- `list_memories(order="newest" | "oldest")` (SDK), `bilinc list --order newest|oldest` (CLI), `order` on the Cloud MCP `list_memories` tool and on `POST /api/cloud/memory/list` list memories by update time; the default stays key order. A cursor is bound to the order it was issued under.
+- `sources=[...]` (SDK), `bilinc list --source` (CLI, repeatable) and `sources` on the Cloud MCP `list_memories` tool filter by who saved a memory, as the dashboard already could.
+- The list response echoes the `order` and `sources` it applied. The SDK raises `capability_unavailable` instead of returning a page whose order or filter an older service ignored.
+- The Cloud MCP `forget` tool takes `purge`.
+- Error codes `purge_blocked` (409), `purge_disabled` (403), `purge_unsupported` (501, not retryable) and `secret_detected` (422) are part of the SDK's canonical table; a 422 raises `BilincValidationError`.
+- Write responses (`commit`, `revise`, `confirm`, `forget`, `rollback`) carry the runtime's `warnings` when a credential-looking field was stored as `[REDACTED]`; the remote MCP `remember` and `revise` replies say so in their text.
+- `POST /api/cloud/memory/rollback/preview` honours `limit` (1–500) for its key lists.
+- Internal runtime: hosted semantic recall over stored vectors, off unless a deployment enables it; `memory_list_order` capability.
+
+### Fixed
+
+- Hosted full-text search folds case, Turkish I variants and diacritics on both the index and the query, so a query typed without Turkish letters finds memories written with them. Existing indexes are rebuilt once on first load.
+- A purge no longer leaves the value in places a later step could copy back: another process's stale cache, the in-memory revision log, or graph entities named only by the purged memory. A purge cut short can be finished.
+- Local recall: Turkish words match with and without diacritics, and persisted semantic vectors can come from a local model or a hosted embedding service.
+
 ## [2.5.0] — 2026-10-21
 
 ### Added
