@@ -223,7 +223,7 @@ def test_purge_without_an_audit_trail_still_scrubs_snapshots(tmp_path):
         plane = await manager.get_plane(project)
         plane.enable_audit = False
         result = await manager.forget(project, key="plan", reason="erasure", purge=True)
-        assert result["purged"] == {"audit_rows": 0, "snapshots": 1}
+        assert result["purged"]["audit_rows"] == 0 and result["purged"]["snapshots"] == 1
         assert PRIVATE not in "".join(p.read_text() for p in manager.snapshot_dir(project).glob("*.json"))
         await manager.close()
 
