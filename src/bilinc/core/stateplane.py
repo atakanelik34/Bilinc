@@ -32,7 +32,7 @@ from bilinc.core.verifier import StateVerifier
 from bilinc.core.audit import AuditTrail, OpType
 from bilinc.core.decay import compute_new_strength, should_prune
 from bilinc.core.rerank import rerank_config, rerank_keys
-from bilinc.core.text_fold import TURKISH_STOPWORDS, fold_text, folded_terms, search_terms
+from bilinc.core.text_fold import TURKISH_STOPWORDS, fold_text, folded_terms, query_stopwords, search_terms
 from bilinc.core.temporal import (
     classify_temporal_query,
     entry_event_timestamp,
@@ -244,11 +244,6 @@ class StatePlane:
             "s",
         }
     ) | TURKISH_STOPWORDS
-    # Turkish function words, dropped from Postgres full-text queries only
-    # (the English list above already applies there too).
-    PG_FTS_EXTRA_STOPWORDS = frozenset(
-        {"ve", "veya", "ile", "bir", "bu", "şu", "o", "da", "de", "ki", "mi", "mı", "mu", "mü", "ne", "için", "gibi", "ama", "çok", "daha"}
-    )
     REFLECTION_DEFAULT_THRESHOLD = 0.55
     REFLECTION_MAX_PASSES = 3
     RECALL_EXPLAIN_SENSITIVE_KEYS = {
@@ -2163,20 +2158,22 @@ class StatePlane:
             "perf": "performance",
             "obs": "observability",
         }
-        tokens = self._tokenize_query(query)
+        # Keep the words as written: a folded rewrite would lose the Turkish
+        # letters that later passes use to read the query as Turkish.
         expanded_tokens: List[str] = []
-        for token in tokens:
-            expanded_tokens.append(token)
-            mapped = expansions.get(token)
+        for term in re.findall(r"[^\W_]+", query or ""):
+            expanded_tokens.append(term)
+            mapped = expansions.get(fold_text(term))
             if mapped and mapped not in expanded_tokens:
                 expanded_tokens.append(mapped)
         return " ".join(expanded_tokens)
 
     def _rank_lexical_keys(self, query: str, candidates: Dict[str, MemoryEntry]) -> List[str]:
+        stopwords = query_stopwords(query, self.LEXICAL_QUERY_STOPWORDS)
         tokens = {
             token
             for token in self._tokenize_query(query)
-            if token not in self.LEXICAL_QUERY_STOPWORDS
+            if token not in stopwords
         }
         if not tokens:
             return []
@@ -2382,11 +2379,11 @@ class StatePlane:
         outweigh content words; they are dropped unless nothing else is left.
         """
         terms = list(dict.fromkeys(re.findall(r"[^\W_]+", query or "", flags=re.UNICODE)))
+        stopwords = query_stopwords(query, self.LEXICAL_QUERY_STOPWORDS)
         content = [
             term
             for term in terms
-            if term.casefold() not in self.LEXICAL_QUERY_STOPWORDS
-            and term.casefold() not in self.PG_FTS_EXTRA_STOPWORDS
+            if fold_text(term) not in stopwords
         ]
         return " ".join(content or terms)
 

@@ -21,7 +21,7 @@ from threading import RLock
 import time
 from typing import Dict, List, Optional, Tuple
 
-from bilinc.core.text_fold import fold_text, has_turkish_letters
+from bilinc.core.text_fold import fold_text, is_turkish_query, query_stopwords
 
 # Upper bound on OR-ed terms in one FTS5 MATCH query.
 FTS_MAX_QUERY_TERMS = 64
@@ -470,8 +470,9 @@ class HybridSearch:
             # about ..."), so a short prefix cap dropped all content words.
             if folded_index:
                 terms = list(dict.fromkeys(re.findall(r"[^\W_]+", expanded, flags=re.UNICODE)))
-                terms = [term for term in terms if term not in self.query_stopwords] or terms
-                prefix_min = FTS_PREFIX_MIN_CHARS if has_turkish_letters(query) else None
+                stopwords = query_stopwords(query, self.query_stopwords)
+                terms = [term for term in terms if term not in stopwords] or terms
+                prefix_min = FTS_PREFIX_MIN_CHARS if is_turkish_query(query) else None
                 fts_query = " OR ".join(
                     f'"{term}"*' if prefix_min is not None and len(term) >= prefix_min else f'"{term}"'
                     for term in terms[:FTS_MAX_QUERY_TERMS]

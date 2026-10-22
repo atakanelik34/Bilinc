@@ -33,15 +33,19 @@ _FAST_FOLD = str.maketrans({
     "Ú": "u", "ú": "u", "Ñ": "n", "ñ": "n",
 })
 
-# Function words that carry no topic in Turkish questions, in folded form.
+# Turkish function words, in folded form, that are never content in English
+# or technical text either; dropped from every query.
 TURKISH_STOPWORDS = frozenset(
     {
-        "ve", "veya", "ile", "bir", "bu", "su", "o", "da", "de", "ki", "mi", "mu",
-        "ne", "icin", "gibi", "ama", "cok", "daha", "mis", "mus", "musun", "misin",
-        "midir", "mudur", "nedir", "neydi", "nasil", "neden", "hangi", "kim",
-        "kimdi", "olan", "olarak", "var", "yok", "en", "her", "hem",
+        "ve", "veya", "ile", "bir", "bu", "icin", "gibi", "ama", "cok", "daha",
+        "mis", "mus", "musun", "misin", "midir", "mudur", "nedir", "neydi", "nasil",
+        "neden", "hangi", "kimdi", "olan", "olarak", "yok", "hem",
     }
 )
+# Turkish function words that are also English or technical terms ("su" the
+# command, "var" the keyword, "en" the language code); dropped only from a
+# query that reads as Turkish.
+TURKISH_CONTEXT_STOPWORDS = frozenset({"su", "var", "en", "o", "ne", "da", "de", "ki", "mi", "mu", "her", "kim"})
 
 
 def fold_text(text: object) -> str:
@@ -62,6 +66,21 @@ _TURKISH_LETTERS = frozenset("çÇğĞıİöÖşŞüÜ")
 def has_turkish_letters(text: object) -> bool:
     """Whether text uses a letter that only Turkish (among en/tr) has."""
     return any(ch in _TURKISH_LETTERS for ch in str(text or ""))
+
+
+# Function words that mark a query as Turkish even without Turkish letters.
+# Short ones are left out: "ve" also comes from English contractions ("I've").
+_TURKISH_QUERY_MARKERS = TURKISH_STOPWORDS - {"ve", "bu", "ama", "ile", "hem", "bir", "mis", "mus"}
+
+
+def is_turkish_query(text: object) -> bool:
+    """Whether a query reads as Turkish: a Turkish letter or a clearly Turkish function word."""
+    return has_turkish_letters(text) or bool(_TURKISH_QUERY_MARKERS.intersection(search_terms(text)))
+
+
+def query_stopwords(query: object, base: frozenset) -> frozenset:
+    """The stopwords to drop from one query: ``base``, plus the ambiguous Turkish ones for a Turkish query."""
+    return base | TURKISH_CONTEXT_STOPWORDS if is_turkish_query(query) else base
 
 
 def folded_terms(folded: str) -> List[str]:

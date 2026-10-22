@@ -272,3 +272,30 @@ async def test_keyword_search_switches_to_the_v2_index_once_another_process_buil
     assert search._has_folded_fts() is True
     assert search.keyword_search("girisimci", top_k=3)
     await backend.close()
+
+
+def test_ambiguous_turkish_stopwords_only_apply_to_turkish_queries():
+    plane = StatePlane()
+    candidates = {
+        "shell": MemoryEntry(key="shell", value="Use the su command to switch users"),
+        "js": MemoryEntry(key="js", value="A var declaration is function scoped"),
+        "other": MemoryEntry(key="other", value="Notes about switching teams"),
+    }
+    assert plane._rank_lexical_keys("su command", candidates)[0] == "shell"
+    assert plane._rank_lexical_keys("var", candidates) == ["js"]
+    # In a Turkish question the same words are function words.
+    from bilinc.core.text_fold import TURKISH_CONTEXT_STOPWORDS, query_stopwords
+    assert "var" in query_stopwords("bu konu var mı", frozenset())
+    assert "var" not in query_stopwords("var declaration", frozenset())
+    assert TURKISH_CONTEXT_STOPWORDS <= query_stopwords("Hangi dosya", frozenset())
+
+
+def test_reflection_rewrites_keep_the_query_turkish():
+    from bilinc.core.text_fold import is_turkish_query
+
+    plane = StatePlane()
+    rewritten = plane._expand_reflection_query("ElevenLabs hibesine seçildik mi? deploy")
+    assert rewritten == "ElevenLabs hibesine seçildik mi deploy deployment"
+    assert is_turkish_query(rewritten)
+    assert is_turkish_query("basvuru durumu nedir")  # no Turkish letters, but clearly Turkish
+    assert not is_turkish_query("I've seen the deployment run")
