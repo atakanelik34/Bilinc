@@ -892,12 +892,12 @@ class ProjectRuntimeManager:
                 "state_version": state_version(plane),
             }
 
-        if plane.knowledge_graph:
-            plane.knowledge_graph.ingest_memory_entry(winning)
-
         if not await plane.backend.save(winning):
             raise ValueError("invalid_request")
         await plane._project_claims_for_entry(winning)
+        await plane._record_revision(
+            key, previous_state, winning, revision_strategy=conflict_strategy.value, origin="bilinc_cloud"
+        )
 
         next_state = winning.to_dict()
         if plane.enable_audit and plane.audit and next_state != previous_state:
