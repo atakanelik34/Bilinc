@@ -321,15 +321,20 @@ class HybridSearch:
         self.query_stopwords: frozenset = frozenset()
 
     def _has_folded_fts(self) -> bool:
-        """Whether the database has the Turkish-aware index (schema v2)."""
-        if self._folded_fts is None:
-            try:
-                row = self.conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mem_fts_v2'"
-                ).fetchone()
-                self._folded_fts = row is not None
-            except Exception:
-                self._folded_fts = False
+        """Whether the database has the Turkish-aware index (schema v2).
+
+        Only a positive answer is cached: another process may build the index
+        after this object was created, and the lookup is cheap.
+        """
+        if self._folded_fts:
+            return True
+        try:
+            row = self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mem_fts_v2'"
+            ).fetchone()
+            self._folded_fts = row is not None
+        except Exception:
+            self._folded_fts = False
         return self._folded_fts
 
     def _rowids_for_allowed_keys(self, allowed_keys: Optional[set[str]]) -> Optional[set[int]]:

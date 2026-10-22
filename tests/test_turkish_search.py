@@ -254,3 +254,21 @@ async def test_rebuild_keeps_both_indexes_and_direct_search_folds(tmp_path):
     assert [row[1] for row in backend.fts_search("ISTANBUL")] == ["tr"]
     assert backend._conn.execute("SELECT count(*) FROM mem_fts").fetchone()[0] == 1
     await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_switches_to_the_v2_index_once_another_process_builds_it(tmp_path):
+    backend = await _backend(tmp_path / "late.sqlite")
+    await backend.save(MemoryEntry(key="tr", value="girişimci"))
+    for name in ("insert", "update", "delete"):
+        backend._conn.execute(f"DROP TRIGGER {FTS_V2_TABLE}_{name}")
+    backend._conn.execute(f"DROP TABLE {FTS_V2_TABLE}")
+    backend._conn.commit()
+    conn = backend._get_conn()
+    search = HybridSearch(conn, VectorStore(conn))
+    assert search._has_folded_fts() is False
+
+    assert backend._ensure_fts_v2() is True  # as a newer process opening the file would
+    assert search._has_folded_fts() is True
+    assert search.keyword_search("girisimci", top_k=3)
+    await backend.close()
