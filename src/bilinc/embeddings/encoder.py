@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
@@ -81,6 +82,8 @@ class OnnxE5Encoder:
         return pooled.astype(np.float32)
 
 
+logger = logging.getLogger(__name__)
+
 # The callers' e5 prefixes, rewritten into each model's own prompt format.
 _QUERY, _PASSAGE = "query: ", "passage: "
 WORKERS_AI_PROMPTS = {
@@ -113,6 +116,8 @@ class WorkersAIEncoder:
         if not re.fullmatch(r"[0-9a-f]{32}", self.account_id):
             raise ValueError("BILINC_CF_ACCOUNT_ID must be a Cloudflare account id")
         path = Path(token_file or os.environ.get("BILINC_CF_AI_TOKEN_FILE") or WORKERS_AI_TOKEN_FILE).expanduser()
+        if path.stat().st_mode & 0o077:
+            logger.warning("%s is readable by other users; chmod 600 it", path)
         token = path.read_text(encoding="utf-8").strip()
         if not token:
             raise ValueError("the Workers AI token file is empty")
@@ -134,28 +139,48 @@ class WorkersAIEncoder:
         return text
 
     def encode(self, texts: Sequence[str]) -> np.ndarray:
+        return self._run(texts, self.timeout, self.retries)
+
+    def encode_query(self, text: str, timeout: float = 1.5) -> np.ndarray:
+        """One query vector, fast or not at all: recall stops waiting after about a second anyway."""
+        return self._run([text], timeout, 0)[0]
+
+    def _run(self, texts: Sequence[str], timeout: float, retries: int) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
         body = json.dumps({"text": [self._prompt(text) for text in texts]}).encode("utf-8")
         request = urllib.request.Request(
             self._url, data=body, headers={"Authorization": self._auth, "Content-Type": "application/json"}
         )
-        for attempt in range(self.retries + 1):
+        for attempt in range(retries + 1):
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout, context=self._context) as response:
+                with urllib.request.urlopen(request, timeout=timeout, context=self._context) as response:
                     payload = json.loads(response.read())
                 break
             except Exception as exc:
-                if attempt == self.retries:
-                    # The message names the failure, never the request headers.
-                    raise RuntimeError(f"Workers AI request failed: {type(exc).__name__}") from None
+                status = getattr(exc, "code", None)
+                # A rejected request (bad input, revoked token) fails the same way again.
+                rejected = isinstance(status, int) and 400 <= status < 500 and status not in (408, 429)
+                if attempt == retries or rejected:
+                    # The message names the failure, never the request or its headers.
+                    detail = f"{type(exc).__name__} {status}" if isinstance(status, int) else type(exc).__name__
+                    raise WorkersAIError(f"Workers AI request failed: {detail}", status) from None
                 time.sleep(0.5 * 2 ** attempt)
-        rows = np.asarray(payload["result"]["data"], dtype=np.float32)
-        if rows.shape[0] != len(texts):
-            raise RuntimeError("Workers AI returned a different number of vectors")
+        try:
+            rows = np.asarray(payload["result"]["data"], dtype=np.float32)
+        except (KeyError, TypeError, ValueError):
+            raise WorkersAIError("Workers AI returned no vectors", None) from None
+        if rows.ndim != 2 or rows.shape[0] != len(texts):
+            raise WorkersAIError("Workers AI returned a different number of vectors", None)
         rows /= np.clip(np.linalg.norm(rows, axis=1, keepdims=True), 1e-12, None)
         self.dim = int(rows.shape[1])
         return rows
+
+
+class WorkersAIError(RuntimeError):
+    def __init__(self, message: str, status: Optional[int]):
+        super().__init__(message)
+        self.status = status if isinstance(status, int) else None
 
 
 def _tls_context():

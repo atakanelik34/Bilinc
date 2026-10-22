@@ -25,7 +25,7 @@ def main(argv=None) -> int:
     )
     serve.add_argument("--model", default=None, help="Workers AI model (default @cf/baai/bge-m3)")
     serve.add_argument("--threads", type=int, default=2)
-    serve.add_argument("--batch", type=int, default=4)
+    serve.add_argument("--batch", type=int, default=None, help="texts per encoder call (default 4 local, 32 Workers AI)")
     serve.add_argument("--poll", type=float, default=10.0)
     serve.add_argument(
         "--exclude-prefix", action="append", default=None,
@@ -44,16 +44,20 @@ def main(argv=None) -> int:
         from bilinc.embeddings.encoder import WORKERS_AI_DEFAULT_MODEL, WorkersAIEncoder
 
         encoder = WorkersAIEncoder(args.model or WORKERS_AI_DEFAULT_MODEL)
+        batch = args.batch or 32
     else:
+        if args.model:
+            parser.error("--model applies to --encoder workers-ai only")
         from bilinc.embeddings.encoder import OnnxE5Encoder
 
         encoder = OnnxE5Encoder(threads=args.threads)
+        batch = args.batch or 4
     daemon = EmbeddingDaemon(
         args.db,
         encoder,
         socket_path=args.socket,
         exclude_prefixes=RECOMMENDED_EXCLUDE_PREFIXES if args.exclude_prefix is None else args.exclude_prefix,
-        batch_size=args.batch,
+        batch_size=batch,
         poll_seconds=args.poll,
     )
     asyncio.run(daemon.serve())

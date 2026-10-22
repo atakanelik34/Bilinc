@@ -45,6 +45,10 @@ RECOMMENDED_EXCLUDE_PREFIXES = ("session_archive:", "hermes_turn_")
 
 
 class EmbeddingDaemon:
+    FAILURE_BACKOFF = 60.0
+    FAILURE_BACKOFF_MAX = 3600.0
+    MAX_FAILURES_PER_PASS = 3
+
     def __init__(
         self,
         db_path: str,
@@ -64,6 +68,8 @@ class EmbeddingDaemon:
         self.keys_per_pass = max(1, int(keys_per_pass))
         self.poll_seconds = float(poll_seconds)
         self.last_pass: Dict[str, int] = {}
+        # key -> (text sha, retry not before, backoff seconds)
+        self._failed: Dict[str, Tuple[str, float, float]] = {}
 
     # ------------------------------------------------------------------ indexing
     def _connect(self):
@@ -114,12 +120,31 @@ class EmbeddingDaemon:
         wanted, indexed = self._wanted()
         model = self.encoder.model_id
         stale = [key for key in indexed if key not in wanted]
-        todo = [key for key, (sha, _) in wanted.items() if indexed.get(key) != sha]
+        now = time.time()
+        # A memory the encoder rejected waits before it is tried again, unless its text changed.
+        self._failed = {key: item for key, item in self._failed.items() if key in wanted and wanted[key][0] == item[0]}
+        todo = [
+            key for key, (sha, _) in wanted.items()
+            if indexed.get(key) != sha and not (key in self._failed and self._failed[key][1] > now)
+        ]
         batch = todo[: self.keys_per_pass]
         embedded: List[Tuple[str, str, object]] = []
+        failures_in_a_row = 0
+        tried = 0
         for key in batch:
             sha, text = wanted[key]
-            embedded.append((key, sha, self._embed(text)))
+            tried += 1
+            try:
+                embedded.append((key, sha, self._embed(text)))
+                self._failed.pop(key, None)
+                failures_in_a_row = 0
+            except Exception as exc:
+                delay = min(self.FAILURE_BACKOFF_MAX, 2 * self._failed.get(key, (None, 0, self.FAILURE_BACKOFF / 2))[2])
+                self._failed[key] = (sha, time.time() + delay, delay)
+                failures_in_a_row += 1
+                logger.warning("embedding failed for one memory (%s); retry in %.0f s", exc, delay)
+                if failures_in_a_row >= self.MAX_FAILURES_PER_PASS:
+                    break  # the encoder is down or rejects everything: stop calling it this pass
         conn = self._connect()
         written = 0
         try:
@@ -139,11 +164,14 @@ class EmbeddingDaemon:
             conn.commit()
         finally:
             conn.close()
+        remaining = len(todo) - tried
         self.last_pass = {
             "embedded": written,
             "removed": removed,
-            "pending": len(todo) - len(batch),
-            "indexed": len(wanted) - (len(todo) - len(batch)),
+            # Only a pass that made progress asks for another right away.
+            "pending": remaining if written else 0,
+            "failed": len(self._failed),
+            "indexed": len(wanted) - remaining - len(self._failed),
         }
         return self.last_pass
 
@@ -186,7 +214,12 @@ class EmbeddingDaemon:
             line = await reader.readline()
             request = json.loads(line.decode("utf-8") or "{}")
             if request.get("op") == "encode_query":
-                vector = (await asyncio.to_thread(self.encoder.encode, [QUERY_PREFIX + str(request.get("text", ""))]))[0]
+                text = QUERY_PREFIX + str(request.get("text", ""))
+                encode_query = getattr(self.encoder, "encode_query", None)
+                if encode_query is not None:  # a remote encoder: short timeout, no retries
+                    vector = await asyncio.to_thread(encode_query, text)
+                else:
+                    vector = (await asyncio.to_thread(self.encoder.encode, [text]))[0]
                 reply = {"model": self.encoder.model_id, "vector": base64.b64encode(vector.tobytes()).decode("ascii")}
             elif request.get("op") == "health":
                 reply = {"model": self.encoder.model_id, "db": self.db_path, **self.last_pass}

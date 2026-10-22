@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import io
 import json
+import traceback
+import urllib.error
 
 import numpy as np
 import pytest
@@ -62,14 +64,56 @@ def test_bge_m3_gets_the_text_without_prefixes(monkeypatch, token_file):
 
 def test_retries_then_fails_without_leaking_the_token(monkeypatch, token_file):
     calls = []
-    monkeypatch.setattr(encoder_module.urllib.request, "urlopen", _fake_urlopen(calls, fail=10))
+
+    def urlopen(request, timeout, context):
+        calls.append(request)
+        # An error whose text carries the header: it must not reach the caller.
+        raise OSError(f"unreachable ({request.get_header('Authorization')})")
+
+    monkeypatch.setattr(encoder_module.urllib.request, "urlopen", urlopen)
     monkeypatch.setattr(encoder_module.time, "sleep", lambda _: None)
     enc = WorkersAIEncoder(account_id=ACCOUNT, token_file=token_file, retries=2)
     with pytest.raises(RuntimeError) as raised:
         enc.encode(["x"])
     assert len(calls) == 3
-    assert "test-token-value" not in str(raised.value)
-    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__
+    assert "test-token-value" not in "".join(traceback.format_exception(raised.value))
+
+
+def test_a_rejected_request_is_not_retried_and_names_the_status(monkeypatch, token_file):
+    calls = []
+
+    def urlopen(request, timeout, context):
+        calls.append(request)
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(encoder_module.urllib.request, "urlopen", urlopen)
+    with pytest.raises(encoder_module.WorkersAIError) as raised:
+        WorkersAIEncoder(account_id=ACCOUNT, token_file=token_file, retries=2).encode(["x"])
+    assert len(calls) == 1 and raised.value.status == 401 and "401" in str(raised.value)
+
+
+def test_a_query_uses_a_short_timeout_and_no_retries(monkeypatch, token_file):
+    seen = []
+
+    def urlopen(request, timeout, context):
+        seen.append(timeout)
+        raise OSError("slow")
+
+    monkeypatch.setattr(encoder_module.urllib.request, "urlopen", urlopen)
+    enc = WorkersAIEncoder(account_id=ACCOUNT, token_file=token_file)
+    with pytest.raises(RuntimeError):
+        enc.encode_query("query: x")
+    assert seen == [1.5]
+
+
+def test_an_answer_without_vectors_is_an_error(monkeypatch, token_file):
+    def urlopen(request, timeout, context):
+        return _Response(json.dumps({"success": False, "errors": [{"message": "bad"}]}).encode())
+
+    monkeypatch.setattr(encoder_module.urllib.request, "urlopen", urlopen)
+    with pytest.raises(encoder_module.WorkersAIError):
+        WorkersAIEncoder(account_id=ACCOUNT, token_file=token_file).encode(["x"])
 
 
 def test_recovers_after_a_transient_failure(monkeypatch, token_file):
