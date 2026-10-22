@@ -20,7 +20,7 @@ All notable changes to Bilinc.
 - Hosted full-text search folds case, Turkish I variants and diacritics on both the index and the query, so a query typed without Turkish letters finds memories written with them. Existing indexes are rebuilt once on first load.
 - A purge no longer leaves the value in places a later step could copy back: another process's stale cache, the in-memory revision log, or graph entities named only by the purged memory. A purge cut short can be finished.
 - After a hosted forget, saving the same key again works as a new memory: it was refused (`409 commit_rejected`) at lower importance, or written back as a revision of the forgotten value at equal importance. Rollback had the same stale-state problem.
-- A revise no longer copies the previous value's text into the new entry's metadata; only a fingerprint of it is kept. Entries written before 2.6.0 keep that text until the key is revised again.
+- A save or revise that replaces a value no longer copies the previous value's text into the new entry's metadata; only a fingerprint of it is kept. Entries written before 2.6.0 keep that text until their value is next replaced.
 - Purge also replaces the memory's event-history payloads, which a 2.5.0 hosted purge left in place, and the purge result reports how many it replaced (`events`).
 - Internal runtime: local recall matches Turkish words with and without diacritics, and persisted semantic vectors can come from a local model or a hosted embedding service.
 
