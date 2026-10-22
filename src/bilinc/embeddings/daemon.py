@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import fcntl
 import json
 import logging
 import os
+import socket
 import stat
 import time
 from pathlib import Path
@@ -140,6 +142,27 @@ class EmbeddingDaemon:
             await asyncio.sleep(self.poll_seconds)
 
     # ------------------------------------------------------------------ socket
+    def _lock_database(self) -> None:
+        """Hold an exclusive lock for this database: one daemon writes its vectors."""
+        handle = open(self.db_path + ".embed.lock", "w")
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.close()
+            raise RuntimeError(f"another embedding daemon is already indexing {self.db_path}")
+        self._lock_handle = handle  # released when the process exits
+
+    def _socket_answers(self) -> bool:
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        probe.settimeout(1.0)
+        try:
+            probe.connect(str(self.socket_path))
+            return True
+        except OSError:  # refused or gone: nobody is listening
+            return False
+        finally:
+            probe.close()
+
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             line = await reader.readline()
@@ -162,6 +185,7 @@ class EmbeddingDaemon:
     async def serve(self) -> None:
         if self.socket_path is None:
             raise ValueError("socket_path is required to serve")
+        self._lock_database()
         parent = self.socket_path.parent
         if not parent.exists():
             # Only a directory the daemon creates is made private; an existing
@@ -174,6 +198,8 @@ class EmbeddingDaemon:
         if mode is not None:
             if not stat.S_ISSOCK(mode):
                 raise FileExistsError(f"{self.socket_path} exists and is not a socket")
+            if self._socket_answers():
+                raise RuntimeError(f"an embedding daemon is already listening on {self.socket_path}")
             self.socket_path.unlink()  # a stale socket from an earlier run
         previous_umask = os.umask(0o177)  # the socket is created 0600: no window before a chmod
         try:

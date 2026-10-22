@@ -181,3 +181,20 @@ def test_daemon_leaves_existing_directories_and_files_alone(tmp_path):
         assert oct(os.stat(directory).st_mode & 0o777) == "0o755"
     finally:
         shutil.rmtree(directory, ignore_errors=True)
+
+
+
+def test_a_second_daemon_does_not_take_over(tmp_path):
+    db = tmp_path / "one.sqlite"
+    with _RunningDaemon(db) as running:
+        same_socket = EmbeddingDaemon(str(tmp_path / "other.sqlite"), HashingEncoder(), socket_path=str(running.socket))
+        with pytest.raises(RuntimeError, match="already listening"):
+            asyncio.new_event_loop().run_until_complete(same_socket.serve())
+        other_dir = Path(tempfile.mkdtemp(prefix="bsec", dir="/tmp"))
+        try:
+            same_db = EmbeddingDaemon(str(db), HashingEncoder(), socket_path=str(other_dir / "s.sock"))
+            with pytest.raises(RuntimeError, match="already indexing"):
+                asyncio.new_event_loop().run_until_complete(same_db.serve())
+        finally:
+            shutil.rmtree(other_dir, ignore_errors=True)
+        assert client.request({"op": "health"}, path=running.socket)["db"] == str(db)
