@@ -227,9 +227,19 @@ def test_purge_eval_candidates_removes_rows_naming_the_key_only(kind, tmp_path):
 
 @pytest.mark.parametrize("kind", BACKENDS)
 def test_purge_eval_candidates_matches_the_scrubbed_key(kind, tmp_path):
+    key = "note:" + "x" * 600  # long: stored capped, so scrub_query(key) differs from the key
+    _scrubbed_key_case(kind, tmp_path, key)
+
+
+@pytest.mark.parametrize("kind", BACKENDS)
+def test_purge_eval_candidates_matches_a_secret_shaped_key(kind, tmp_path):
+    key = "note:sk-abcdefghijklmnop:token"  # token-shaped: stored as "note:[REDACTED]:token"
+    _scrubbed_key_case(kind, tmp_path, key)
+
+
+def _scrubbed_key_case(kind, tmp_path, key):
     from bilinc.eval.capture import scrub_query
 
-    key = "note:" + "x" * 600  # long: stored capped, so scrub_query(key) differs from the key
     stored = scrub_query(key)
     assert stored != key
 

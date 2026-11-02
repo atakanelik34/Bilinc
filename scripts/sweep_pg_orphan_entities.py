@@ -16,6 +16,7 @@ uses the same plain connection and the same statement as
 the last hour. Run it after confirming that the off-site backup covers the tenant
 schemas. Safe to run twice. With ``--execute``, ``deleted`` is the authoritative number: ``orphans``
 is counted just before in a separate statement, so the two can differ under concurrent writes.
+A tenant schema with an unexpected name stops the run before anything is deleted (fail closed).
 """
 from __future__ import annotations
 

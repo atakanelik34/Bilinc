@@ -195,3 +195,21 @@ def test_postgres_hosted_purge_leaves_no_trace_and_fails_closed(tmp_path, monkey
         await manager.close()
 
     _run(scenario())
+
+
+def test_a_real_recall_by_key_is_captured_and_removed_by_the_purge(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILINC_EVAL_CAPTURE", "1")
+
+    async def scenario():
+        plane = await _stdio_plane(tmp_path)
+        await plane.commit_with_agm_async(key="plan", value=VALUE, importance=0.9)
+        await plane.recall(key="plan")
+        await plane.forget("plan")
+        await plane.recall(key="plan")  # found nothing: only query and detail.key name the key
+        before = await plane.backend.list_eval_candidates()
+        assert before and all(r.query == "plan" or "plan" in r.retrieved_keys for r in before)
+        payload = json.loads((await _handle_forget(plane, {"key": "plan", "purge": True}))[0].text)
+        assert "purged" in payload
+        return await plane.backend.list_eval_candidates()
+
+    assert _run(scenario()) == []
