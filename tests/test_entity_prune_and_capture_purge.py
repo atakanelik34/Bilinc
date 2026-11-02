@@ -177,12 +177,15 @@ def test_init_deletes_no_old_orphan_and_the_sweep_is_opt_in(kind, tmp_path):
     async def go():
         backend = await _open(kind, tmp_path)
         try:
-            await backend.save_entity(Entity(canonical_name="Old Orphan", updated_at=time.time() - 7200))
+            await backend.save_entity(Entity(canonical_name="Old Orphan"))
             await backend.save_entity(Entity(canonical_name="Fresh Orphan"))
+            old = time.time() - 7200  # save_entity stamps "now" on SQLite, so age the row by hand
             if kind == "sqlite":
-                backend._conn.execute("DELETE FROM maintenance")  # as for a database that was never swept
-                backend._conn.commit()
-            await backend.init()  # a second open must delete nothing on Postgres
+                backend._get_conn().execute("UPDATE entities SET updated_at = ? WHERE canonical_name = 'Old Orphan'", (old,))
+                backend._get_conn().commit()
+            else:
+                await backend.pool.execute("UPDATE entities SET updated_at = $1 WHERE canonical_name = 'Old Orphan'", old)
+            await backend.init()  # opening again must not delete anything that already exists
             after_init = await _entity_names(kind, backend)
             counted = await backend.sweep_orphan_entities(dry_run=True)
             after_dry = await _entity_names(kind, backend)
@@ -194,11 +197,11 @@ def test_init_deletes_no_old_orphan_and_the_sweep_is_opt_in(kind, tmp_path):
             await _close(kind, backend)
 
     after_init, counted, after_dry, removed, after_sweep, again = _run(go())
-    if kind == "postgres":
-        assert "Old Orphan" in after_init
-    assert counted == 1 and after_dry >= {"Old Orphan", "Fresh Orphan"} or kind == "sqlite"
-    assert removed >= 1 and "Old Orphan" not in after_sweep and "Fresh Orphan" in after_sweep
-    assert again == 0
+    assert {"Old Orphan", "Fresh Orphan"} <= after_init
+    assert counted == 1  # only the old one is old enough to count (age guard)
+    assert after_dry == after_init  # a dry run deletes nothing
+    assert removed == 1 and after_sweep == {"Fresh Orphan"}  # the recent orphan survives
+    assert again == 0  # idempotent
 
 
 @pytest.mark.parametrize("kind", BACKENDS)
@@ -226,7 +229,7 @@ def test_purge_eval_candidates_removes_rows_naming_the_key_only(kind, tmp_path):
 def test_purge_eval_candidates_matches_the_scrubbed_key(kind, tmp_path):
     from bilinc.eval.capture import scrub_query
 
-    key = "note:AKIAABCDEFGHIJKLMNOP:token"  # secret-shaped: stored as scrub_query(key)
+    key = "note:" + "x" * 600  # long: stored capped, so scrub_query(key) differs from the key
     stored = scrub_query(key)
     assert stored != key
 

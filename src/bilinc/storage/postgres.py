@@ -106,9 +106,26 @@ def _decode_json_text(raw: Any) -> Any:
         return raw
 
 
+def orphan_entities_statement(prefix: str = "", *, count: bool = False) -> str:
+    """SQL that deletes (or counts) entities no memory mentions any more, older than ``$1``.
+
+    ``prefix`` is an already quoted ``"schema".`` for callers on a plain connection
+    (``scripts/sweep_pg_orphan_entities.py``); the backend leaves it empty because its
+    connections resolve names through the tenant schema.
+    """
+    where = (
+        f"updated_at < $1 AND NOT EXISTS (SELECT 1 FROM {prefix}entity_mentions m WHERE m.entity_id = {prefix}entities.id)"
+    )
+    if count:
+        return f"SELECT COUNT(*) FROM {prefix}entities WHERE {where}"
+    return f"DELETE FROM {prefix}entities WHERE {where}"
+
+
 class PostgresBackend(StorageBackend):
     # v3: the ``tsv`` text is folded (see fts_document); v2 rows are rebuilt once.
     SCHEMA_VERSION = 3
+    # The full sweep keeps entities saved or relinked this recently (another writer may be linking them).
+    ORPHAN_SWEEP_MIN_AGE_SECONDS = 3600.0
 
     def __init__(
         self,
@@ -562,26 +579,31 @@ class PostgresBackend(StorageBackend):
         if not self._initialized:
             await self.init()
         async with self.pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO entity_mentions (
-                    id, entity_id, memory_key, mention_text, source, confidence, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT(id) DO UPDATE SET
-                    entity_id=EXCLUDED.entity_id,
-                    memory_key=EXCLUDED.memory_key,
-                    mention_text=EXCLUDED.mention_text,
-                    source=EXCLUDED.source,
-                    confidence=EXCLUDED.confidence
-                """,
-                mention.id,
-                mention.entity_id,
-                mention.memory_key,
-                mention.mention_text,
-                mention.source,
-                mention.confidence,
-                mention.created_at,
-            )
+            async with conn.transaction():
+                previous = await conn.fetchval("SELECT entity_id FROM entity_mentions WHERE id=$1", mention.id)
+                await conn.execute(
+                    """
+                    INSERT INTO entity_mentions (
+                        id, entity_id, memory_key, mention_text, source, confidence, created_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT(id) DO UPDATE SET
+                        entity_id=EXCLUDED.entity_id,
+                        memory_key=EXCLUDED.memory_key,
+                        mention_text=EXCLUDED.mention_text,
+                        source=EXCLUDED.source,
+                        confidence=EXCLUDED.confidence
+                    """,
+                    mention.id,
+                    mention.entity_id,
+                    mention.memory_key,
+                    mention.mention_text,
+                    mention.source,
+                    mention.confidence,
+                    mention.created_at,
+                )
+                if previous is not None and previous != mention.entity_id:
+                    # the mention moved; its old entity may be orphaned
+                    await self._prune_orphans(conn, [previous])
         return True
 
     async def find_entity_by_id(self, entity_id: str):
@@ -637,13 +659,105 @@ class PostgresBackend(StorageBackend):
         )
         return [row["memory_key"] for row in rows]
 
-    async def delete_entity_mentions_for_memory_key(self, memory_key: str) -> int:
+    async def delete_entity_mentions_for_memory_key(self, memory_key: str, prune: bool = True) -> int:
+        """Delete a memory's mentions; ``prune=False`` leaves orphaned entities for the caller.
+
+        With ``prune=False`` the entities lose their last mention while the caller
+        re-adds it, so they are marked as just updated: the age-guarded full sweep
+        leaves them alone in the meantime. The lookup, the delete and the prune (or
+        the mark) run in one transaction.
+        """
         if not self._initialized:
             await self.init()
         async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                touched = await self._entity_ids(conn, memory_key)
+                result = await conn.execute("DELETE FROM entity_mentions WHERE memory_key=" + chr(36) + "1", memory_key)
+                if prune:
+                    await self._prune_orphans(conn, touched)
+                elif touched:
+                    await conn.execute(
+                        "UPDATE entities SET updated_at=" + chr(36) + "2 WHERE id = ANY(" + chr(36) + "1::text[])",
+                        touched,
+                        time.time(),
+                    )
+        return int(result.split()[-1])
+
+    async def entity_ids_for_memory_key(self, memory_key: str) -> list:
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            return await self._entity_ids(conn, memory_key)
+
+    async def prune_orphan_entities(self, entity_ids) -> int:
+        """Delete those of ``entity_ids`` that no longer have any mention."""
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            return await self._prune_orphans(conn, list(entity_ids))
+
+    async def sweep_orphan_entities(self, older_than: Optional[float] = None, dry_run: bool = False) -> int:
+        """Maintenance: delete every entity with no mentions (one full scan), or count them with ``dry_run``.
+
+        Entities saved or relinked within ``older_than`` seconds (default
+        ORPHAN_SWEEP_MIN_AGE_SECONDS) are kept, since a writer may be about to link them.
+        Never called from ``init``: sweeping existing tenants is an explicit, owner-run step.
+        """
+        if not self._initialized:
+            await self.init()
+        age = self.ORPHAN_SWEEP_MIN_AGE_SECONDS if older_than is None else older_than
+        cutoff = time.time() - age
+        async with self.pool.acquire() as conn:
+            if dry_run:
+                return int(await conn.fetchval(orphan_entities_statement(count=True), cutoff))
+            result = await conn.execute(orphan_entities_statement(), cutoff)
+        return int(result.split()[-1])
+
+    @staticmethod
+    async def _entity_ids(conn, memory_key: str) -> list:
+        rows = await conn.fetch("SELECT DISTINCT entity_id FROM entity_mentions WHERE memory_key=" + chr(36) + "1", memory_key)
+        return [row["entity_id"] for row in rows]
+
+    @staticmethod
+    async def _prune_orphans(conn, entity_ids) -> int:
+        """Delete the given entities that have no mention left.
+
+        No recency guard: a write prunes right after it saved its own mentions, and the hosted
+        runtime serializes mutations per project, which is what keeps a concurrent writer from
+        having its fresh entity pruned before its mention exists. A second worker process is
+        outside that guarantee (as for the audit chain head).
+        """
+        ids = list(dict.fromkeys(entity_ids))
+        if not ids:
+            return 0
+        result = await conn.execute(
+            "DELETE FROM entities WHERE id = ANY(" + chr(36) + "1::text[]) "
+            "AND NOT EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = entities.id)",
+            ids,
+        )
+        return int(result.split()[-1])
+
+    async def purge_eval_candidates(self, memory_key: str) -> int:
+        """Delete the capture rows that name ``memory_key`` (as a retrieved key, the query or ``detail.key``).
+
+        The stored form of a key is ``scrub_query(key)``, so both spellings are matched. A row whose
+        query only quotes a purged value, without naming the key, is not found (documented limit).
+        There is no index on these columns, so this scans the capture table; purges are rare.
+        """
+        from bilinc.eval.capture import scrub_query
+
+        if not self._initialized:
+            await self.init()
+        scrubbed = scrub_query(memory_key)
+        async with self.pool.acquire() as conn:
             result = await conn.execute(
-                "DELETE FROM entity_mentions WHERE memory_key=" + chr(36) + "1",
+                """
+                DELETE FROM eval_candidates
+                WHERE retrieved_keys @> to_jsonb($1::text) OR retrieved_keys @> to_jsonb($2::text)
+                   OR query IN ($1, $2) OR detail->>'key' IN ($1, $2)
+                """,
                 memory_key,
+                scrubbed,
             )
         return int(result.split()[-1])
 
@@ -1070,7 +1184,9 @@ class PostgresBackend(StorageBackend):
                 await conn.execute("SELECT 1 FROM bilinc_entries WHERE key = $1 FOR UPDATE", key)
                 await conn.execute("DELETE FROM bilinc_claims WHERE memory_key = $1", key)
                 # A forgotten memory must not keep entity links, as in the SQLite backend.
+                touched = await self._entity_ids(conn, key)
                 await conn.execute("DELETE FROM entity_mentions WHERE memory_key = $1", key)
+                await self._prune_orphans(conn, touched)
                 await conn.execute("DELETE FROM memory_embeddings WHERE memory_key = $1", key)
                 result = await conn.execute("DELETE FROM bilinc_entries WHERE key = $1", key)
             return result == "DELETE 1"
