@@ -14,7 +14,8 @@ does not initialise or migrate any tenant and writes nothing. A schema missing t
 uses the same plain connection and the same statement as
 ``PostgresBackend.sweep_orphan_entities``; it keeps entities saved or relinked in
 the last hour. Run it after confirming that the off-site backup covers the tenant
-schemas. Safe to run twice.
+schemas. Safe to run twice. With ``--execute``, ``deleted`` is the authoritative number: ``orphans``
+is counted just before in a separate statement, so the two can differ under concurrent writes.
 """
 from __future__ import annotations
 

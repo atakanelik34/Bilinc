@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 
@@ -12,6 +13,11 @@ from bilinc.core.stateplane import StatePlane
 from bilinc.eval.capture import EvalCaptureRow
 from bilinc.mcp_server.server_v2 import _handle_forget
 from bilinc.storage.sqlite import SQLiteBackend
+
+
+DSN = os.getenv("BILINC_TEST_POSTGRES_DSN")
+needs_postgres = pytest.mark.skipif(not DSN, reason="BILINC_TEST_POSTGRES_DSN not set")
+VALUE = "Quartz harbor plan: Dana Whitfield at Meridian Labs"
 
 
 def _run(coro):
@@ -37,12 +43,19 @@ async def _stdio_plane(tmp_path):
 def test_stdio_purge_deletes_capture_rows_that_name_the_key(tmp_path):
     async def scenario():
         plane = await _stdio_plane(tmp_path)
-        await plane.commit_with_agm_async(key="plan", value="Quartz harbor", importance=0.9)
+        await plane.commit_with_agm_async(key="plan", value=VALUE, importance=0.9)
         await plane.backend.record_eval_candidate(_row("find it", keys=["plan"]))
         await plane.backend.record_eval_candidate(_row("plan", detail={"key": "plan"}))
         await plane.backend.record_eval_candidate(_row("other", keys=["other"]))
         payload = json.loads((await _handle_forget(plane, {"key": "plan", "purge": True}))[0].text)
         assert "purged" in payload
+        # the purged value leaves no trace in the entity tables or the event ledger either
+        text = " ".join(
+            str(row)
+            for table in ("entities", "entity_mentions", "memory_events")
+            for row in plane.backend._get_conn().execute(f"SELECT * FROM {table}").fetchall()
+        )
+        assert "Quartz" not in text and "Meridian" not in text
         return [r.query for r in await plane.backend.list_eval_candidates()]
 
     assert _run(scenario()) == ["other"]
@@ -127,3 +140,58 @@ def test_hosted_purge_deletes_capture_rows_and_a_failure_is_not_swallowed(tmp_pa
         return [r.query for r in await plane.backend.list_eval_candidates()]
 
     assert _run(scenario()) == ["other"]
+
+
+@needs_postgres
+def test_postgres_hosted_purge_leaves_no_trace_and_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILINC_STORAGE_BACKEND", "postgres")
+    monkeypatch.setenv("BILINC_POSTGRES_DSN", DSN)
+    from bilinc.cloud.runtime import ProjectRuntimeManager
+    from bilinc.storage.postgres_tenancy import project_schema
+
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid.uuid4())
+
+    async def trace(conn, schema):
+        parts = []
+        for table in ("entities", "entity_mentions", "memory_events"):
+            rows = await conn.fetch(f'SELECT * FROM "{schema}".{table}')
+            parts.append(" ".join(str(dict(row)) for row in rows))
+        return " ".join(parts)
+
+    async def scenario():
+        import asyncpg
+
+        await manager.commit(project, key="plan", value=VALUE, importance=1.0)
+        await manager.commit(project, key="plan", value=VALUE + " (revised)", importance=1.0)
+        plane = await manager.get_plane(project)
+        # a recall(key) that found nothing: only the query and detail.key hold the key name
+        await plane.backend.record_eval_candidate(_row("plan", keys=[], detail={"key": "plan"}))
+        await plane.backend.record_eval_candidate(_row("find it", keys=["plan"]))
+        await plane.backend.record_eval_candidate(_row("other", keys=["other"], detail={"key": "other"}))
+        real = plane.backend.purge_eval_candidates
+
+        async def broken(key):
+            raise RuntimeError("disk trouble")
+
+        plane.backend.purge_eval_candidates = broken
+        with pytest.raises(RuntimeError):
+            await manager.forget(project, key="plan", reason="erasure", purge=True)
+
+        plane.backend.purge_eval_candidates = real  # the forget is committed; audit is on, so the retry is admitted
+        result = await manager.forget(project, key="plan", reason="erasure", purge=True)
+        assert "purged" in result
+
+        schema = project_schema(project)
+        conn = await asyncpg.connect(DSN)
+        try:
+            text = await trace(conn, schema)
+            assert "Quartz" not in text and "Meridian" not in text and "Dana" not in text
+            left = [row["query"] for row in await conn.fetch(f'SELECT query FROM "{schema}".eval_candidates')]
+            assert left == ["other"]
+        finally:
+            await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            await conn.close()
+        await manager.close()
+
+    _run(scenario())

@@ -1336,7 +1336,7 @@ async def _handle_forget(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
         try:
             result["purged"] = await _purge_key_history(plane, audit, key, reason)
         except Exception as exc:
-            logger.warning("purge of %r did not finish: %s", key, type(exc).__name__)
+            logger.warning("a purge did not finish: %s", type(exc).__name__)  # no key: the log must not keep what was purged
             # The forget is already committed; every purge step deletes by key, so a retry finishes it.
             return _result_text({
                 "tool": "forget",
