@@ -2,6 +2,16 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Changed
+
+- The security notes now say what a Postgres purge leaves on disk: removed values may remain as dead row versions, in index pages, in freed space that is not overwritten, in the write-ahead log and in backups, until those are vacuumed, reindexed or rewritten, or expire. The earlier text said only that old row versions stay until autovacuum.
+
+### Added
+
+- `scripts/vacuum_pg_tenants.py` reports, and with `--execute` vacuums (`--reindex` also rebuilds the indexes concurrently, `--full` rewrites the tables), the tables a purge touches in every hosted tenant schema. Without `--execute` it only reads. Lock waits are bounded (`--lock-timeout`), `--schema` limits it to named tenants, and the exit code is 1 when any tenant failed.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added

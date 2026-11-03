@@ -437,3 +437,6 @@ def test_built_sdist_does_not_ship_local_runtime_sources():
         and not name.endswith("tests/test_cloud_only_package.py")
         for name in names
     )
+    # operator scripts and internal docs stay in the repository checkout
+    top = sdist_path.name.removesuffix(".tar.gz")
+    assert not any(name.startswith((f"{top}/scripts/", f"{top}/docs/")) for name in names)
