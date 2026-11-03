@@ -3616,7 +3616,7 @@ class StatePlane:
         if hasattr(self, "agm_engine") and self.agm_engine:
             stats["agm"] = {
                 "beliefs": len(self.agm_engine.belief_state.beliefs),
-                "operations": len(self.agm_engine.operation_log),
+                "operations": self.agm_engine.operations_total,
                 "entrenchment_count": len(self.agm_engine.entrenchment),
             }
         if hasattr(self, "knowledge_graph") and self.knowledge_graph:

@@ -1518,7 +1518,7 @@ async def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List
         agm = plane.agm_engine
         status["agm"] = {
             "beliefs": len(agm.belief_state.get_all_beliefs()),
-            "operations": len(agm.operation_log),
+            "operations": agm.operations_total,
             "entrenchment_keys": len(agm.entrenchment),
             "last_operation": agm.operation_log[-1].operation.value if agm.operation_log else None,
         }

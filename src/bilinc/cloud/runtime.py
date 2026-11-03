@@ -1167,7 +1167,15 @@ class ProjectRuntimeManager:
         reason: str,
         snapshot_files: list[tuple[Path, dict[str, Any]]],
     ) -> dict[str, int]:
-        """Remove one key's values from the audit trail, event ledger, snapshots and entity index."""
+        """Remove one key's values from the audit trail, event ledger, snapshots and entity index.
+
+        The in-process revision log goes first: it only touches memory and cannot fail, so it is
+        clean even if a later step raises.
+        """
+        from bilinc.adaptive.agm_engine import redact_operation_log
+
+        if plane.agm_engine is not None:
+            redact_operation_log(plane.agm_engine, key)
         audit_rows = 0
         if plane.enable_audit and plane.audit:
             audit_rows = plane.audit.purge_key(key, metadata={"reason": reason, "origin": "bilinc_cloud"})

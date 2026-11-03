@@ -2,6 +2,13 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- A hosted purge now clears the key from the runtime's in-memory revision log, as the local MCP adapter's purge already did. The text of a purged value used to stay in that log, through the revisions of the key, until the runtime restarted.
+- The revision log keeps its newest 1000 records instead of growing without a limit. The `operations` figure in the status outputs still counts every operation.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added

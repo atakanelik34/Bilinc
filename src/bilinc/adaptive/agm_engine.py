@@ -94,6 +94,10 @@ class AGMResult:
 
 # ─── AGM Postulate Engine ──────────────────────────────────────
 
+#: How many revision records an engine keeps by default.
+DEFAULT_MAX_OPERATION_LOG = 1000
+
+
 class AGMEngine:
     """
     Full AGM Belief Revision Engine with Darwiche & Pearl iterated
@@ -110,10 +114,18 @@ class AGMEngine:
         self,
         belief_state: Optional[BeliefState] = None,
         default_strategy: ConflictStrategy = ConflictStrategy.ENTRENCHMENT,
+        max_operation_log: Optional[int] = DEFAULT_MAX_OPERATION_LOG,
     ):
+        if max_operation_log is not None and max_operation_log < 1:
+            raise ValueError("max_operation_log must be at least 1, or None for an unbounded log")
         self.belief_state = belief_state or BeliefState()
         self.default_strategy = default_strategy
+        # A debugging and explanation aid, not storage: the audit trail and the event ledger are the
+        # history. It keeps the newest ``max_operation_log`` records (None: all of them).
         self.operation_log: List[AGMResult] = []
+        self.max_operation_log = max_operation_log
+        #: Every operation ever recorded; never trimmed or redacted, so counters keep their meaning.
+        self.operations_total = 0
 
         # Epistemic entrenchment: total preorder over belief keys
         # Higher value = harder to give up
@@ -294,8 +306,16 @@ class AGMEngine:
             conflicts_resolved=0,  # expand never resolves, it may create
             explanation=explanation,
         )
-        self.operation_log.append(result)
+        self._record(result)
         return result
+
+    def _record(self, result: "AGMResult") -> None:
+        """Append one result to the operation log, trimming it to the newest ``max_operation_log``."""
+        self.operation_log.append(result)
+        self.operations_total += 1
+        cap = self.max_operation_log
+        if cap is not None and len(self.operation_log) > cap:
+            del self.operation_log[: len(self.operation_log) - cap]
 
     # ─── CONTRACT ──────────────────────────────────────────────
 
@@ -362,7 +382,7 @@ class AGMEngine:
             conflicts_resolved=0,
             explanation=explanation,
         )
-        self.operation_log.append(result)
+        self._record(result)
         return result
 
     # ─── REVISE ────────────────────────────────────────────────
@@ -410,7 +430,7 @@ class AGMEngine:
                 conflicts_resolved=0,
                 explanation=explanation,
             )
-            self.operation_log.append(result)
+            self._record(result)
             return result
 
         existing = self.belief_state.get_belief(entry.key)
@@ -521,7 +541,7 @@ class AGMEngine:
                 explanation=explanation,
             )
 
-        self.operation_log.append(result)
+        self._record(result)
         return result
 
     # ─── Darwiche & Pearl Iterated Revision ────────────────────
@@ -737,7 +757,7 @@ class AGMEngine:
             conflicts_resolved=len(losers),
             explanation=explanation,
         )
-        self.operation_log.append(result)
+        self._record(result)
         return result
 
 
