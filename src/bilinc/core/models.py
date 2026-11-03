@@ -10,6 +10,19 @@ from typing import Any, Dict, Optional
 from dataclasses import dataclass, field, asdict
 
 
+def ttl_expired(created_at, ttl, invalid_at, now, *, strict=False):
+    """Whether a TTL has run out, the way a TTL write defines it.
+
+    A TTL write sets ``invalid_at = write time + ttl`` and leaves ``created_at`` alone, so a row
+    that has an ``invalid_at`` is judged by that alone (callers check it themselves). Only a legacy
+    row with a TTL and no ``invalid_at`` counts ``created_at + ttl``. Takes parsed numbers; the
+    caller's own parser decides what an odd value means. ``strict`` compares with ``<``.
+    """
+    if invalid_at is not None or created_at is None or ttl is None:
+        return False
+    return created_at + ttl < now if strict else created_at + ttl <= now
+
+
 class MemoryType(str, Enum):
     """Brain-inspired 5-type memory taxonomy."""
     EPISODIC = "episodic"
@@ -195,7 +208,7 @@ class MemoryEntry:
         now = time.time()
         if self.invalid_at and now > self.invalid_at:
             return True
-        if self.ttl and (now - self.created_at) > self.ttl:
+        if self.ttl and ttl_expired(self.created_at, self.ttl, self.invalid_at or None, now, strict=True):
             return True
         return self.current_strength < 0.1
 
