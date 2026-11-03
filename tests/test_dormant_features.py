@@ -31,8 +31,13 @@ async def _plane(tmp_path, *, verification=False) -> StatePlane:
 
 def test_ingesting_conflicting_memories_creates_no_contradiction_edge():
     kg = KnowledgeGraph()
-    kg.ingest_memory_entry(MemoryEntry(key="mem:open", value="Apollo status open", memory_type=MemoryType.SEMANTIC))
-    kg.ingest_memory_entry(MemoryEntry(key="mem:closed", value="Apollo status closed", memory_type=MemoryType.SEMANTIC))
+    kg.ingest_memory_entry(MemoryEntry(
+        key="mem:open", value="Apollo Launch Program status: open. Houston Control confirmed it.",
+        memory_type=MemoryType.SEMANTIC))
+    kg.ingest_memory_entry(MemoryEntry(
+        key="mem:closed", value="Apollo Launch Program status: closed. Houston Control cancelled it.",
+        memory_type=MemoryType.SEMANTIC))
+    assert kg._edges, "the example must create edges, or the check below proves nothing"
     assert {edge.relation_type for edge in kg._edges} <= {EdgeType.RELATED_TO, EdgeType.SUPPORTS}
     assert kg.find_contradictions() == []
 
@@ -183,6 +188,11 @@ def test_hosted_postgres_keeps_valid_at_empty_and_the_fixed_scores(tmp_path, mon
             assert stored.value == "two"
             assert stored.valid_at is None and stored.superseded_by is None
             assert (stored.is_verified, stored.verification_score) == (True, 0.8)
+            plane = await manager.get_plane(project)
+            failing = plane._apply_entry_verification(MemoryEntry(key="bad", value="x", importance=-1.0))
+            await plane.backend.save(failing)           # a failed check: score 0.0 must survive the round trip too
+            reloaded = await plane.backend.load("bad")
+            assert (reloaded.is_verified, reloaded.verification_score) == (False, 0.0)
         finally:
             await manager.close()
 
