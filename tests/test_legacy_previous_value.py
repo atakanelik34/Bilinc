@@ -208,3 +208,71 @@ def test_the_version_token_of_a_legacy_row_changes_once_and_then_holds(kind, tmp
         return confirmed
 
     assert _run(go())["success"] is True
+
+
+async def _plane_with_stored_plan(kind, tmp_path, monkeypatch):
+    manager = await _manager(kind, tmp_path, monkeypatch)
+    project = str(uuid.uuid4())
+    await manager.commit(project, key="plan", value=VALUE, importance=1.0)
+    plane = await manager.get_plane(project)
+    clean = (await plane.backend.load("plan")).to_dict()
+    legacy = dict(clean, metadata=dict(clean["metadata"], previous_value=LEGACY))
+    return manager, plane, clean, legacy
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_local_diff_hides_the_legacy_field_and_drops_a_pure_removal(kind, tmp_path, monkeypatch):
+    import time
+
+    from bilinc.core.audit import OpType
+
+    async def go():
+        manager, plane, clean, legacy = await _plane_with_stored_plan(kind, tmp_path, monkeypatch)
+        ghost_clean = dict(clean, key="ghost")
+        ghost_legacy = dict(legacy, key="ghost")
+        t0 = time.time()
+        time.sleep(0.02)
+        plane.audit.log(OpType.CREATE, "ghost", after_value=ghost_legacy)
+        time.sleep(0.02)
+        t1 = time.time()
+        time.sleep(0.02)
+        plane.audit.log(OpType.UPDATE, "ghost", before_value=ghost_legacy, after_value=ghost_clean)
+        time.sleep(0.02)
+        t2 = time.time()
+        added = await plane.diff(t0, t1)
+        pure_removal = await plane.diff(t1, t2)
+        integrity = plane.audit.verify_integrity()
+        raw = await _everything_written(kind, plane)
+        await manager.close()
+        return added, pure_removal, integrity, raw
+
+    added, pure_removal, integrity, raw = _run(go())
+    assert any(item["key"] == "ghost" for item in added["added"])
+    assert "Dana Whitfield" not in json.dumps(added, default=str)
+    assert pure_removal["modified"] == [] and pure_removal["counts"]["modified"] == 0
+    assert "Dana Whitfield" in raw  # the audit rows themselves are untouched ...
+    assert integrity["valid"] is True  # ... so the chain still verifies
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_local_rollback_does_not_rewrite_a_key_that_only_differs_by_the_legacy_field(kind, tmp_path, monkeypatch):
+    import time
+
+    from bilinc.core.audit import OpType
+
+    async def go():
+        manager, plane, clean, legacy = await _plane_with_stored_plan(kind, tmp_path, monkeypatch)
+        time.sleep(0.02)
+        plane.audit.log(OpType.UPDATE, "plan", before_value=clean, after_value=legacy)
+        time.sleep(0.02)
+        target = time.time()
+        before = (await _row_count(kind, plane, "audit_log"), await _row_count(kind, plane, "memory_events"))
+        result = await plane.rollback(target)
+        after = (await _row_count(kind, plane, "audit_log"), await _row_count(kind, plane, "memory_events"))
+        stored = await _stored_metadata(kind, plane, "plan")
+        await manager.close()
+        return result, before, after, stored
+
+    result, before, after, stored = _run(go())
+    assert after == (before[0] + 1, before[1])  # only the rollback's own marker; nothing rewritten
+    assert "previous_value" not in stored
