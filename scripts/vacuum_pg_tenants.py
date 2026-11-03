@@ -112,9 +112,14 @@ async def maintain_schema(conn, schema: str, *, execute: bool = False, reindex: 
         if not execute:
             return record
         # VACUUM by a role that does not own the table only warns and skips it, which would read as success.
+        # (Postgres 17+ also lets a role with the MAINTAIN privilege vacuum and reindex.)
+        maintain = ""
+        if int(await conn.fetchval("SELECT current_setting('server_version_num')::int")) >= 170000:
+            maintain = (" AND NOT has_table_privilege(current_user, quote_ident(schemaname) || '.' || quote_ident(tablename), "
+                        "'MAINTAIN')")
         not_owned = await conn.fetch(
             "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = $1 AND tablename = ANY($2::text[]) "
-            "AND NOT pg_has_role(current_user, tableowner, 'USAGE') ORDER BY tablename",
+            "AND NOT pg_has_role(current_user, tableowner, 'USAGE')" + maintain + " ORDER BY tablename",
             schema, list(TABLES),
         )
         if not_owned:
@@ -127,11 +132,13 @@ async def maintain_schema(conn, schema: str, *, execute: bool = False, reindex: 
             try:
                 if full:
                     await conn.execute(f"VACUUM FULL {qualified}")
+                    record["tables"][table]["vacuumed"] = True
                 else:
                     await conn.execute(f"VACUUM {qualified}")
+                    record["tables"][table]["vacuumed"] = True
                     if reindex:
                         await conn.execute(f"REINDEX TABLE CONCURRENTLY {qualified}")
-                record["tables"][table]["vacuumed"] = True
+                        record["tables"][table]["reindexed"] = True
             except asyncpg.PostgresError as exc:
                 record["status"] = "failed"
                 record["error"] = type(exc).__name__

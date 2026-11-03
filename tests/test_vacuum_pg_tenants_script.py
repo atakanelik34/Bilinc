@@ -16,6 +16,7 @@ pytestmark = pytest.mark.skipif(not DSN, reason="BILINC_TEST_POSTGRES_DSN not se
 WORD_ENTRY = "zxqvaulta"
 WORD_CLAIM = "zxqvaultb"
 WORD_ENTITY = "zxqvaultc"
+WORD_VALUE = "zxqvaultd"
 
 
 def _script():
@@ -51,6 +52,15 @@ async def _drop(backend, schema):
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
     finally:
         await conn.close()
+
+
+async def _need_pageinspect(conn):
+    import asyncpg
+
+    try:
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pageinspect")
+    except asyncpg.PostgresError:
+        pytest.skip("pageinspect cannot be created on this Postgres")
 
 
 async def _flush(conn):
@@ -92,7 +102,8 @@ def test_the_default_run_writes_nothing():
         try:
             async def state():
                 sizes = [await conn.fetchval(f"SELECT pg_total_relation_size('\"{schema}\".{t}')") for t in script.TABLES]
-                return sizes, await conn.fetchval(f'SELECT max(version) FROM "{schema}".schema_version')
+                rows = [await conn.fetchval(f'SELECT count(*) FROM "{schema}".{t}') for t in script.TABLES]
+                return sizes, rows, await conn.fetchval(f'SELECT max(version) FROM "{schema}".schema_version')
 
             before = await state()
             recorder = _Recorder(conn)
@@ -171,8 +182,8 @@ def test_a_reindex_clears_the_words_of_removed_rows_from_every_index():
         backend, schema = await _make_tenant()
         conn = await asyncpg.connect(DSN)
         try:
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS pageinspect")
-            await backend.save(MemoryEntry(key="k", value="plain value", memory_type=MemoryType.SEMANTIC,
+            await _need_pageinspect(conn)
+            await backend.save(MemoryEntry(key="k", value=f"value {WORD_VALUE}", memory_type=MemoryType.SEMANTIC,
                                            metadata={"note": WORD_ENTRY}))
             await conn.execute(
                 f'''INSERT INTO "{schema}".bilinc_claims (id, memory_key, holder, subject, claim, kind, created_at, updated_at)
@@ -181,27 +192,34 @@ def test_a_reindex_clears_the_words_of_removed_rows_from_every_index():
                 f'''INSERT INTO "{schema}".entities (id, canonical_name, created_at, updated_at)
                     VALUES ('e1', '{WORD_ENTITY}', 1, 1)''')
             checks = [
-                ("idx_bilinc_entries_fts", WORD_ENTRY),
+                ("idx_bilinc_entries_fts", WORD_ENTRY),   # the expression index over key, value and metadata
+                ("idx_bilinc_gin_metadata", WORD_ENTRY),  # the GIN index over the metadata column
+                ("idx_bilinc_tsv", WORD_VALUE),           # the GIN index over the tsvector built from the value
                 ("idx_bilinc_claims_subject_active", WORD_CLAIM),
                 ("idx_entities_canonical_name", WORD_ENTITY),
             ]
-            present_before = [await _raw_pages_contain(conn, schema, idx, word) for idx, word in checks]
+            present_before = {idx: await _raw_pages_contain(conn, schema, idx, word) for idx, word in checks}
             await conn.execute(f'DELETE FROM "{schema}".bilinc_entries')
             await conn.execute(f'DELETE FROM "{schema}".bilinc_claims')
             await conn.execute(f'DELETE FROM "{schema}".entities')
+            # a plain vacuum: what it leaves in the indexes is recorded, not asserted (the text says "may remain")
+            await script.maintain_schema(conn, schema, execute=True)
+            after_plain = {idx: await _raw_pages_contain(conn, schema, idx, word) for idx, word in checks}
             record = await script.maintain_schema(conn, schema, execute=True, reindex=True)
-            absent_after = [not await _raw_pages_contain(conn, schema, idx, word) for idx, word in checks]
+            present_after = {idx: await _raw_pages_contain(conn, schema, idx, word) for idx, word in checks}
             leftovers = await conn.fetchval(
                 "SELECT count(*) FROM pg_indexes WHERE schemaname = $1 AND indexname LIKE '%ccnew%'", schema)
-            return present_before, record, absent_after, leftovers
+            return present_before, after_plain, record, present_after, leftovers
         finally:
             await conn.close()
             await _drop(backend, schema)
 
-    present_before, record, absent_after, leftovers = _run(go())
-    assert all(present_before)  # the detector sees the words while the rows exist
+    present_before, after_plain, record, present_after, leftovers = _run(go())
+    assert all(present_before.values()), present_before  # the detector sees every word while the rows exist
+    print("left in the indexes after a plain VACUUM:", {k: v for k, v in after_plain.items() if v})
     assert record["status"] == "ok" and leftovers == 0
-    assert all(absent_after)
+    assert all(t["reindexed"] for t in record["tables"].values())
+    assert not any(present_after.values()), present_after
 
 
 def test_full_vacuum_rewrites_the_tables_and_leaves_no_trace_of_removed_rows():
@@ -214,20 +232,27 @@ def test_full_vacuum_rewrites_the_tables_and_leaves_no_trace_of_removed_rows():
         backend, schema = await _make_tenant()
         conn = await asyncpg.connect(DSN)
         try:
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS pageinspect")
-            await backend.save(MemoryEntry(key="k", value=f"value {WORD_ENTRY}", memory_type=MemoryType.SEMANTIC))
-            present = await _raw_pages_contain(conn, schema, "bilinc_entries", WORD_ENTRY)
+            await _need_pageinspect(conn)
+            await backend.save(MemoryEntry(key="k", value=f"value {WORD_VALUE}", memory_type=MemoryType.SEMANTIC,
+                                           metadata={"note": WORD_ENTRY}))
+            present = await _raw_pages_contain(conn, schema, "bilinc_entries", WORD_VALUE)
+            present_index = await _raw_pages_contain(conn, schema, "idx_bilinc_entries_fts", WORD_ENTRY)
             await conn.execute(f'DELETE FROM "{schema}".bilinc_entries')
             record = await script.maintain_schema(conn, schema, execute=True, full=True)
-            gone = not await _raw_pages_contain(conn, schema, "bilinc_entries", WORD_ENTRY)
-            index_gone = not await _raw_pages_contain(conn, schema, "idx_bilinc_entries_fts", WORD_ENTRY)
-            return present, record, gone, index_gone
+            heap_gone = not await _raw_pages_contain(conn, schema, "bilinc_entries", WORD_VALUE)
+            indexes = [row["indexname"] for row in await conn.fetch(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = $1 AND tablename = 'bilinc_entries' "
+                "AND indexname NOT LIKE '%_pkey' AND indexname NOT LIKE '%_key'", schema)]
+            left = [idx for idx in indexes
+                    for word in (WORD_ENTRY, WORD_VALUE) if await _raw_pages_contain(conn, schema, idx, word)]
+            return present, present_index, record, heap_gone, indexes, left
         finally:
             await conn.close()
             await _drop(backend, schema)
 
-    present, record, gone, index_gone = _run(go())
-    assert present and record["status"] == "ok" and gone and index_gone
+    present, present_index, record, heap_gone, indexes, left = _run(go())
+    assert present and present_index and record["status"] == "ok" and heap_gone
+    assert len(indexes) >= 3 and left == []  # every index of the table, the GIN ones included
 
 
 def test_failures_are_reported_per_tenant_and_the_run_exits_1():
@@ -301,25 +326,57 @@ def test_a_held_lock_is_a_named_timeout_for_that_tenant_only():
             await tx.start()
             await holder.execute(f'LOCK TABLE "{locked}".bilinc_entries IN ACCESS EXCLUSIVE MODE')
             plain = await script.run(DSN, [locked, free], execute=True, lock_timeout=0.3)
-            reindex = await script.run(DSN, [locked, free], execute=True, reindex=True, lock_timeout=0.3)
             await tx.rollback()
-            invalid = await holder.fetchval(
-                "SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
-                "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND NOT i.indisvalid", locked)
-            return plain, reindex, invalid
+            return plain
         finally:
             await holder.close()
             await _drop(locked_backend, locked)
             await _drop(free_backend, free)
 
-    (plain_records, plain_code), (reindex_records, reindex_code), invalid = _run(go())
-    for records, code in ((plain_records, plain_code), (reindex_records, reindex_code)):
-        by_schema = {r["schema"]: r for r in records}
-        locked_record = next(r for s, r in by_schema.items() if r["status"] == "failed")
-        assert locked_record["error"] == "LockNotAvailableError"
-        assert any(r["status"] == "ok" for r in records)  # the other tenant still finished
-        assert code == 1
-    assert invalid == 0  # nothing was dropped or left invalid here; the script drops nothing itself
+    records, code = _run(go())
+    failed = next(r for r in records if r["status"] == "failed")
+    assert failed["error"] == "LockNotAvailableError"  # the wait is bounded already in the read-only report
+    assert any(r["status"] == "ok" for r in records)  # the other tenant still finished
+    assert code == 1
+
+
+def test_a_reindex_that_times_out_names_the_table_and_any_invalid_index_and_drops_nothing():
+    script = _script()
+
+    async def go():
+        import asyncpg
+
+        locked_backend, locked = await _make_tenant()
+        free_backend, free = await _make_tenant()
+        holder = await asyncpg.connect(DSN)
+        checker = await asyncpg.connect(DSN)
+        try:
+            tx = holder.transaction()
+            await tx.start()
+            # does not conflict with VACUUM (SHARE UPDATE EXCLUSIVE), but REINDEX CONCURRENTLY must wait for it
+            await holder.execute(f'LOCK TABLE "{locked}".bilinc_entries IN ROW EXCLUSIVE MODE')
+            records, code = await script.run(DSN, [locked, free], execute=True, reindex=True, lock_timeout=0.5)
+            invalid_after = [row["relname"] for row in await checker.fetch(
+                "SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND NOT i.indisvalid", locked)]
+            await tx.rollback()
+            return records, code, invalid_after
+        finally:
+            await holder.close()
+            await checker.close()
+            await _drop(locked_backend, locked)
+            await _drop(free_backend, free)
+
+    records, code, invalid_after = _run(go())
+    failed = next(r for r in records if r["status"] == "failed")
+    assert failed["error"] == "LockNotAvailableError" and failed["table"] == "bilinc_entries"
+    assert failed["tables"]["bilinc_entries"]["vacuumed"] is True  # the vacuum passed; the reindex is what waited
+    assert not failed["tables"]["bilinc_entries"].get("reindexed")
+    assert any(r["status"] == "ok" for r in records) and code == 1
+    # an invalid index left behind is named with the instruction, and the script dropped nothing
+    assert sorted(failed.get("invalid_indexes", [])) == sorted(invalid_after)
+    if invalid_after:
+        assert "DROP INDEX CONCURRENTLY" in failed["hint"]
 
 
 def test_running_twice_is_safe():
