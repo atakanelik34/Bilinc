@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- The claim contradiction probe in the evaluation tools now loads the claims of the memories its queries recall, and the claims that share a subject with them, directly from storage instead of looking only at the newest 1000 claims in the project. In projects with more than 1000 active claims it no longer misses contradictions involving older claims. Smaller projects get the same report as before.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added

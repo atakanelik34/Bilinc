@@ -813,6 +813,27 @@ class SQLiteBackend(StorageBackend):
         rows = self._get_conn().execute(sql, tuple(params)).fetchall()
         return [self._row_to_claim(row) for row in rows]
 
+    async def list_claims_for_subjects(self, subjects: list[str], active: bool | None = True, limit: int | None = None):
+        names = sorted({str(subject) for subject in subjects if subject is not None})
+        if not names:
+            return []
+        placeholders = ",".join("?" for _ in names)
+        sql = f"SELECT * FROM claims WHERE subject IN ({placeholders})"
+        params: list[object] = list(names)
+        if active is not None:
+            sql += " AND active = ?"
+            params.append(int(active))
+            if active:
+                now = time.time()
+                sql += " AND (valid_at IS NULL OR valid_at <= ?) AND (invalid_at IS NULL OR invalid_at > ?)"
+                params.extend([now, now])
+        sql += " ORDER BY updated_at DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        rows = self._get_conn().execute(sql, tuple(params)).fetchall()
+        return [self._row_to_claim(row) for row in rows]
+
     async def search_claims(self, query: str, limit: int = 10):
         needle = f"%{query}%"
         now = time.time()
