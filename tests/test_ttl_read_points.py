@@ -195,3 +195,55 @@ async def test_forgetting_engine_does_not_treat_a_recommitted_ttl_row_as_stale()
     engine = ForgettingEngine()
     text = engine.explain_forgetting(_entry())
     assert "is stale" not in text
+
+
+# ---- end to end through the hosted runtime on Postgres --------------------------------------
+
+import asyncio
+import os
+import uuid
+
+_DSN = os.getenv("BILINC_TEST_POSTGRES_DSN")
+
+
+@pytest.mark.skipif(not _DSN, reason="BILINC_TEST_POSTGRES_DSN not set")
+def test_hosted_recommit_with_a_fresh_ttl_keeps_the_row_live(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILINC_STORAGE_BACKEND", "postgres")
+    monkeypatch.setenv("BILINC_POSTGRES_DSN", _DSN)
+    import asyncpg
+
+    from bilinc.cloud.runtime import ProjectRuntimeManager
+    from bilinc.storage.postgres_tenancy import project_schema
+
+    project = str(uuid.uuid4())
+
+    async def scenario():
+        manager = ProjectRuntimeManager(tmp_path)
+        try:
+            await manager.commit(project, key="pref:editor", value="uses vim", ttl=3600.0)
+            conn = await asyncpg.connect(_DSN)
+            try:
+                await conn.execute(
+                    f'UPDATE "{project_schema(project)}".bilinc_entries SET created_at = $1 WHERE key = $2',
+                    time.time() - 7200.0, "pref:editor",
+                )
+            finally:
+                await conn.close()
+            await manager.commit(project, key="pref:editor", value="uses vim", ttl=3600.0)
+
+            plane = await manager.get_plane(project)
+            stored = await plane.backend.load("pref:editor")
+            assert stored.created_at == pytest.approx(time.time() - 7200.0, abs=60)  # created_at stayed
+            assert stored.invalid_at > time.time() + 3000.0                          # invalid_at moved
+            assert stored.is_stale() is False
+            assert "expired" not in plane._recall_risk_flags(stored)
+            assert plane._is_recallable_entry(stored) is True
+            assert plane._filter_candidates_as_of({stored.key: stored}, str(time.time())) == {stored.key: stored}
+            assert graph_doctor._entry_status(stored, time.time())["active"] is True
+            assert VerificationGate()._check_staleness(stored).status != VerificationStatus.STALE
+            recalled = await manager.recall(project, query="editor", profile="balanced", limit=5)
+            assert "pref:editor" in {item["key"] for item in recalled["results"]}
+        finally:
+            await manager.close()
+
+    asyncio.new_event_loop().run_until_complete(scenario())

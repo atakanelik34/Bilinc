@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- A memory first written long ago and saved again with a new TTL is no longer reported as expired or stale while its new expiry is still ahead. Point-in-time recall, the ranking penalty, the "expired" risk flag, `MemoryEntry.is_stale`, verification and the graph doctor now follow one rule: when a row has an expiry time it alone decides; only older rows with a TTL and no expiry time count from their creation.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added
