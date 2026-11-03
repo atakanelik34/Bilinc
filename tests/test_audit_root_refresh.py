@@ -139,6 +139,34 @@ async def test_a_failed_head_read_fails_the_call_and_changes_nothing(tmp_path, m
 
 
 @pytest.mark.asyncio
+async def test_preview_reads_the_head_before_the_state(tmp_path, monkeypatch):
+    manager, _other = await _two_workers(tmp_path, monkeypatch, "sqlite")
+    project = str(uuid.uuid4())
+    try:
+        await manager.commit(project, key="base", value="1")
+        snapshot = await manager.create_snapshot(project, label="before")
+        plane = await manager.get_plane(project)
+        order = []
+        real_refresh, real_state = plane.audit.refresh_root_hash, plane._persistent_state
+
+        def refresh():
+            order.append("head")
+            return real_refresh()
+
+        async def state():
+            order.append("state")
+            return await real_state()
+
+        monkeypatch.setattr(plane.audit, "refresh_root_hash", refresh)
+        monkeypatch.setattr(plane, "_persistent_state", state)
+        await manager.rollback_preview(project, snapshot_id=snapshot.id)
+        assert order == ["head", "state"]
+    finally:
+        await manager.close()
+        await _other.close()
+
+
+@pytest.mark.asyncio
 async def test_single_writer_responses_keep_the_root_their_own_write_produced(tmp_path, monkeypatch):
     manager, _other = await _two_workers(tmp_path, monkeypatch, "sqlite")
     project = str(uuid.uuid4())

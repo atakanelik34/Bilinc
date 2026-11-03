@@ -1425,6 +1425,9 @@ class ProjectRuntimeManager:
         target_state = _snapshot_entries(payload)
 
         plane = await self.get_plane(normalized)
+        # The head first, the state after it: a write landing in between makes the bound root older than the
+        # state, so an execute confirmed against this preview is refused instead of passing.
+        current_root = fresh_state_version(plane)
         current_state = await plane._persistent_state()
 
         create = sorted(set(target_state) - set(current_state))
@@ -1438,7 +1441,7 @@ class ProjectRuntimeManager:
 
         return {
             "snapshot_id": normalize_snapshot_id(snapshot_id),
-            "current_root_hash": fresh_state_version(plane),
+            "current_root_hash": current_root,
             "target_root_hash": payload.get("root_hash"),
             "counts": {"create": len(create), "update": len(update), "remove": len(remove)},
             # Keys only. A preview must not stream back what is about to change.
