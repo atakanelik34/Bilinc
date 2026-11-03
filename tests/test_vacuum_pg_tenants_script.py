@@ -385,10 +385,11 @@ def test_a_reindex_that_times_out_names_the_table_and_any_invalid_index_and_drop
     assert not failed["tables"]["bilinc_entries"].get("reindexed")
     assert any(r["status"] == "ok" for r in records) and code == 1
     # an invalid index left behind is named with the instruction, and the script dropped nothing
-    if not invalid_after:
-        pytest.skip("this Postgres left no invalid index after the timed-out reindex; the path is covered by the manual-index test")
+    # what the record names is exactly what is left (nothing dropped); when this Postgres leaves no invalid
+    # index after the timeout, the naming path is covered by the manual-index test below instead
     assert sorted(failed["invalid_indexes"]) == sorted(invalid_after)
-    assert "DROP INDEX CONCURRENTLY" in failed["hint"] and "run again" in failed["hint"]
+    if invalid_after:
+        assert "DROP INDEX CONCURRENTLY" in failed["hint"] and "run again" in failed["hint"]
 
 
 def test_an_invalid_index_is_reported_in_every_run_and_keeps_a_tenant_from_reading_as_clean():
@@ -428,6 +429,7 @@ def test_an_invalid_index_is_reported_in_every_run_and_keeps_a_tenant_from_readi
 
 def test_running_twice_is_safe():
     script = _script()
+    from bilinc.core.models import MemoryEntry, MemoryType
 
     async def go():
         import asyncpg
@@ -435,19 +437,34 @@ def test_running_twice_is_safe():
         backend, schema = await _make_tenant()
         conn = await asyncpg.connect(DSN)
         try:
+            await backend.save(MemoryEntry(key="k", value="live value", memory_type=MemoryType.SEMANTIC))
+            await conn.execute(
+                f'''INSERT INTO "{schema}".bilinc_claims (id, memory_key, holder, subject, claim, kind, created_at, updated_at)
+                    VALUES ('c1', 'k', 'h', 'subject', 'claim text', 'fact', 1, 1)''')
+            await conn.execute(
+                f'''INSERT INTO "{schema}".entities (id, canonical_name, created_at, updated_at)
+                    VALUES ('e1', 'live entity', 1, 1)''')
+
+            async def state():
+                rows = [await conn.fetchval(f'SELECT count(*) FROM "{schema}".{t}') for t in script.TABLES]
+                return rows, await conn.fetchval(f'SELECT max(version) FROM "{schema}".schema_version')
+
+            before = await state()
             first = await script.run(DSN, [schema], execute=True, reindex=True)
-            counts = await conn.fetchval(f'SELECT count(*) FROM "{schema}".bilinc_entries')
+            middle = await state()
             second = await script.run(DSN, [schema], execute=True, reindex=True)
+            after = await state()
             leftovers = await conn.fetchval(
                 "SELECT count(*) FROM pg_indexes WHERE schemaname = $1 AND indexname LIKE '%ccnew%'", schema)
-            version = await conn.fetchval(f'SELECT max(version) FROM "{schema}".schema_version')
-            return first, second, counts, leftovers, version
+            return before, first, middle, second, after, leftovers
         finally:
             await conn.close()
             await _drop(backend, schema)
 
-    first, second, counts, leftovers, version = _run(go())
-    assert first[1] == 0 and second[1] == 0 and leftovers == 0 and counts == 0 and version is not None
+    before, first, middle, second, after, leftovers = _run(go())
+    assert first[1] == 0 and second[1] == 0 and leftovers == 0
+    assert sum(before[0]) >= 3  # live rows existed
+    assert before == middle == after  # row counts and schema_version are unchanged by both runs
 
 
 def test_the_security_statement_names_the_postgres_remnants():
