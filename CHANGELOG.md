@@ -2,6 +2,13 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Added
+
+- `CloudClient.get_memory(key)` returns one memory by its exact key, with its `entryVersion`, or raises `memory_not_found`.
+- `bilinc rollback preview --limit N` and the MCP adapter's `rollback` tool take a `limit` (1-500, default 100) that caps the preview list, as the SDK's `rollback_preview` already did. Execute ignores it.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added
