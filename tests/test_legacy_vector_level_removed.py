@@ -153,7 +153,7 @@ def test_a_new_database_has_no_vec_table_and_no_extension_loading(tmp_path):
         plane._get_hybrid_search()
         conn = plane.backend._get_conn()
         names = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE name LIKE 'vec_bilinc%'")]
-        with pytest.raises(sqlite3.OperationalError):
+        with pytest.raises(sqlite3.OperationalError, match="not authorized"):
             conn.execute("SELECT load_extension('nothing')")  # extension loading is off on this connection
         await plane.backend.close()
         return names
