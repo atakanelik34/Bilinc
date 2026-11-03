@@ -348,7 +348,7 @@ def test_running_twice_is_safe():
 
 def test_the_security_statement_names_the_postgres_remnants():
     text = (Path(__file__).resolve().parents[1] / "docs" / "security.md").read_text(encoding="utf-8")
-    line = next(l for l in text.splitlines() if "secure_delete" in l and "PostgreSQL" in l)
+    line = next(row for row in text.splitlines() if "secure_delete" in row and "PostgreSQL" in row)
     lowered = line.lower()
     for phrase in ("dead row versions", "index pages", "not overwritten", "write-ahead log", "backups"):
         assert phrase in lowered, phrase
