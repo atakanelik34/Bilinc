@@ -264,8 +264,8 @@ def test_failures_are_reported_per_tenant_and_the_run_exits_1():
     missing, denied, (records, code) = _run(go())
     assert missing["status"] == "skipped_missing_tables"
     assert denied["status"] == "failed" and denied["error"] == "InsufficientPrivilegeError"
-    assert code == 0 or code == 1  # a skipped tenant alone is not a failure
-    assert {r["schema"] for r in records} and any(r["status"] == "ok" for r in records)
+    assert code == 1  # a schema missing a table counts as a failed tenant for the exit code
+    assert any(r["status"] == "ok" for r in records) and any(r["status"] == "skipped_missing_tables" for r in records)
 
 
 def test_an_invalid_tenant_name_stops_the_run_before_anything_runs():
@@ -348,7 +348,7 @@ def test_running_twice_is_safe():
 
 def test_the_security_statement_names_the_postgres_remnants():
     text = (Path(__file__).resolve().parents[1] / "docs" / "security.md").read_text(encoding="utf-8")
-    line = next(l for l in text.splitlines() if "PostgreSQL" in l and "storage level" in l or "no secure delete" in l.lower())
+    line = next(l for l in text.splitlines() if "secure_delete" in l and "PostgreSQL" in l)
     lowered = line.lower()
     for phrase in ("dead row versions", "index pages", "not overwritten", "write-ahead log", "backups"):
         assert phrase in lowered, phrase
