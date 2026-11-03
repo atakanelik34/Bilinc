@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import sqlite3
 import subprocess
 import sys
@@ -109,6 +110,9 @@ def test_the_stand_in_is_built_without_the_module(tmp_path):
 
 
 def test_an_old_vec_bilinc_table_is_never_read(tmp_path):
+    # Limit: where sqlite-vec is not installed this would also have passed before the change (the stale rows
+    # could not be read anyway); the guarantee is that the code that read them is gone, which the import and
+    # no-HTTP tests above pin down.
     path = tmp_path / "old.db"
     _run(_backend(path))
     _add_stand_in(path)
@@ -129,10 +133,12 @@ def test_a_database_with_an_old_vec_bilinc_works_without_the_module(tmp_path):
         await plane.init()
         await plane.commit("fresh", "A fresh memory written after the upgrade.", MemoryType.SEMANTIC)
         assert await plane.forget("misc")
-        await plane.commit("purged", "This one is purged.", MemoryType.SEMANTIC)
-        plane.audit.purge_key("purged")
-        compact = getattr(plane.backend, "compact_search_index", None)
-        assert await compact() in (True, False)  # the secure-delete / WAL-checkpoint step of a purge
+        plane.init_agm()
+        await plane.commit_with_agm_async(key="purged", value="This one is purged.", importance=0.9)
+        from bilinc.mcp_server.server_v2 import _handle_forget
+
+        purged = json.loads((await _handle_forget(plane, {"key": "purged", "purge": True}))[0].text)
+        assert purged.get("error") is None and "purged" in purged  # the real stdio purge path, end to end
         plane.backend.fts_rebuild()
         keys = {e.key for e in await plane.backend.list_all()}
         await plane.backend.close()
@@ -149,8 +155,8 @@ def test_a_new_database_has_no_vec_table_and_no_extension_loading(tmp_path):
         plane = StatePlane(backend=SQLiteBackend(str(tmp_path / "new.db")), enable_verification=False, enable_audit=False)
         await plane.init()
         await plane.commit("k", "some value to search for", MemoryType.SEMANTIC)
-        await plane.recall_intelligent("value") if hasattr(plane, "recall_intelligent") else None
-        plane._get_hybrid_search()
+        assert plane._get_hybrid_search() is not None  # the real search object, built the way recall builds it
+        assert [e.key for e in await plane.recall(key="k")] == ["k"]
         conn = plane.backend._get_conn()
         names = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE name LIKE 'vec_bilinc%'")]
         with pytest.raises(sqlite3.OperationalError, match="not authorized"):

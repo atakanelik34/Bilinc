@@ -29,7 +29,7 @@ def count_legacy_vec_table(path) -> dict:
     if not path.is_file():
         raise CountError(f"database not found: {path}")
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
     except sqlite3.Error as exc:
         raise CountError(f"cannot open {path} read-only: {exc}") from exc
     try:

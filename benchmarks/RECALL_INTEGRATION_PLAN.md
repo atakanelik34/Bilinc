@@ -1,6 +1,6 @@
 # Bilinc Real Recall Integration Plan
 
-> Historical (2026-04-13). The `sqlite-vec` / Ollama vector level described here was removed in the C2 change; the code no longer loads `sqlite_vec` or reads `vec_bilinc`.
+> Historical (2026-04-13). The `sqlite-vec` / Ollama vector level described here was removed in a later version; the code no longer loads `sqlite_vec` or reads `vec_bilinc`.
 
 **Date:** 2026-04-13
 **Goal:** Push ConvoMem to 85%+ and LoCoMo to 90%+ using real Bilinc recall

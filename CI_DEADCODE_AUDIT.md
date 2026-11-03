@@ -71,7 +71,7 @@ OK - None found.
 ### 9.3 vector_search.py <-> sqlite.py FTS5
 **MINOR ISSUES** - FTS5 queries use correct syntax but:
 - **[MEDIUM]** Missing UPDATE/DELETE triggers. Only INSERT trigger exists (sqlite.py:108-111). FTS5 index goes stale on updates/deletes.
-- **[MEDIUM]** `HybridSearch` and `VectorStore` classes defined but never instantiated in src/. (Historical: `VectorStore` and the `sqlite-vec` / Ollama vector level were removed in the C2 change.)
+- **[MEDIUM]** `HybridSearch` and `VectorStore` classes defined but never instantiated in src/. (Historical: `VectorStore` and the `sqlite-vec` / Ollama vector level were removed in a later version.)
 
 ### 9.4 kg_retrieval.py <-> temporal.py
 **NOT INTEGRATED** - kg_retrieval.py does NOT import or use temporal.py. The temporal module is written but never wired into the retrieval pipeline.
