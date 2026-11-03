@@ -70,11 +70,12 @@ def test_mcp_rollback_schema_gains_an_optional_limit_only():
 
 
 @pytest.mark.parametrize("limit", [0, 501])
-def test_mcp_rollback_limit_out_of_range_is_rejected_by_the_sdk(limit):
+def test_mcp_rollback_limit_out_of_range_is_rejected_before_any_request(monkeypatch, limit):
     transport = RecordingTransport({})
-    client = _client(transport)
-    with pytest.raises(BilincValidationError):
-        client.rollback_preview("snap_a", reason="r", limit=limit)
+    monkeypatch.setattr(cloud_mcp, "create_client", lambda: _client(transport))
+    with pytest.raises(Exception, match="(?i)limit"):
+        asyncio.run(cloud_mcp.build_server().call_tool(
+            "rollback", {"snapshot_id": "snap_a", "reason": "r", "limit": limit}))
     assert transport.calls == []
 
 
