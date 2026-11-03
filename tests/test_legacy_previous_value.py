@@ -126,3 +126,84 @@ def test_a_rewrite_of_a_legacy_row_persists_it_clean(kind, action, tmp_path, mon
     assert "previous_value" not in stored
     # nothing the rewrite wrote (row, audit, event) carries the text again
     assert "Dana Whitfield" not in after
+
+
+def _inject_legacy_into_snapshot(manager, project, snapshot_id, key):
+    path = manager.snapshot_dir(project) / f"{snapshot_id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    entry = payload["snapshot"]["entries"][key]
+    entry["metadata"] = dict(entry.get("metadata") or {}, previous_value=LEGACY)
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+
+async def _row_count(kind, plane, table):
+    if kind == "sqlite":
+        return plane.backend._get_conn().execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+    return await plane.backend.pool.fetchval(f"SELECT count(*) FROM {table}")
+
+
+async def _project_with_legacy_snapshot(kind, tmp_path, monkeypatch):
+    manager = await _manager(kind, tmp_path, monkeypatch)
+    project = str(uuid.uuid4())
+    await manager.commit(project, key="plan", value=VALUE, importance=1.0)
+    await manager.commit(project, key="other", value="other value", importance=1.0)
+    snapshot = await manager.create_snapshot(project, label="old")
+    _inject_legacy_into_snapshot(manager, project, snapshot.id, "plan")
+    return manager, project, snapshot.id
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_rollback_preview_and_execute_ignore_the_legacy_field(kind, tmp_path, monkeypatch):
+    async def go():
+        manager, project, snapshot_id = await _project_with_legacy_snapshot(kind, tmp_path, monkeypatch)
+        preview = await manager.rollback_preview(project, snapshot_id=snapshot_id)
+        plane = await manager.get_plane(project)
+        before = (await _row_count(kind, plane, "audit_log"), await _row_count(kind, plane, "memory_events"))
+        await manager.rollback_execute(
+            project, snapshot_id=snapshot_id, reason="test", expected_current_root=preview["current_root_hash"])
+        after = (await _row_count(kind, plane, "audit_log"), await _row_count(kind, plane, "memory_events"))
+        text = await _everything_written(kind, plane)
+        await manager.close()
+        return preview, before, after, text
+
+    preview, before, after, text = _run(go())
+    assert preview["counts"] == {"create": 0, "update": 0, "remove": 0} and preview["update_keys"] == []
+    assert after == before  # keys that did not really differ were not rewritten
+    assert "Dana Whitfield" not in text
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_hosted_diff_ignores_the_legacy_field_in_every_mode(kind, tmp_path, monkeypatch):
+    async def go():
+        manager, project, snapshot_id = await _project_with_legacy_snapshot(kind, tmp_path, monkeypatch)
+        newer = await manager.create_snapshot(project, label="newer")  # same content, clean
+        to_current = await manager.diff(project, from_snapshot_id=snapshot_id)
+        to_snapshot = await manager.diff(project, from_snapshot_id=snapshot_id, to_snapshot_id=newer.id)
+        await manager.close()
+        return to_current, to_snapshot
+
+    to_current, to_snapshot = _run(go())
+    assert to_current["counts"]["modified"] == 0 and to_snapshot["counts"]["modified"] == 0
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_the_version_token_of_a_legacy_row_changes_once_and_then_holds(kind, tmp_path, monkeypatch):
+    from bilinc.cloud.runtime import entry_version
+
+    async def go():
+        manager = await _manager(kind, tmp_path, monkeypatch)
+        project = str(uuid.uuid4())
+        await manager.commit(project, key="plan", value=VALUE, importance=1.0)
+        plane = await manager.get_plane(project)
+        clean = (await plane.backend.load("plan")).to_dict()
+        # the token a client read before the deploy: computed from the legacy stored state
+        old_token = entry_version(dict(clean, metadata=dict(clean["metadata"], previous_value=LEGACY)))
+        with pytest.raises(ValueError, match="version_conflict"):
+            await manager.confirm(project, key="plan", expected_version=old_token)
+        fresh = await manager._entry_version(plane, "plan")
+        assert fresh == await manager._entry_version(plane, "plan")  # stable across reads
+        confirmed = await manager.confirm(project, key="plan", expected_version=fresh)
+        await manager.close()
+        return confirmed
+
+    assert _run(go())["success"] is True
