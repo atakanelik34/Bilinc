@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import stat
+import sys
 import uuid
 from pathlib import Path
 
@@ -242,3 +243,23 @@ def test_a_failed_backup_leaves_no_copy_behind(tmp_path, monkeypatch):
     assert list(backups.iterdir()) == []
     monkeypatch.undo()
     assert _metadata(db)["legacy"] == json.dumps({"previous_value": LEGACY, "keep": "yes"})  # nothing was changed
+
+
+def test_a_run_that_could_not_truncate_the_log_exits_non_zero(tmp_path, monkeypatch, capsys):
+    script = _script()
+    monkeypatch.setattr(script, "scrub_sqlite", lambda *a, **k: {"scrubbed": 1, "wal_checkpointed": False})
+    monkeypatch.setattr(sys, "argv", ["scrub", "--sqlite", str(tmp_path / "x.db"), "--execute", "--backup-dir", str(tmp_path)])
+    assert script.main() == 1
+    assert "could not be truncated" in capsys.readouterr().err
+
+
+def test_two_backups_in_the_same_second_stop_cleanly(tmp_path, monkeypatch):
+    script = _script()
+    db = tmp_path / "bilinc.db"
+    _make_db(db)
+    backups = tmp_path / "backups"
+    monkeypatch.setattr(script.time, "strftime", lambda *a, **k: "20260101T000000")
+    script.scrub_sqlite(db, execute=True, backup_dir=backups)
+    _make_db(tmp_path / "second.db")
+    with pytest.raises(script.ScrubError, match="already exists"):
+        script.scrub_sqlite(tmp_path / "bilinc.db", execute=True, backup_dir=backups)

@@ -118,8 +118,8 @@ def strip_reserved_metadata(metadata):
     are, so ``to_dict`` and the version token of such an entry do not change), and a copy otherwise,
     so a caller's dict is never mutated.
     """
-    if not metadata:
-        return metadata
+    if not metadata or not isinstance(metadata, dict):
+        return metadata  # nothing to strip, or not a dict (a malformed row): leave it for the caller
     if not any(key in metadata for key in RESERVED_METADATA_KEYS):
         return metadata
     return {key: value for key, value in metadata.items() if key not in RESERVED_METADATA_KEYS}

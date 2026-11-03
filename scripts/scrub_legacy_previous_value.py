@@ -23,7 +23,8 @@ Postgres: each tenant schema is updated in its own transaction on a plain connec
 nothing migrated); the report lists schemas updated, skipped and failed, and a stopped run can be
 repeated. There is no copy: the way back is the count-only run and the off-site backup, which you
 should confirm covers the tenant schemas first. The removed text stays in dead tuples, and in the
-pages of the ``idx_bilinc_entries_fts`` index, until vacuum or reindex (backlog item PG-VACUUM).
+pages of the ``idx_bilinc_entries_fts`` index, until vacuum or reindex (backlog item PG-VACUUM). Only
+``bilinc_p_*`` tenant schemas are scanned: a Postgres install with its tables in ``public`` is not.
 """
 from __future__ import annotations
 
@@ -84,13 +85,15 @@ def scrub_sqlite(path, *, execute: bool, backup_dir) -> dict:
         try:
             backup = _take_backup(path, Path(backup_dir))
             legacy, malformed = _legacy_rows(conn)
+            changed = 0
             for key, metadata in legacy:
                 parsed = json.loads(metadata)
                 parsed.pop(FIELD, None)
-                conn.execute(
+                cursor = conn.execute(
                     "UPDATE memories SET metadata = ? WHERE key = ? AND metadata = ?",
                     (json.dumps(parsed), key, metadata),
                 )
+                changed += cursor.rowcount
             conn.execute("COMMIT")
         except BaseException:
             conn.execute("ROLLBACK")
@@ -99,7 +102,7 @@ def scrub_sqlite(path, *, execute: bool, backup_dir) -> dict:
         return {
             "database": str(path),
             "legacy_rows": len(legacy),
-            "scrubbed": len(legacy),
+            "scrubbed": changed,
             "skipped_malformed": malformed,
             "backup": str(backup),
             "wal_checkpointed": checkpoint is not None and checkpoint[0] == 0,
@@ -117,7 +120,10 @@ def _take_backup(path: Path, backup_dir: Path) -> Path:
     """
     backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     target = backup_dir / f"{path.name}.pre-scrub-{time.strftime('%Y%m%dT%H%M%S')}"
-    descriptor = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)  # private from the first byte
+    try:
+        descriptor = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)  # private from the first byte
+    except FileExistsError as exc:
+        raise ScrubError(f"a backup named {target.name} already exists; wait a second and retry") from exc
     os.close(descriptor)
     source = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     copy = sqlite3.connect(target)
@@ -204,9 +210,14 @@ def main() -> int:
     args = parser.parse_args()
     if args.sqlite:
         try:
-            print(json.dumps(scrub_sqlite(args.sqlite, execute=args.execute, backup_dir=args.backup_dir)))
+            report = scrub_sqlite(args.sqlite, execute=args.execute, backup_dir=args.backup_dir)
         except ScrubError as exc:
             print(f"stopped, nothing changed: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(report))
+        if args.execute and not report.get("wal_checkpointed", True):
+            print("warning: the write-ahead log could not be truncated (another process is reading), so the old text may "
+                  "remain in the -wal file; stop the other Bilinc processes and run again", file=sys.stderr)
             return 1
         return 0
     return asyncio.run(main_postgres(args.execute))

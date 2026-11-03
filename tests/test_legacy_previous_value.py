@@ -23,6 +23,10 @@ def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
 
+def test_strip_reserved_metadata_leaves_a_non_dict_alone():
+    assert strip_reserved_metadata("a string with previous_value in it") == "a string with previous_value in it"
+
+
 def test_strip_reserved_metadata_keeps_everything_else_and_never_mutates():
     original = {"previous_value": "x", "keep": 1}
     cleaned = strip_reserved_metadata(original)
@@ -346,17 +350,30 @@ def test_a_rollback_restore_of_a_legacy_entry_with_a_different_value_is_clean(ki
         time.sleep(0.02)
         plane.audit.log(OpType.UPDATE, "plan", before_value=stored, after_value=old)
         time.sleep(0.02)
+        marker = await _row_count(kind, plane, "audit_log")
+        events_before = await _row_count(kind, plane, "memory_events")
         await plane.rollback(time.time())
         local_row = await _stored_metadata(kind, plane, "plan")
-        newest = await _everything_written(kind, plane)
+        text = await _everything_written(kind, plane)
+        # what the rollback itself wrote: its audit rows (UPDATE of the key and the ROLLBACK marker) and any event
+        if kind == "sqlite":
+            conn = plane.backend._get_conn()
+            new_audit = " ".join(str(tuple(r)) for r in conn.execute("SELECT * FROM audit_log WHERE id > (SELECT max(id) - ? FROM audit_log)", (await _row_count(kind, plane, "audit_log") - marker,)))
+            new_events = " ".join(str(tuple(r)) for r in conn.execute("SELECT * FROM memory_events ORDER BY rowid DESC LIMIT ?", (await _row_count(kind, plane, "memory_events") - events_before or 1,)))
+        else:
+            added = await _row_count(kind, plane, "audit_log") - marker
+            new_audit = " ".join(str(dict(r)) for r in await plane.backend.pool.fetch("SELECT * FROM audit_log ORDER BY id DESC LIMIT $1", max(added, 1)))
+            new_events = " ".join(str(dict(r)) for r in await plane.backend.pool.fetch(
+                "SELECT * FROM memory_events ORDER BY id DESC LIMIT $1", max(await _row_count(kind, plane, "memory_events") - events_before, 1)))
         await manager.close()
-        return hosted_row, hosted_text, local_row, newest
+        return hosted_row, hosted_text, local_row, text, new_audit, new_events
 
-    hosted_row, hosted_text, local_row, everything = _run(go())
+    hosted_row, hosted_text, local_row, text, new_audit, new_events = _run(go())
     assert "previous_value" not in hosted_row and "previous_value" not in local_row
     assert "Dana Whitfield" not in hosted_text
-    # the local rollback's own audit row records the audit state it restored from; the stored row is clean
-    assert "previous_value" not in local_row
+    # the local rollback restores from an audit state that carries the field: what it wrote is clean
+    assert "rollback" in new_audit.lower()  # the rows inspected are really the rollback's own
+    assert "Dana Whitfield" not in new_audit and "Dana Whitfield" not in new_events
 
 
 @pytest.mark.parametrize("kind", KINDS)
