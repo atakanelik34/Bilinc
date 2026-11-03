@@ -471,6 +471,7 @@ def test_the_security_statement_names_the_postgres_remnants():
     text = (Path(__file__).resolve().parents[1] / "docs" / "security.md").read_text(encoding="utf-8")
     line = next(row for row in text.splitlines() if "secure_delete" in row and "PostgreSQL" in row)
     lowered = line.lower()
-    for phrase in ("dead row versions", "index pages", "not overwritten", "write-ahead log", "backups"):
+    for phrase in ("does not overwrite data in place", "dead row versions", "index pages", "free space", "write-ahead log"):
         assert phrase in lowered, phrase
     assert "briefly" not in lowered
+    assert "backups taken before the purge keep the old values" in text.lower()  # the neighbouring bullet
