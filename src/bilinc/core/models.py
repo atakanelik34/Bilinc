@@ -114,11 +114,12 @@ RESERVED_METADATA_KEYS = ("previous_value",)
 def strip_reserved_metadata(metadata):
     """Return ``metadata`` without the reserved keys.
 
-    Returns the same object when there is nothing to strip, and a copy otherwise, so a caller's
-    dict is never mutated. ``None`` becomes an empty dict.
+    Returns the same object when there is nothing to strip (``None`` and an empty dict stay as they
+    are, so ``to_dict`` and the version token of such an entry do not change), and a copy otherwise,
+    so a caller's dict is never mutated.
     """
     if not metadata:
-        return {} if metadata is None else metadata
+        return metadata
     if not any(key in metadata for key in RESERVED_METADATA_KEYS):
         return metadata
     return {key: value for key, value in metadata.items() if key not in RESERVED_METADATA_KEYS}

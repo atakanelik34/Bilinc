@@ -122,14 +122,21 @@ def _take_backup(path: Path, backup_dir: Path) -> Path:
     source = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     copy = sqlite3.connect(target)
     try:
-        source.backup(copy)
-        expected = source.execute("SELECT count(*) FROM memories").fetchone()[0]
-        actual = copy.execute("SELECT count(*) FROM memories").fetchone()[0]
-    finally:
-        copy.close()
-        source.close()
-    if expected != actual:
-        raise ScrubError(f"the backup holds {actual} rows but the database holds {expected}; nothing was changed")
+        try:
+            source.backup(copy)
+            expected = source.execute("SELECT count(*) FROM memories").fetchone()[0]
+            actual = copy.execute("SELECT count(*) FROM memories").fetchone()[0]
+        finally:
+            copy.close()
+            source.close()
+        if expected != actual:
+            raise ScrubError(f"the backup holds {actual} rows but the database holds {expected}")
+    except BaseException as exc:
+        # A copy that failed holds the text it was meant to protect: do not leave it behind.
+        target.unlink(missing_ok=True)
+        if isinstance(exc, ScrubError):
+            raise ScrubError(f"{exc}; the partial copy was removed and nothing was changed") from exc
+        raise
     os.chmod(target, 0o600)
     return target
 

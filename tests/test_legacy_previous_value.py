@@ -29,7 +29,7 @@ def test_strip_reserved_metadata_keeps_everything_else_and_never_mutates():
     assert cleaned == {"keep": 1} and original == {"previous_value": "x", "keep": 1}
     clean = {"keep": 1}
     assert strip_reserved_metadata(clean) is clean  # nothing to strip: no copy
-    assert strip_reserved_metadata(None) == {}
+    assert strip_reserved_metadata(None) is None and strip_reserved_metadata({}) == {}  # unchanged: to_dict stays the same
 
 
 def test_a_memory_entry_never_holds_the_reserved_field():
@@ -276,3 +276,123 @@ def test_local_rollback_does_not_rewrite_a_key_that_only_differs_by_the_legacy_f
     result, before, after, stored = _run(go())
     assert after == (before[0] + 1, before[1])  # only the rollback's own marker; nothing rewritten
     assert "previous_value" not in stored
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_ttl_rewrite_of_a_legacy_row_persists_it_clean(kind, tmp_path, monkeypatch):
+    async def go():
+        manager = await _manager(kind, tmp_path, monkeypatch)
+        project = str(uuid.uuid4())
+        await manager.commit(project, key="plan", value=VALUE, importance=1.0)
+        plane = await manager.get_plane(project)
+        await _seed_legacy(kind, plane, "plan")
+        await manager.commit(project, key="plan", value=VALUE, importance=1.0, ttl=3600)
+        stored = await _stored_metadata(kind, plane, "plan")
+        text = await _everything_written(kind, plane)
+        await manager.close()
+        return stored, text
+
+    stored, text = _run(go())
+    assert "previous_value" not in stored and "Dana Whitfield" not in text
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_consolidate_persists_a_legacy_entry_clean(kind, tmp_path, monkeypatch):
+    async def go():
+        manager = await _manager(kind, tmp_path, monkeypatch)
+        project = str(uuid.uuid4())
+        await manager.commit(project, key="anchor", value="x", importance=1.0)
+        plane = await manager.get_plane(project)
+        legacy = MemoryEntry.from_dict({
+            "key": "buffered", "value": VALUE, "memory_type": "working", "importance": 1.0,
+            "metadata": {"previous_value": LEGACY, "keep": "yes"},
+        })
+        plane.working_memory.put(legacy)
+        count = await plane.consolidate()
+        stored = await _stored_metadata(kind, plane, "buffered")
+        text = await _everything_written(kind, plane)
+        await manager.close()
+        return count, stored, text
+
+    count, stored, text = _run(go())
+    assert count >= 1 and stored.get("keep") == "yes" and "previous_value" not in stored  # working memory adds its own heat keys
+    assert "Dana Whitfield" not in text
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_rollback_restore_of_a_legacy_entry_with_a_different_value_is_clean(kind, tmp_path, monkeypatch):
+    import time
+
+    from bilinc.core.audit import OpType
+
+    async def go():
+        manager = await _manager(kind, tmp_path, monkeypatch)
+        project = str(uuid.uuid4())
+        await manager.commit(project, key="plan", value="the older value", importance=1.0)
+        snapshot = await manager.create_snapshot(project, label="old")
+        _inject_legacy_into_snapshot(manager, project, snapshot.id, "plan")
+        await manager.revise(project, key="plan", value="the newer value", importance=1.0, reason="change")
+        plane = await manager.get_plane(project)
+        preview = await manager.rollback_preview(project, snapshot_id=snapshot.id)
+        assert preview["update_keys"] == ["plan"]  # a real difference is still listed
+        await manager.rollback_execute(
+            project, snapshot_id=snapshot.id, reason="restore", expected_current_root=preview["current_root_hash"])
+        hosted_row = await _stored_metadata(kind, plane, "plan")
+        hosted_text = await _everything_written(kind, plane)
+
+        # local rollback to an audit state whose entry carries the field and a different value
+        stored = (await plane.backend.load("plan")).to_dict()
+        old = dict(stored, value="an even older value", metadata=dict(stored["metadata"], previous_value=LEGACY))
+        time.sleep(0.02)
+        plane.audit.log(OpType.UPDATE, "plan", before_value=stored, after_value=old)
+        time.sleep(0.02)
+        await plane.rollback(time.time())
+        local_row = await _stored_metadata(kind, plane, "plan")
+        newest = await _everything_written(kind, plane)
+        await manager.close()
+        return hosted_row, hosted_text, local_row, newest
+
+    hosted_row, hosted_text, local_row, everything = _run(go())
+    assert "previous_value" not in hosted_row and "previous_value" not in local_row
+    assert "Dana Whitfield" not in hosted_text
+    # the local rollback's own audit row records the audit state it restored from; the stored row is clean
+    assert "previous_value" not in local_row
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_a_snapshot_taken_after_a_rewrite_holds_none_of_the_text(kind, tmp_path, monkeypatch):
+    async def go():
+        manager = await _manager(kind, tmp_path, monkeypatch)
+        project = str(uuid.uuid4())
+        await manager.commit(project, key="plan", value=VALUE, importance=1.0)
+        plane = await manager.get_plane(project)
+        await _seed_legacy(kind, plane, "plan")
+        await manager.confirm(project, key="plan", reason="still true")
+        snapshot = await manager.create_snapshot(project, label="after")
+        text = (manager.snapshot_dir(project) / f"{snapshot.id}.json").read_text(encoding="utf-8")
+        await manager.close()
+        return text
+
+    text = _run(go())
+    assert "Dana Whitfield" not in text and "previous_value" not in text
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_revise_with_a_pre_upgrade_token_gets_the_normal_conflict(kind, tmp_path, monkeypatch):
+    from bilinc.cloud.runtime import entry_version
+
+    async def go():
+        manager = await _manager(kind, tmp_path, monkeypatch)
+        project = str(uuid.uuid4())
+        await manager.commit(project, key="plan", value=VALUE, importance=1.0)
+        plane = await manager.get_plane(project)
+        clean = (await plane.backend.load("plan")).to_dict()
+        old_token = entry_version(dict(clean, metadata=dict(clean["metadata"], previous_value=LEGACY)))
+        with pytest.raises(ValueError, match="version_conflict"):
+            await manager.revise(project, key="plan", value="new value", importance=1.0, expected_version=old_token)
+        fresh = await manager._entry_version(plane, "plan")
+        result = await manager.revise(project, key="plan", value="new value", importance=1.0, expected_version=fresh)
+        await manager.close()
+        return result
+
+    assert _run(go())["success"] is True

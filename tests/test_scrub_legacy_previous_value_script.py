@@ -174,3 +174,71 @@ def test_postgres_count_only_writes_nothing_and_execute_removes_the_key():
     assert rows == {"legacy": {"keep": "yes"}, "clean": {"keep": "also"}}
     assert again["legacy_rows"] == 0 and again["scrubbed"] == 0
     assert skipped["status"] == "skipped_missing_tables"
+
+
+def test_sqlite_execute_on_a_database_made_by_the_backend_keeps_search_and_columns(tmp_path):
+    from bilinc.core.models import MemoryEntry, MemoryType
+    from bilinc.storage.sqlite import SQLiteBackend
+
+    script = _script()
+    db = tmp_path / "real.db"
+
+    async def seed():
+        backend = SQLiteBackend(str(db))
+        await backend.init()
+        for key, value in (("plan", "harbor plan for the quarter"), ("note", "unrelated note")):
+            await backend.save(MemoryEntry(key=key, value=value, memory_type=MemoryType.SEMANTIC, metadata={"keep": "yes"}))
+        conn = backend._get_conn()
+        conn.execute("UPDATE memories SET metadata = json_set(metadata, '$.previous_value', ?) WHERE key = 'plan'", (LEGACY,))
+        conn.commit()
+        await backend.close()
+
+    def columns():
+        conn = sqlite3.connect(db)
+        try:
+            return conn.execute("SELECT key, value, memory_type, importance, source, updated_at FROM memories ORDER BY key").fetchall()
+        finally:
+            conn.close()
+
+    async def check():
+        backend = SQLiteBackend(str(db))
+        await backend.init()
+        try:
+            return [row for row in backend.fts_search("harbor")]
+        finally:
+            await backend.close()
+
+    asyncio.new_event_loop().run_until_complete(seed())
+    before = columns()
+    report = script.scrub_sqlite(db, execute=True, backup_dir=tmp_path / "backups")
+    assert report["scrubbed"] == 1
+    assert columns() == before  # every other column is untouched, updated_at included
+    assert asyncio.new_event_loop().run_until_complete(check())  # full-text search still finds the row
+    for candidate in (db, Path(str(db) + "-wal")):
+        if candidate.exists():
+            assert b"Dana Whitfield" not in candidate.read_bytes()
+
+
+def test_a_failed_backup_leaves_no_copy_behind(tmp_path, monkeypatch):
+    """A copy that fails is removed: it would hold the text it was meant to protect."""
+    script = _script()
+    db = tmp_path / "bilinc.db"
+    _make_db(db)
+    backups = tmp_path / "backups"
+    real_connect = sqlite3.connect
+
+    class _FailingBackup(sqlite3.Connection):
+        def backup(self, *args, **kwargs):
+            raise sqlite3.OperationalError("disk full")
+
+    def connect(target, *args, **kwargs):
+        if str(target).startswith("file:") and "mode=ro" in str(target):
+            kwargs["factory"] = _FailingBackup
+        return real_connect(target, *args, **kwargs)
+
+    monkeypatch.setattr(script.sqlite3, "connect", connect)
+    with pytest.raises(sqlite3.OperationalError, match="disk full"):
+        script.scrub_sqlite(db, execute=True, backup_dir=backups)
+    assert list(backups.iterdir()) == []
+    monkeypatch.undo()
+    assert _metadata(db)["legacy"] == json.dumps({"previous_value": LEGACY, "keep": "yes"})  # nothing was changed
