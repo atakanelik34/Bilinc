@@ -171,4 +171,4 @@ def test_hosted_verified_recall_keeps_old_claims_and_stays_inside_the_project(tm
         finally:
             await manager.close()
 
-    asyncio.new_event_loop().run_until_complete(scenario())
+    asyncio.run(scenario())
