@@ -1,41 +1,55 @@
 # PG-VACUUM: what a Postgres purge leaves on disk, and an opt-in way to reduce it
 
 ## Problem
-A SQLite purge removes the text physically: `PRAGMA secure_delete`, an FTS segment merge and a WAL truncate (`storage/sqlite.py:99, 954-975`, called through the `compact_search_index` hook of `_purge_key`, `cloud/runtime.py:1181-1183`). `PostgresBackend` has no such method, so the hook does nothing on Postgres. After a Postgres purge the live rows are gone or replaced (entries, audit values, event payloads, entity rows, capture rows), but:
-- the old row versions stay as **dead tuples** in the table pages until a vacuum removes them (autovacuum does it eventually, on its own schedule);
-- the GIN expression index `idx_bilinc_entries_fts` indexes `metadata::text` (`storage/postgres.py:337-345`), so its pages keep tokens of removed text until vacuum or reindex;
-- even after a vacuum, freed space is not overwritten, and the write-ahead log and the off-site backups keep older page images until they rotate.
+A SQLite purge removes the text physically: `PRAGMA secure_delete`, an FTS segment merge and a WAL truncate (`storage/sqlite.py:99, 954-975`, reached through the `compact_search_index` hook of `_purge_key`, `cloud/runtime.py:1181-1183`). `PostgresBackend` has no such method, so the hook does nothing on Postgres. After a Postgres purge the live rows are gone or replaced, but removed text **may remain** in:
+- **dead row versions** in the table pages, until a vacuum removes them (autovacuum does, on its own schedule);
+- **three GIN indexes on `bilinc_entries`**: `idx_bilinc_entries_fts` (over `key`, `value::text` and `metadata::text`, `storage/postgres.py:337-345`), `idx_bilinc_tsv` (the `tsv` column, `:354`) and `idx_bilinc_gin_metadata` (`metadata`, `:195`). A plain vacuum removes dead row pointers from their posting lists, but the entry keys themselves (the words) may stay in the index until the index is rebuilt (`REINDEX`) or the table is rewritten (`VACUUM FULL`);
+- **freed space**, which Postgres does not overwrite (it has no `secure_delete`);
+- the **write-ahead log** and the **off-site backups**, until they rotate or expire.
+Large values also live in TOAST tables; a table's vacuum covers its TOAST relation.
 
-Postgres has no `secure_delete`. So physical removal cannot be promised, and no change to the purge path can honestly promise it.
+Postgres cannot promise physical removal, so no change to the purge path can honestly promise it. The tables a forget or a purge writes on `origin/main`: `bilinc_entries` (`postgres.py:1075`), `audit_log` (`core/postgres_audit_sync.py:166`), `memory_events` (`:1194`), `entity_mentions` (`:645, 1073`), `bilinc_claims` (`:1071, 1204`; the claim text comes from the value), `memory_embeddings` (`:1074`; vectors of the value); the ready A4r branch also deletes from `entities` and `eval_candidates`, which already exist in every tenant schema.
+
+## What the repository already says
+`docs/security.md:125` already states the limit, in a weaker form: "Storage engines can keep a removed value briefly at the storage level. ... PostgreSQL keeps old row versions until autovacuum reclaims them." "Briefly" and "until autovacuum reclaims them" suggest the text disappears, which the list above does not support. That line stays the **single source**: it is corrected there, and nowhere else is a second statement added.
 
 ## Approaches
-1. **State the limit, and give the owner an opt-in tool (chosen).**
-   - Document what a Postgres purge does and does not remove (the list above), next to the purge code and in the internal runtime README, so nobody reads "purged" as "gone from every file".
-   - `scripts/vacuum_pg_tenants.py`: per tenant schema, report the dead-tuple count and the last (auto)vacuum time of the tables a purge touches; with `--execute`, run a plain `VACUUM` on them (it takes `SHARE UPDATE EXCLUSIVE`: reads and writes continue); with `--execute --full`, also `VACUUM FULL` and `REINDEX` of the full-text index (`ACCESS EXCLUSIVE`: the tenant blocks while it runs, so it is for a maintenance window and prints that).
+1. **Correct the statement, and give the owner an opt-in tool (chosen).**
+   - Files this step changes: `docs/security.md` (line 125, wording below), a comment on the `compact_search_index` hook in `cloud/runtime.py` `_purge_key` (comment only, no behaviour change), `CHANGELOG.md`, the new `scripts/vacuum_pg_tenants.py` and its tests.
+   - New wording for `docs/security.md:125`: SQLite overwrites deleted content (`secure_delete`), and the purge merges the full-text index and checkpoints the write-ahead log. PostgreSQL has no secure delete: after a purge the removed value may remain as dead row versions, in index pages, in freed space that is not overwritten, in the write-ahead log and in backups, until those are vacuumed, reindexed or rewritten, or expire. An operator can reduce the table and index remnants with the maintenance script.
+   - `scripts/vacuum_pg_tenants.py`, per `bilinc_p_*` tenant schema, over the table set above (`validate_schema_name` and `quoted()` for every identifier, a plain connection, no `init()`):
+     - **default, read-only:** report each table's size, dead-tuple count and last (auto)vacuum time;
+     - **`--execute`:** plain `VACUUM` on the set (lock `SHARE UPDATE EXCLUSIVE`: reads and writes continue);
+     - **`--execute --reindex`:** also `REINDEX INDEX CONCURRENTLY` on the three GIN indexes (no blocking of reads and writes, extra disk while it builds, cannot run in a transaction; if it fails it can leave an invalid index, which the script reports by name);
+     - **`--execute --full`:** `VACUUM FULL` on the set instead, for a maintenance window (lock `ACCESS EXCLUSIVE`: the tenant blocks while it runs; it needs about the size of the largest table in free disk; it rebuilds every index, so no separate reindex). `--reindex` and `--full` together are refused as redundant; either one without `--execute` is refused with exit code 2.
+     - each tenant is reported on its own line; a failure (for example `InsufficientPrivilege`, since `VACUUM` and `REINDEX` need table ownership, or `MAINTAIN` on Postgres 17+) is named and the other tenants still run.
    - Read-only by default, like the other maintenance scripts; running it in production is an owner step.
-2. **Run a vacuum automatically after every purge.** Rejected: `VACUUM` cannot run inside a transaction and needs its own connection; a plain vacuum scans the table, so a purge on a large tenant would turn into a long request; a full vacuum would block the tenant. It would also still not overwrite freed space or touch the WAL and backups, so the promise stays unmade. The cost buys no guarantee.
-3. **Only document, ship no tool.** Rejected: the owner could then only run raw SQL on a production database, per schema, by hand; a small checked tool with a read-only default is the safer way to do what the documentation recommends.
+2. **Run a vacuum automatically after every purge.** Rejected: `VACUUM` cannot run inside a transaction and needs its own connection; a plain vacuum scans the table, so a purge on a large tenant would become a long request; a full vacuum would block the tenant. It would still not overwrite freed space or touch the WAL and backups, and a plain vacuum does not clear index entry keys. The cost buys no guarantee.
+3. **Only document, ship no tool.** Rejected: the owner would then run raw SQL on a production database, schema by schema, by hand; a small checked tool with a read-only default is safer for what the text recommends.
 
-The purge result and the public wording do not change: "removed from storage and history" is about the live data and the history Bilinc serves, and the README says what is not covered.
+The purge result and the public wording "removed from storage and history" do not change.
 
 ## Test plan (tests first, small commits)
-Postgres tests run under the DSN gate; the documentation point is checked by a test that reads the files.
-1. Default run changes nothing: no statement other than reads is issued (a recording wrapper around the connection) and the row counts and `schema_version` are unchanged.
-2. A tenant with dead tuples (insert rows, update them, no vacuum yet) reports a non-zero count for the touched table; after `--execute` the plain `VACUUM` ran without error on each touched table and the report shows the run (`vacuumed: true`).
-3. `--execute --full` runs `VACUUM FULL` and `REINDEX` on a small tenant without error, and refuses to run without `--execute`. Both print the lock warning.
-4. A schema missing a table is skipped and reported; a schema with an unexpected name stops the run before anything runs (fail closed, `validate_schema_name`); a tenant that fails is reported and the others still run.
-5. Running twice is safe.
-6. The README text is present (a test greps the internal README for the stated limits), so the statement does not silently disappear.
-7. Run through `bilinc-test` only: `-q -m public_source`, `-q -m internal_runtime`, the Postgres tests, and `.venv/bin/ruff check`.
+Postgres tests run under the DSN gate. Test tenants get `autovacuum_enabled = false` on the touched tables, so autovacuum cannot run between a step and its assertion; statistics are flushed before they are read (`pg_stat_force_next_flush()` where it exists, otherwise polling for up to 5 s).
+1. **Default run writes nothing.** A recording wrapper around the connection sees only read statements, and the row counts, `schema_version` and table sizes are unchanged.
+2. **Report.** A tenant with dead tuples (rows inserted and updated, no vacuum yet) reports a non-zero dead-tuple count for the touched table.
+3. **`--execute`.** A plain `VACUUM` runs without error on every table of the set; afterwards the dead-tuple count is 0 and `last_vacuum` is set.
+4. **Index residue, measured.** With the `pageinspect` extension on the throwaway Postgres (the test skips if it cannot be created): seed a row whose metadata holds a unique word, delete it, then read the raw pages of the three GIN indexes. After `REINDEX INDEX CONCURRENTLY` the word is not in any of them; after `VACUUM FULL` it is not in the table or any index. For a plain `VACUUM` the test records what it finds but asserts nothing about index entry keys: that stays "may remain" in the text.
+5. **Flags.** `--reindex` or `--full` without `--execute` exit with code 2 and run nothing; `--reindex` with `--full` is refused.
+6. **Failure cases.** A schema missing a table is skipped and reported; a schema with an unexpected name stops the run before anything runs (fail closed); a role without the privilege is reported per tenant by name and the other tenants still run (a second, unprivileged role on the throwaway Postgres, if it can be created; otherwise a recording wrapper that raises).
+7. **Twice is safe.**
+8. **The statement.** A test reads `docs/security.md` and asserts the corrected sentence (dead row versions, index pages, freed space not overwritten, write-ahead log, backups) is there and that the word "briefly" is gone.
+9. Run through `bilinc-test` only: `-q -m public_source`, `-q -m internal_runtime`, the Postgres tests, and `.venv/bin/ruff check`.
 
 ## Rollback and who runs what
-- Code: revert the commit. No schema change, no change to a purge or to any runtime path.
-- A plain `VACUUM` removes dead row versions, nothing a client can see. `VACUUM FULL` and `REINDEX` rewrite the table and the index and block the tenant while they run: the script says so and needs `--full`.
+- Code: revert the commit. No schema change; the only runtime-path edit is a comment.
+- A plain `VACUUM` removes dead row versions, nothing a client can see. `REINDEX CONCURRENTLY` and `VACUUM FULL` rewrite structures; the second blocks the tenant. The script says so and requires the explicit flag.
 - **Running the script in production is an owner step; the worker ships the script, the tests and the text only.** The off-site backups and the WAL are outside this change.
 
 ## Release-chain impact
-- **Where it ships.** The script and the internal README are not part of the PyPI wheel or sdist (`MANIFEST.in`, `pyproject.toml` `packages`, `docs/repository-contract.md:13`): they live in the repository checkout. No runtime code changes, so there is nothing to deploy.
-- **Version.** None needed: no code in the wheel or the runtime changes. If the owner ships it with another release, the usual synchronized chain applies.
+- **Where it ships.** `scripts/` and `docs/` are not part of the PyPI wheel or sdist: the wheel's package list is `bilinc` and `bilinc.cli` (`pyproject.toml`), `MANIFEST.in` prunes the runtime packages, and nothing includes `scripts/` or `docs/`. I could not build an sdist here (the venv has no `setuptools`), so this is checked by reading, not by a build. The build-time check `test_built_sdist_does_not_ship_local_runtime_sources` (`tests/test_cloud_only_package.py:419`, runs when `BILINC_TEST_SDIST` is set) is extended to assert that no `/scripts/` or `/docs/` entry is in the sdist, so the owner's build verifies it.
+- **Runtime.** The only change under `src/` is a comment in `cloud/runtime.py`; there is nothing to deploy.
+- **Version.** None needed. If the owner ships it with another release, the usual synchronized chain applies.
 - **SDK behaviour, site code, MCP tool list, migration:** unchanged.
-- **Public text:** unchanged wording ("removed from storage and history"); the internal README gains the limits. Nothing public may claim physical removal on Postgres.
-- **CHANGELOG:** one line under Added. The other ready branches also add a top `[Unreleased]` section, so the merge needs a trivial conflict resolution.
+- **Public text.** `docs/security.md` already names the storage engines at this level of detail; the corrected line keeps that level and adds no internals. It is the one public-facing sentence this change edits, so the owner reviews its wording before it ships anywhere public. Nothing may claim physical removal on Postgres.
+- **CHANGELOG:** one line under Changed. The other ready branches also add a top `[Unreleased]` section, so the merge needs a trivial conflict resolution.
