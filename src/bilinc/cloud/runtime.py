@@ -66,6 +66,8 @@ def _setting(name: str, default: float, cast: Callable[[str], Any]) -> Any:
     try:
         value = cast(raw.strip())
     except ValueError:
+        value = None
+    if value is None or not math.isfinite(value) or value < 0:
         logger.warning("Ignoring invalid value for %s; using %s", name, default)
         return default
     return value if value > 0 else default
@@ -654,17 +656,12 @@ class ProjectRuntimeManager:
                 result = close()
                 if inspect.isawaitable(result):
                     await asyncio.wait_for(result, self._close_timeout)
-            except BaseException as exc:
-                if isinstance(exc, asyncio.CancelledError):
-                    raise
+            except asyncio.CancelledError:
+                self._terminate_pool(backend)
+                raise
+            except Exception as exc:
                 logger.warning("Closing a plane's storage failed: %s", type(exc).__name__)
-                # A pool's close() waits for connections still held, so force the rest.
-                terminate = getattr(getattr(backend, "pool", None), "terminate", None)
-                if terminate is not None:
-                    try:
-                        terminate()
-                    except Exception as exc2:
-                        logger.warning("Terminating a plane's pool failed: %s", type(exc2).__name__)
+                self._terminate_pool(backend)
         audit_close = getattr(getattr(plane, "audit", None), "close", None)
         if audit_close is not None:
             try:
@@ -676,12 +673,26 @@ class ProjectRuntimeManager:
         if self._indexer is not None and schema:
             self._indexer.forget_tenant(schema)  # a pass still running may have written leftovers meanwhile
 
+    @staticmethod
+    def _terminate_pool(backend: Any) -> None:
+        """A pool's close() waits for connections still held, so force the rest."""
+        terminate = getattr(getattr(backend, "pool", None), "terminate", None)
+        if terminate is not None:
+            try:
+                terminate()
+            except Exception as exc:
+                logger.warning("Terminating a plane's pool failed: %s", type(exc).__name__)
+
     async def _await_closing(self, project: str | None = None) -> None:
+        """Wait for background closes (of one project, or all). Each close bounds itself at ``_close_timeout`` and
+        then terminates; twice that is the ceiling here, after which a straggler is cancelled (which terminates too)."""
         pending = [task for task, owner in self._closing.items() if project is None or owner == project]
         if pending:
             _done, still = await asyncio.wait(pending, timeout=self._close_timeout * 2)
             for task in still:
                 task.cancel()
+            if still:
+                await asyncio.wait(still, timeout=1.0)
 
     async def _semantic_encoder(self) -> Any:
         """The shared encoder, built on first use; None when semantic recall is off or failed to load."""
@@ -1364,6 +1375,7 @@ class ProjectRuntimeManager:
             snapshots += 1
         return {"audit_rows": audit_rows, "events": events, "snapshots": snapshots}
 
+    @_leased_plane
     @_serialized_project_mutation
     async def purge_project(self, project_id: str, *, dry_run: bool = False) -> dict[str, Any]:
         """Delete everything the runtime holds for a project: its schema or database, snapshots and files.
@@ -1392,6 +1404,7 @@ class ProjectRuntimeManager:
                 )
                 if schema_exists and not dry_run:
                     await self._evict_plane(normalized)
+                    await self._await_closing(normalized)
                     await conn.execute(f"DROP SCHEMA IF EXISTS {quoted(schema)} CASCADE")
             finally:
                 await conn.close()
@@ -1410,7 +1423,6 @@ class ProjectRuntimeManager:
         return receipt
 
     async def _evict_plane(self, project_id: str) -> None:
-        self._inflight.pop(project_id, None)
         self._last_used.pop(project_id, None)
         plane = self._planes.pop(project_id, None)
         if plane is not None:

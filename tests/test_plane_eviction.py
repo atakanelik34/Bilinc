@@ -107,6 +107,25 @@ async def test_garbage_settings_fall_back_to_the_defaults(tmp_path, monkeypatch,
     assert "BILINC_CLOUD_PLANE_IDLE_SECONDS" in caplog.text and "soon" not in caplog.text
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["-5", "nan", "inf"])
+async def test_negative_and_non_finite_settings_are_logged_and_ignored(tmp_path, monkeypatch, caplog, raw):
+    monkeypatch.setenv("BILINC_CLOUD_PLANE_IDLE_SECONDS", raw)
+    monkeypatch.delenv("BILINC_CLOUD_PLANE_MAX", raising=False)
+    with caplog.at_level(logging.WARNING):
+        manager = ProjectRuntimeManager(tmp_path)
+    assert manager._plane_idle_seconds == 0
+    assert "BILINC_CLOUD_PLANE_IDLE_SECONDS" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_zero_setting_is_valid_and_silent(tmp_path, monkeypatch, caplog):
+    monkeypatch.setenv("BILINC_CLOUD_PLANE_IDLE_SECONDS", "0")
+    with caplog.at_level(logging.WARNING):
+        ProjectRuntimeManager(tmp_path)
+    assert "BILINC_CLOUD_PLANE_IDLE_SECONDS" not in caplog.text
+
+
 # ---- in flight ------------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -137,6 +156,34 @@ async def test_a_plane_with_an_operation_in_flight_is_not_evicted(tmp_path, monk
         assert (await plane.backend.load("second")) is not None
         await _evict(manager, clock)
         assert key not in manager._planes
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_a_plane_with_a_recall_in_flight_is_not_evicted(tmp_path, monkeypatch):
+    clock = Clock()
+    manager = _manager(tmp_path, monkeypatch, clock=clock)
+    a = _pid()
+    key = manager.normalize_project_id(a)
+    try:
+        await manager.commit(a, key="note", value="kept")
+        plane = manager._planes[key]
+        entered, release = asyncio.Event(), asyncio.Event()
+        real = plane.recall_profiled
+
+        async def blocked(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await real(*args, **kwargs)
+
+        plane.recall_profiled = blocked
+        task = asyncio.create_task(manager.recall(a, query="note", profile="fast", limit=3))
+        await asyncio.wait_for(entered.wait(), 5)
+        clock.advance()
+        assert manager._evict_idle() == [] and manager._planes[key] is plane
+        release.set()
+        assert "note" in {item["key"] for item in (await task)["results"]}
     finally:
         await manager.close()
 
@@ -334,6 +381,57 @@ async def test_purge_waits_for_a_pending_close_of_the_same_project(tmp_path, mon
 
 
 @pytest.mark.asyncio
+async def test_a_project_being_purged_is_not_evicted_underneath_the_purge(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILINC_PURGE_ENABLED", "1")
+    clock = Clock()
+    manager = _manager(tmp_path, monkeypatch, clock=clock)
+    a = _pid()
+    key = manager.normalize_project_id(a)
+    entered, release = asyncio.Event(), asyncio.Event()
+    real_wait = manager._await_closing
+
+    async def slow(project=None):
+        entered.set()
+        await release.wait()
+        await real_wait(project)
+
+    try:
+        await manager.commit(a, key="k", value="v")
+        manager._await_closing = slow
+        purge = asyncio.create_task(manager.purge_project(a))
+        await asyncio.wait_for(entered.wait(), 5)
+        clock.advance()
+        assert manager._evict_idle() == []                 # purge holds the project, as any operation does
+        assert key in manager._planes
+        release.set()
+        receipt = await purge
+        assert receipt["purged"] is True
+        assert not [t for t, owner in manager._closing.items() if owner == key]
+        assert key not in manager._planes and key not in manager._inflight
+    finally:
+        manager._await_closing = real_wait
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_a_close_cancelled_at_the_ceiling_still_terminates_the_pool(tmp_path, monkeypatch):
+    clock = Clock()
+    manager = _manager(tmp_path, monkeypatch, clock=clock)
+    manager._close_timeout = 30.0                          # the close itself would wait far longer than the ceiling
+    a = _pid()
+    try:
+        await manager.commit(a, key="k", value="v")
+        terminated = _hang_the_close(manager._planes[manager.normalize_project_id(a)])
+        clock.advance()
+        manager._evict_idle()
+        manager._close_timeout = 0.05                      # the ceiling for waiting is twice this
+        await manager._await_closing()
+        assert terminated == [True] and manager._closing == {}
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_the_indexer_is_told_before_and_after_the_close(tmp_path, monkeypatch):
     clock = Clock()
     manager = _manager(tmp_path, monkeypatch, clock=clock)
@@ -484,6 +582,12 @@ async def test_churn_every_call_succeeds_and_every_key_survives(tmp_path, monkey
 _DSN = os.getenv("BILINC_TEST_POSTGRES_DSN")
 
 
+def _pg_audit_rows(plane):
+    with plane.audit.conn.cursor() as cur:
+        cur.execute("SELECT id, prev_root, root_hash FROM audit_log ORDER BY id")
+        return [(r["id"], r["prev_root"], r["root_hash"]) for r in cur.fetchall()]
+
+
 @pytest.mark.skipif(not _DSN, reason="BILINC_TEST_POSTGRES_DSN not set")
 def test_hosted_postgres_eviction_closes_pool_and_audit_and_reloads(tmp_path, monkeypatch):
     monkeypatch.setenv("BILINC_STORAGE_BACKEND", "postgres")
@@ -500,14 +604,17 @@ def test_hosted_postgres_eviction_closes_pool_and_audit_and_reloads(tmp_path, mo
             await manager.commit(project, key="note", value="kept")
             key = manager.normalize_project_id(project)
             old = manager._planes[key]
-            rows_before = old.audit.verify_integrity()
-            assert rows_before["valid"] is True
+            assert old.audit.verify_integrity()["valid"] is True
+            before = _pg_audit_rows(old)
             await _evict(manager, clock)
             assert old.audit.conn is None
             assert old.backend.pool is None or old.backend.pool._closed
             await manager.commit(project, key="again", value="2")
             plane = manager._planes[key]
             assert plane is not old and plane.audit.verify_integrity()["valid"] is True
+            after = _pg_audit_rows(plane)
+            assert after[: len(before)] == before
+            assert after[len(before)][1] == before[-1][2]      # prev_root == last root_hash before the eviction
             recalled = await manager.recall(project, query="note", profile="fast", limit=5)
             assert "note" in {item["key"] for item in recalled["results"]}
         finally:
