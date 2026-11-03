@@ -2,6 +2,13 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- Appending to the audit trail or the event ledger on PostgreSQL now takes a short database lock per project and chain, so two writers can no longer link to the same previous entry and split the hash chain. A write that cannot get the lock within ten seconds fails instead of waiting indefinitely.
+- Each new ledger event is now stamped strictly later than the entry it follows, even if the writer's clock is behind or steps back, so the chain keeps one order. An event's recorded time can therefore be a few microseconds past the wall clock in that case.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added

@@ -82,6 +82,16 @@ class Site:
         return "public" if self.kind == "audit_async" else self.schema
 
 
+_OPEN_HOLDERS: list = []
+
+
+@pytest.fixture(autouse=True)
+def _release_holders_even_when_a_test_fails():
+    yield
+    while _OPEN_HOLDERS:
+        _OPEN_HOLDERS.pop().terminate()
+
+
 async def _connect(schema: str):
     import asyncpg
 
@@ -96,6 +106,7 @@ async def _holder(schema: str, chain: str):
     tx = conn.transaction()
     await tx.start()
     await conn.execute(postgres_chain_lock.lock_sql(chain))
+    _OPEN_HOLDERS.append(conn)
     return conn, tx
 
 
