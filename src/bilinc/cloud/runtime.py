@@ -1208,6 +1208,10 @@ class ProjectRuntimeManager:
         delete_mentions = getattr(plane.backend, "delete_entity_mentions_for_memory_key", None)
         if delete_mentions is not None:
             await delete_mentions(key)
+        # SQLite compacts here (secure_delete, FTS merge, WAL truncate). PostgresBackend has no such method on
+        # purpose: Postgres has no secure delete, a vacuum inside a purge would stall the request, and none of
+        # it would reach the write-ahead log or the backups. What a Postgres purge leaves is stated in
+        # docs/security.md; the operator's opt-in tool is described in the docstring of scripts/vacuum_pg_tenants.py.
         compact_index = getattr(plane.backend, "compact_search_index", None)
         if compact_index is not None:
             await compact_index()
