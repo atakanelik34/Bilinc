@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- The verified and deep recall profiles now load the claims of the memories they return directly, instead of looking only at the newest 1000 claims in the project. In projects with more than 1000 active claims, evidence and the contradiction check no longer miss the claims of older memories. Local and Cloud behave the same; smaller projects return the same result as before.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added
