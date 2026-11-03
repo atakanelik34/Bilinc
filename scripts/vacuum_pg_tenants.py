@@ -23,7 +23,10 @@ Lock waits are bounded: the session sets ``lock_timeout`` (default 5 s, ``--lock
 queued behind an open transaction cannot stall the tenant; a timeout is reported for that tenant and the run goes
 on. ``statement_timeout`` is set to 0 on the session so an inherited timeout cannot abort a long rewrite. A failed
 ``REINDEX CONCURRENTLY`` can leave an invalid index (a ``*_ccnew`` name): it is reported by name, and the operator
-drops it with ``DROP INDEX CONCURRENTLY`` or reruns; this script never drops anything.
+drops it with ``DROP INDEX CONCURRENTLY`` and then runs again (a table-level ``REINDEX`` skips an invalid index, so
+running again alone would not clear it); this script never drops anything. Every run, the read-only report
+included, lists the invalid indexes of the schema in ``invalid_indexes``, and a run that executes work is not
+``ok`` while any invalid index remains (status ``invalid_indexes_present``, exit code 1).
 
 Exit code: 0 when every tenant succeeded, 1 when any tenant failed or was skipped for a missing table, 2 for
 refused flags. VACUUM and REINDEX need table ownership (or MAINTAIN on Postgres 17+); a missing privilege is
@@ -35,6 +38,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 
 from bilinc.storage.postgres_tenancy import TENANT_TABLES, quoted, validate_schema_name
@@ -66,6 +70,18 @@ async def _report(conn, schema: str) -> dict:
             "last_autovacuum": row["last_autovacuum"].isoformat() if row["last_autovacuum"] else None,
         }
     return tables
+
+
+#: Names a failed REINDEX CONCURRENTLY leaves behind; other invalid indexes (for example from a failed
+#: migration) are reported by name only, with no instruction.
+_REINDEX_LEFTOVER = re.compile(r"_cc(new|old)\d*$")
+
+
+def _hint(invalid: list[str]) -> str | None:
+    if any(_REINDEX_LEFTOVER.search(name) for name in invalid):
+        return ("drop each *_ccnew / *_ccold index listed with DROP INDEX CONCURRENTLY, then run again: a table-level "
+                "REINDEX skips an invalid index, so running again alone does not clear it; this script never drops one itself")
+    return None
 
 
 async def _invalid_indexes(conn, schema: str) -> list[str]:
@@ -104,12 +120,16 @@ async def maintain_schema(conn, schema: str, *, execute: bool = False, reindex: 
     try:
         try:
             record["tables"] = await _report(conn, schema)
+            record["invalid_indexes"] = await _invalid_indexes(conn, schema)
         except asyncpg.PostgresError as exc:
             record["status"] = "failed"
             record["error"] = type(exc).__name__
             return record
         record["status"] = "ok"
         if not execute:
+            hint = _hint(record["invalid_indexes"])
+            if hint:
+                record["hint"] = hint
             return record
         # VACUUM by a role that does not own the table only warns and skips it, which would read as success.
         # (Postgres 17+ also lets a role with the MAINTAIN privilege vacuum and reindex.)
@@ -143,12 +163,15 @@ async def maintain_schema(conn, schema: str, *, execute: bool = False, reindex: 
                 record["status"] = "failed"
                 record["error"] = type(exc).__name__
                 record["table"] = table
-                invalid = await _invalid_indexes(conn, schema)
-                if invalid:
-                    record["invalid_indexes"] = invalid
-                    record["hint"] = ("drop each invalid index with DROP INDEX CONCURRENTLY, or run again; "
-                                      "this script never drops one itself")
                 break
+        # A leftover from this run, or one that was already there, keeps the tenant from reading as clean.
+        record["invalid_indexes"] = await _invalid_indexes(conn, schema)
+        if record["invalid_indexes"]:
+            if record["status"] == "ok":
+                record["status"] = "invalid_indexes_present"
+            hint = _hint(record["invalid_indexes"])
+            if hint:
+                record["hint"] = hint
         return record
     finally:
         for name, value in previous.items():
@@ -207,6 +230,9 @@ def main(argv=None) -> int:
         print(json.dumps(record, default=str), flush=True)
         if record.get("hint"):
             print(f"{record['schema']}: invalid index {record['invalid_indexes']}: {record['hint']}", file=sys.stderr)
+        elif record.get("invalid_indexes"):
+            print(f"{record['schema']}: invalid index {record['invalid_indexes']} (not left by this tool's reindex)",
+                  file=sys.stderr)
     print(json.dumps({"tenants": len(records), "execute": args.execute, "failed": sum(r["status"] != "ok" for r in records)}),
           flush=True)
     return code

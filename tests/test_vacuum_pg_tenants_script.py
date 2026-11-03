@@ -235,9 +235,17 @@ def test_full_vacuum_rewrites_the_tables_and_leaves_no_trace_of_removed_rows():
             await _need_pageinspect(conn)
             await backend.save(MemoryEntry(key="k", value=f"value {WORD_VALUE}", memory_type=MemoryType.SEMANTIC,
                                            metadata={"note": WORD_ENTRY}))
+            await conn.execute(
+                f'''INSERT INTO "{schema}".bilinc_claims (id, memory_key, holder, subject, claim, kind, created_at, updated_at)
+                    VALUES ('c1', 'k', 'h', '{WORD_CLAIM}', 'claim text', 'fact', 1, 1)''')
+            await conn.execute(
+                f'''INSERT INTO "{schema}".entities (id, canonical_name, created_at, updated_at)
+                    VALUES ('e1', '{WORD_ENTITY}', 1, 1)''')
             present = await _raw_pages_contain(conn, schema, "bilinc_entries", WORD_VALUE)
             present_index = await _raw_pages_contain(conn, schema, "idx_bilinc_entries_fts", WORD_ENTRY)
             await conn.execute(f'DELETE FROM "{schema}".bilinc_entries')
+            await conn.execute(f'DELETE FROM "{schema}".bilinc_claims')
+            await conn.execute(f'DELETE FROM "{schema}".entities')
             record = await script.maintain_schema(conn, schema, execute=True, full=True)
             heap_gone = not await _raw_pages_contain(conn, schema, "bilinc_entries", WORD_VALUE)
             indexes = [row["indexname"] for row in await conn.fetch(
@@ -245,6 +253,9 @@ def test_full_vacuum_rewrites_the_tables_and_leaves_no_trace_of_removed_rows():
                 "AND indexname NOT LIKE '%_pkey' AND indexname NOT LIKE '%_key'", schema)]
             left = [idx for idx in indexes
                     for word in (WORD_ENTRY, WORD_VALUE) if await _raw_pages_contain(conn, schema, idx, word)]
+            left += [rel for rel, word in (("bilinc_claims", WORD_CLAIM), ("idx_bilinc_claims_subject_active", WORD_CLAIM),
+                                           ("entities", WORD_ENTITY), ("idx_entities_canonical_name", WORD_ENTITY))
+                     if await _raw_pages_contain(conn, schema, rel, word)]
             return present, present_index, record, heap_gone, indexes, left
         finally:
             await conn.close()
@@ -374,9 +385,45 @@ def test_a_reindex_that_times_out_names_the_table_and_any_invalid_index_and_drop
     assert not failed["tables"]["bilinc_entries"].get("reindexed")
     assert any(r["status"] == "ok" for r in records) and code == 1
     # an invalid index left behind is named with the instruction, and the script dropped nothing
-    assert sorted(failed.get("invalid_indexes", [])) == sorted(invalid_after)
-    if invalid_after:
-        assert "DROP INDEX CONCURRENTLY" in failed["hint"]
+    if not invalid_after:
+        pytest.skip("this Postgres left no invalid index after the timed-out reindex; the path is covered by the manual-index test")
+    assert sorted(failed["invalid_indexes"]) == sorted(invalid_after)
+    assert "DROP INDEX CONCURRENTLY" in failed["hint"] and "run again" in failed["hint"]
+
+
+def test_an_invalid_index_is_reported_in_every_run_and_keeps_a_tenant_from_reading_as_clean():
+    script = _script()
+
+    async def go():
+        import asyncpg
+
+        backend, schema = await _make_tenant()
+        other = f"idx_{uuid.uuid4().hex[:6]}"
+        conn = await asyncpg.connect(DSN)
+        try:
+            await conn.execute(f'CREATE INDEX idx_manual_ccnew ON "{schema}".bilinc_entries (key)')
+            await conn.execute(f'CREATE INDEX {other} ON "{schema}".entities (canonical_name)')
+            await conn.execute(
+                "UPDATE pg_index SET indisvalid = false WHERE indexrelid IN "
+                f"('\"{schema}\".idx_manual_ccnew'::regclass, '\"{schema}\".{other}'::regclass)")
+            report, report_code = await script.run(DSN, [schema])
+            executed, code = await script.run(DSN, [schema], execute=True, reindex=True)
+            still = sorted(row["relname"] for row in await conn.fetch(
+                "SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND NOT i.indisvalid", schema))
+            return report, report_code, executed, code, still, other
+        finally:
+            await conn.close()
+            await _drop(backend, schema)
+
+    report, report_code, executed, code, still, other = _run(go())
+    assert report[0]["status"] == "ok" and report_code == 0  # a read-only report only lists them
+    assert sorted(report[0]["invalid_indexes"]) == sorted(["idx_manual_ccnew", other])
+    record = executed[0]
+    assert record["status"] == "invalid_indexes_present" and code == 1
+    assert "idx_manual_ccnew" in record["invalid_indexes"] and other in record["invalid_indexes"]
+    assert "DROP INDEX CONCURRENTLY" in record["hint"] and "run again" in record["hint"]
+    assert still == sorted(["idx_manual_ccnew", other])  # the script dropped nothing
 
 
 def test_running_twice_is_safe():
