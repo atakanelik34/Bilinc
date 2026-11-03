@@ -11,6 +11,7 @@ try:
 except ImportError:
     asyncpg = None
 
+from bilinc.core import postgres_chain_lock
 from bilinc.core.audit import AuditEntry, OpType, verify_chain
 
 
@@ -70,6 +71,8 @@ class PostgresAuditTrail:
         data_hash = hashlib.sha256(data_str.encode()).hexdigest()
         async with self.pool.acquire() as conn:
             async with conn.transaction():
+                await conn.execute(postgres_chain_lock.lock_timeout_sql())
+                await conn.execute(postgres_chain_lock.lock_sql("audit_log"))
                 row = await conn.fetchrow(
                     "SELECT root_hash FROM audit_log ORDER BY id DESC LIMIT 1"
                 )

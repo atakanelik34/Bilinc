@@ -13,6 +13,7 @@ except ImportError:
     psycopg = None
     dict_row = None
 
+from bilinc.core import postgres_chain_lock
 from bilinc.core.audit import AuditEntry, OpType, verify_chain
 from bilinc.storage.postgres_tenancy import quoted, search_path_setting, validate_schema_name
 
@@ -93,6 +94,8 @@ class SyncPostgresAuditTrail:
         ).hexdigest()
         with self.conn.transaction():
             with self.conn.cursor() as cur:
+                cur.execute(postgres_chain_lock.lock_timeout_sql())
+                cur.execute(postgres_chain_lock.lock_sql("audit_log"))
                 cur.execute("SELECT root_hash FROM audit_log ORDER BY id DESC LIMIT 1")
                 row = cur.fetchone()
                 prev_root = row["root_hash"] if row else "0" * 64
