@@ -22,7 +22,7 @@ from typing import Any, Awaitable, Callable
 from uuid import UUID
 
 from bilinc.core.audit import OpType
-from bilinc.core.models import MemoryType
+from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.stateplane import StatePlane
 from bilinc.storage.sqlite import SQLiteBackend
 from bilinc.storage.postgres import PostgresBackend
@@ -210,6 +210,22 @@ MAX_DIFF_RESPONSE_BYTES = 1_000_000
 def _snapshot_entries(payload: dict[str, Any]) -> dict[str, Any]:
     entries = payload.get("snapshot", {}).get("entries")
     return dict(entries) if isinstance(entries, dict) else {}
+
+
+def _normalized_entries(entries: dict[str, Any]) -> dict[str, Any]:
+    """Snapshot entries as the runtime now builds them, so they compare equal to the stored state.
+
+    An old snapshot can hold fields an entry no longer carries (the reserved ``previous_value``);
+    compared raw, every such key would look changed. ``MemoryEntry.from_dict`` edits its input, so
+    each entry is copied first. An entry that cannot be rebuilt is left as it is.
+    """
+    normalized: dict[str, Any] = {}
+    for key, raw in entries.items():
+        try:
+            normalized[key] = StatePlane._entry_to_state(MemoryEntry.from_dict(dict(raw)))
+        except (TypeError, ValueError, KeyError):
+            normalized[key] = raw
+    return normalized
 
 
 def _diff_record(
@@ -1361,7 +1377,7 @@ class ProjectRuntimeManager:
         """
         normalized = self.normalize_project_id(project_id)
         source = await self.load_snapshot(normalized, from_snapshot_id)
-        from_entries = _snapshot_entries(source)
+        from_entries = _normalized_entries(_snapshot_entries(source))
 
         if to_snapshot_id is None:
             plane = await self.get_plane(normalized)
@@ -1370,7 +1386,7 @@ class ProjectRuntimeManager:
             target_label = "current"
         else:
             target = await self.load_snapshot(normalized, to_snapshot_id)
-            to_entries = _snapshot_entries(target)
+            to_entries = _normalized_entries(_snapshot_entries(target))
             to_root = target.get("root_hash")
             target_label = "snapshot"
 
@@ -1425,7 +1441,7 @@ class ProjectRuntimeManager:
         """
         normalized = self.normalize_project_id(project_id)
         payload = await self.load_snapshot(normalized, snapshot_id)
-        target_state = _snapshot_entries(payload)
+        target_state = _normalized_entries(_snapshot_entries(payload))
 
         plane = await self.get_plane(normalized)
         current_state = await plane._persistent_state()
@@ -1470,7 +1486,7 @@ class ProjectRuntimeManager:
         reason, warnings = _scrub_reason(reason)
         normalized = self.normalize_project_id(project_id)
         payload = await self.load_snapshot(normalized, snapshot_id)
-        target_state = _snapshot_entries(payload)
+        target_state = _normalized_entries(_snapshot_entries(payload))
 
         plane = await self.get_plane(normalized)
         if not plane.backend:
