@@ -136,8 +136,9 @@ async def test_a_small_project_gets_the_same_report(tmp_path):
     report = (await probe_claim_contradictions_for_queries(plane, ["Bilinc tier"], top_k=2)).to_dict()
     assert report["count"] == 1 and report["queries_evaluated"] == 1
     pair = report["findings"][0]
-    assert {pair["left_claim_id"], pair["right_claim_id"]} == {
-        c.id for c in await plane.backend.list_claims(active=True, limit=10)}
+    stored = await plane.backend.list_claims(active=True, limit=10)
+    assert len({c.updated_at for c in stored}) == 2          # distinct timestamps: the order is not a tie
+    assert {pair["left_claim_id"], pair["right_claim_id"]} == {c.id for c in stored}
 
 
 # ---- stub backends ------------------------------------------------------------------------------
