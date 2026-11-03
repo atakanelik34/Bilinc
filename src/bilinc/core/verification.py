@@ -20,7 +20,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, asdict
 
-from bilinc.core.models import MemoryEntry, BeliefState
+from bilinc.core.models import MemoryEntry, BeliefState, ttl_expired
 
 
 class VerificationStatus(str, Enum):
@@ -185,7 +185,7 @@ class VerificationGate:
                 recommendations=["Remove or update this entry"]
             )
         
-        if entry.ttl and age_hours * 3600 > entry.ttl:
+        if entry.ttl and ttl_expired(entry.created_at, entry.ttl, entry.invalid_at or None, now, strict=True):
             return VerificationResult(
                 status=VerificationStatus.STALE,
                 confidence=0.0,

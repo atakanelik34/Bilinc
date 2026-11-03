@@ -14,7 +14,7 @@ import re
 import time
 from typing import Any, Iterable
 
-from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core.models import MemoryEntry, MemoryType, ttl_expired
 
 
 REDACTED = "[REDACTED]"
@@ -250,7 +250,7 @@ def _entry_status(entry: MemoryEntry, now: float) -> dict[str, Any]:
 
     created_at = _coerce_timestamp(getattr(entry, "created_at", None))
     ttl = _coerce_timestamp(getattr(entry, "ttl", None))
-    if ttl is not None and created_at is not None and created_at + ttl <= now:
+    if ttl_expired(created_at, ttl, invalid_at, now):
         reasons.append("ttl_expired")
 
     try:

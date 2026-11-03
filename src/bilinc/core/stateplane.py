@@ -23,7 +23,7 @@ import json
 import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
-from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core.models import MemoryEntry, MemoryType, ttl_expired
 from bilinc.core.event_ledger import EventOperation
 from bilinc.core.working_memory import WorkingMemory
 from bilinc.core.confidence import ConfidenceEstimator
@@ -1286,9 +1286,9 @@ class StatePlane:
                 flags.append("expired" if float(entry.invalid_at) <= now else "stale_possible")
             except (TypeError, ValueError):
                 flags.append("stale_possible")
-        if entry.ttl is not None:
+        if entry.ttl is not None and entry.invalid_at is None:
             try:
-                if entry.created_at + float(entry.ttl) <= now:
+                if ttl_expired(entry.created_at, float(entry.ttl), None, now):
                     flags.append("expired")
             except (TypeError, ValueError):
                 flags.append("stale_possible")
@@ -1853,7 +1853,7 @@ class StatePlane:
                 continue
             created_at = parse_temporal_timestamp(entry.created_at)
             ttl = parse_temporal_timestamp(entry.ttl)
-            if created_at is not None and ttl is not None and created_at + ttl <= cutoff:
+            if ttl_expired(created_at, ttl, invalid_at, cutoff):
                 continue
             filtered[key] = entry
         return filtered
@@ -1951,7 +1951,7 @@ class StatePlane:
         # write; a TTL set on a later write must not count from the first one.
         ttl = _timestamp(entry.ttl)
         created_at = _timestamp(entry.created_at)
-        if invalid_at is None and ttl is not None and created_at is not None and created_at + ttl <= now:
+        if ttl_expired(created_at, ttl, invalid_at, now):
             return False
 
         return True
@@ -2695,11 +2695,11 @@ class StatePlane:
             invalid_at = _timestamp(entry.invalid_at)
             created_at = _timestamp(entry.created_at) or 0.0
             ttl = _timestamp(entry.ttl)
-            ttl_expired = ttl is not None and created_at + ttl <= now
+            ttl_lapsed = ttl_expired(created_at, ttl, invalid_at, now)
             explicitly_stale = (
                 entry.superseded_by is not None
                 or (invalid_at is not None and float(invalid_at) <= now)
-                or ttl_expired
+                or ttl_lapsed
             )
             valid_at = _timestamp(entry.valid_at)
             future_dated = valid_at is not None and valid_at > now
