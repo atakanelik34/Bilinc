@@ -2,6 +2,17 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- The field `metadata.previous_value`, which before 2.6.0 held a copy of a replaced value's text, is now reserved: it is dropped from any entry that is loaded, rebuilt or written, so a row that still carries it no longer copies it into its next write, event, audit row or snapshot. The first read after the upgrade changes the `entry_version` of such a row once, so a client that sends back an older version gets one `version_conflict`.
+- Rollback and diff (hosted and local) compare old snapshots and audit states without that field, so keys that only differ by it are no longer listed as changed or rewritten. The local `diff` tool no longer returns it.
+
+### Added
+
+- `scripts/scrub_legacy_previous_value.py` counts, and with `--execute` removes, the field from stored rows (a SQLite file, with a verified backup, or Postgres tenant schemas). Without `--execute` it only reads.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added
