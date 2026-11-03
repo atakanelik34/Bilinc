@@ -424,6 +424,7 @@ async def test_a_close_cancelled_at_the_ceiling_still_terminates_the_pool(tmp_pa
         terminated = _hang_the_close(manager._planes[manager.normalize_project_id(a)])
         clock.advance()
         manager._evict_idle()
+        await asyncio.sleep(0.05)                          # the close task is now waiting inside its own 30 s bound
         manager._close_timeout = 0.05                      # the ceiling for waiting is twice this
         await manager._await_closing()
         assert terminated == [True] and manager._closing == {}
