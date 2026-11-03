@@ -251,6 +251,7 @@ def build_server():
         mode: str = "preview",
         confirmation_token: str | None = None,
         idempotency_key: str | None = None,
+        limit: int = 100,
     ) -> dict[str, Any]:
         """Restore the project to a checkpoint. DESTRUCTIVE in execute mode.
 
@@ -265,12 +266,13 @@ def build_server():
         Execute fails with `state_changed_since_preview` if the project
         changed after the preview, so review the preview and act on it
         promptly rather than reusing an old one. `reason` is required in both
-        modes and is written to the audit trail.
+        modes and is written to the audit trail. `limit` (1-500) caps the
+        preview list; ignored in execute mode.
         """
 
         client = create_client()
         if mode == "preview":
-            return client.rollback_preview(snapshot_id, reason=reason)
+            return client.rollback_preview(snapshot_id, reason=reason, limit=limit)
         if mode == "execute":
             return client.rollback(
                 snapshot_id,

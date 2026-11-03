@@ -843,6 +843,27 @@ class CloudClient:
             seen.add(next_cursor)
             cursor = next_cursor
 
+    def get_memory(self, key: str, *, values: str = "full") -> dict[str, Any]:
+        """Return one stored memory by its exact key.
+
+        Reads through the same list the SDK already has, so the entry carries
+        ``entryVersion`` like a listed one. Raises :class:`BilincNotFoundError`
+        (``memory_not_found``) when no memory has this key. The key is stripped
+        like in :meth:`history`. Keys that merely start with ``key`` are skipped,
+        whatever order the service returns them in.
+        """
+
+        wanted = _require_key(key)
+        for entry in self.iter_memories(prefix=wanted, values=values, page_size=10):
+            if entry.get("key") == wanted:
+                return entry
+        raise BilincNotFoundError(
+            "Memory not found",
+            code="memory_not_found",
+            status=404,
+            retryable=False,
+        )
+
     def export(
         self,
         *,
