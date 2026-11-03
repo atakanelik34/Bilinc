@@ -119,7 +119,8 @@ async def test_plane_verify_works_but_has_its_own_result_shape(tmp_path):
     result = await plane.verify("note")
     assert result["exists"] is True and result["integrity_valid"] is True
     assert {"audit_entries", "invariant_checks", "root_hash", "value"} <= set(result)
-    assert (await plane.verify("missing"))["exists"] is False
+    assert await plane.verify("missing") == {
+        "key": "missing", "exists": False, "audit_entries": [], "invariant_checks": []}
 
 
 # ---- ForgettingEngine.forget_by_contradiction --------------------------------------------------
