@@ -211,7 +211,7 @@ async def test_the_cap_never_evicts_the_plane_its_own_get_plane_returns(tmp_path
             await _settle(manager)
             assert plane in manager._planes.values()
             assert plane.backend._conn is not None
-            clock.advance(1)
+            clock.now -= 50  # the next plane looks older than this one, so only `keep` can save it
     finally:
         await manager.close()
 

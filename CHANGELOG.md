@@ -2,6 +2,16 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Added
+
+- The hosted runtime can release the resources of projects nobody is using. Setting `BILINC_CLOUD_PLANE_IDLE_SECONDS` unloads a project after that many idle seconds, and `BILINC_CLOUD_PLANE_MAX` caps how many projects stay loaded. A project is never unloaded while a request for it is running, and the next request loads it again from storage. Both settings are off by default. State that only lives in process memory, such as the knowledge graph, starts empty after a reload, as it does after a restart.
+
+### Fixed
+
+- Shutting the hosted runtime down now also closes each project's audit trail connection.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added
