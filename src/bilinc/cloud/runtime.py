@@ -176,6 +176,17 @@ def state_version(plane: StatePlane) -> str | None:
     return plane.audit.get_root_hash()
 
 
+def fresh_state_version(plane: StatePlane) -> str | None:
+    """Like ``state_version`` but read from the store, for values that are bound or compared.
+
+    ``state_version`` is this process's cached head, right only while it is the one writer. A failed read
+    raises; the cached value is never used instead.
+    """
+    if not plane.enable_audit or not plane.audit:
+        return None
+    return plane.audit.refresh_root_hash()
+
+
 #: Snapshot identifiers are used as filenames inside the project directory.
 #: Anything outside this alphabet — notably ``/`` and ``..`` — is rejected
 #: before touching the filesystem, so a public identifier can never escape the
@@ -1352,7 +1363,7 @@ class ProjectRuntimeManager:
         if to_snapshot_id is None:
             plane = await self.get_plane(normalized)
             to_entries = await plane._persistent_state()
-            to_root = state_version(plane)
+            to_root = fresh_state_version(plane)
             target_label = "current"
         else:
             target = await self.load_snapshot(normalized, to_snapshot_id)
@@ -1427,7 +1438,7 @@ class ProjectRuntimeManager:
 
         return {
             "snapshot_id": normalize_snapshot_id(snapshot_id),
-            "current_root_hash": state_version(plane),
+            "current_root_hash": fresh_state_version(plane),
             "target_root_hash": payload.get("root_hash"),
             "counts": {"create": len(create), "update": len(update), "remove": len(remove)},
             # Keys only. A preview must not stream back what is about to change.
@@ -1462,7 +1473,7 @@ class ProjectRuntimeManager:
         if not plane.backend:
             raise ValueError("invalid_request")
 
-        current_root = state_version(plane)
+        current_root = fresh_state_version(plane)
         if expected_current_root is not None and current_root != expected_current_root:
             raise ValueError("state_changed_since_preview")
 

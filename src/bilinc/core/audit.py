@@ -329,8 +329,21 @@ class AuditTrail:
         return state
     
     def get_root_hash(self) -> str:
-        """Get the current root hash."""
+        """Get the current root hash (this process's cached value; see ``refresh_root_hash``)."""
         return self._root_hash
+
+    def refresh_root_hash(self) -> str:
+        """Read the head of the chain from the store and make it the cached value.
+
+        The cache is only right while this process is the one writer; use this where the head is compared
+        or bound (a restore check), not on every read. Raises if the store cannot be read.
+        """
+        if self.conn is None:
+            raise RuntimeError("AuditTrail not initialized. Call .init() first.")
+        with self._lock:
+            row = self.conn.execute("SELECT root_hash FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
+            self._root_hash = row["root_hash"] if row else "0" * 64
+            return self._root_hash
     
     async def close(self) -> None:
         """Close database connection."""

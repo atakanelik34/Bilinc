@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- A rollback preview, the confirmation check before a rollback executes, and a diff against the current state now read the project's latest state marker from the store instead of a value remembered by the running process. If another process wrote to the project in between, the preview shows the real state and an execute that was confirmed against the old state is refused with `state_changed_since_preview`.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added
