@@ -132,3 +132,25 @@ def test_a_purge_of_a_key_without_records_is_harmless():
     engine.revise(_entry("a", "x"))
     assert redact_operation_log(engine, "never-written") == 0
     assert len(engine.operation_log) == 1
+
+
+def test_the_status_tool_reports_the_total_not_the_trimmed_length(tmp_path):
+    import json
+
+    from bilinc.core.stateplane import StatePlane
+    from bilinc.mcp_server.server_v2 import _handle_status
+    from bilinc.storage.sqlite import SQLiteBackend
+
+    async def go():
+        plane = StatePlane(backend=SQLiteBackend(str(tmp_path / "s.sqlite")), enable_verification=False, enable_audit=False)
+        await plane.init()
+        plane.init_agm()
+        plane.agm_engine.max_operation_log = 3
+        for n in range(10):
+            plane.agm_engine.revise(_entry(f"k{n}", f"v{n}"))
+        status = json.loads((await _handle_status(plane))[0].text)
+        return status, len(plane.agm_engine.operation_log), plane.agm_engine.operations_total
+
+    status, kept, total = _run(go())
+    assert kept == 3 and total == 10
+    assert status["agm"]["operations"] == total > kept
