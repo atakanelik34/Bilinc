@@ -223,6 +223,16 @@ class SyncPostgresAuditTrail:
     def get_root_hash(self) -> str:
         return self._root_hash
 
+    def refresh_root_hash(self) -> str:
+        """Read the head of the chain from the store and make it the cached value (see ``AuditTrail``)."""
+        if self.conn is None:
+            raise RuntimeError("SyncPostgresAuditTrail not initialized")
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT root_hash FROM audit_log ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
+        self._root_hash = row["root_hash"] if row else "0" * 64
+        return self._root_hash
+
     async def close(self) -> None:
         if self.conn is not None:
             self.conn.close()
