@@ -131,12 +131,10 @@ async def test_a_small_project_gets_the_same_report(tmp_path):
     plane = await _plane(await _sqlite_backend(tmp_path))
     await plane.commit("mem:paid", "Bilinc tier paid", MemoryType.SEMANTIC)
     await plane.commit("mem:free", "Bilinc tier free", MemoryType.SEMANTIC)
-    now = time.time()
     await plane.backend.save_claim(_claim("mem:paid", "Bilinc", "paid"))
     await plane.backend.save_claim(_claim("mem:free", "Bilinc", "free"))
     report = (await probe_claim_contradictions_for_queries(plane, ["Bilinc tier"], top_k=2)).to_dict()
     assert report["count"] == 1 and report["queries_evaluated"] == 1
-    assert now > 0
     pair = report["findings"][0]
     assert {pair["left_claim_id"], pair["right_claim_id"]} == {
         c.id for c in await plane.backend.list_claims(active=True, limit=10)}
