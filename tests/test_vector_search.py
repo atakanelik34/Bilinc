@@ -6,7 +6,7 @@ import pytest
 
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core import vector_search
-from bilinc.core.vector_search import HybridSearch, VectorStore, expand_query
+from bilinc.core.vector_search import HybridSearch, expand_query
 from bilinc.storage.sqlite import SQLiteBackend
 
 
@@ -44,7 +44,7 @@ def test_hybrid_search_handles_natural_question_punctuation(tmp_path):
             )
         )
 
-        search = HybridSearch(backend._get_conn(), VectorStore(backend._get_conn()))
+        search = HybridSearch(backend._get_conn())
         keyword_results = search.keyword_search("Which database do we use?", top_k=5)
         reranked = search.search_with_reranking("Which database do we use?", top_k=5)
 
@@ -77,7 +77,7 @@ def test_keyword_search_uses_content_words_after_a_long_conversational_preamble(
                 memory_type=MemoryType.EPISODIC,
             )
         )
-        search = HybridSearch(backend._get_conn(), VectorStore(backend._get_conn()))
+        search = HybridSearch(backend._get_conn())
         query = (
             "I wanted to check back on our previous conversation about the Netflix "
             "documentary on binaural beats you recommended?"
@@ -127,7 +127,7 @@ def test_semantic_search_reuses_corpus_matrix_and_invalidates_on_text_change(mon
             )
         )
 
-        search = HybridSearch(backend._get_conn(), VectorStore(backend._get_conn()))
+        search = HybridSearch(backend._get_conn())
         search.semantic_search("Which database stores state?", top_k=2)
         search.semantic_search("Which database stores state?", top_k=2)
         assert calls == {"documents": 1, "queries": 2}
@@ -197,8 +197,8 @@ def test_semantic_document_vectors_are_reused_across_scoped_searches(monkeypatch
 
         first = await seed(tmp_path / "first.sqlite")
         second = await seed(tmp_path / "second.sqlite")
-        first_search = HybridSearch(first._get_conn(), VectorStore(first._get_conn()))
-        second_search = HybridSearch(second._get_conn(), VectorStore(second._get_conn()))
+        first_search = HybridSearch(first._get_conn())
+        second_search = HybridSearch(second._get_conn())
 
         first_results = first_search.semantic_search("What is shared?", top_k=1)
         second_results = second_search.semantic_search("What is shared?", top_k=1)
@@ -208,13 +208,13 @@ def test_semantic_document_vectors_are_reused_across_scoped_searches(monkeypatch
 
         monkeypatch.setenv("BILINC_SEMANTIC_CACHE_SIZE", "0")
         third = await seed(tmp_path / "third.sqlite")
-        third_search = HybridSearch(third._get_conn(), VectorStore(third._get_conn()))
+        third_search = HybridSearch(third._get_conn())
         assert third_search.semantic_search("What is shared?", top_k=1)
         assert calls["documents"] == 2
 
         monkeypatch.setenv("BILINC_SEMANTIC_CACHE_SIZE", "16")
         fourth = await seed(tmp_path / "fourth.sqlite")
-        fourth_search = HybridSearch(fourth._get_conn(), VectorStore(fourth._get_conn()))
+        fourth_search = HybridSearch(fourth._get_conn())
         assert fourth_search.semantic_search("What is shared?", top_k=1)
         assert calls["documents"] == 3
 
@@ -246,7 +246,7 @@ def test_hybrid_search_can_restrict_the_candidate_union(tmp_path):
             )
         )
 
-        search = HybridSearch(backend._get_conn(), VectorStore(backend._get_conn()))
+        search = HybridSearch(backend._get_conn())
         results = search.search_with_reranking(
             "database uses",
             top_k=10,
@@ -265,7 +265,7 @@ def test_semantic_search_is_explicitly_opt_in(monkeypatch, tmp_path):
         monkeypatch.delenv("BILINC_SEMANTIC_MODEL", raising=False)
         backend = SQLiteBackend(str(tmp_path / "semantic-search.sqlite"))
         await backend.init()
-        search = HybridSearch(backend._get_conn(), VectorStore(backend._get_conn()))
+        search = HybridSearch(backend._get_conn())
 
         assert search.semantic_search("a paraphrase query", top_k=5) == []
         await backend.close()
@@ -309,7 +309,7 @@ def test_semantic_search_ranks_by_normalized_local_embeddings(monkeypatch, tmp_p
             )
         )
 
-        search = HybridSearch(backend._get_conn(), VectorStore(backend._get_conn()))
+        search = HybridSearch(backend._get_conn())
         results = search.semantic_search("Which database stores state?", top_k=2)
 
         assert results[0][0] == 1
