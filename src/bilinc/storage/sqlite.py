@@ -98,13 +98,8 @@ class SQLiteBackend(StorageBackend):
         # forgotten or purged value does not survive in the file's pages.
         self._conn.execute("PRAGMA secure_delete=ON")
 
-        # Load sqlite-vec extension for vector search
-        try:
-            self._conn.enable_load_extension(True)
-            import sqlite_vec
-            sqlite_vec.load(self._conn)
-        except (ImportError, Exception):
-            pass  # sqlite-vec not available
+        # No extension is loaded and extension loading stays off: the old sqlite-vec vector table
+        # (vec_bilinc) is no longer read or written, and SQL must not be able to call load_extension().
 
         # Schema versioning table
         self._conn.execute("""
@@ -494,21 +489,53 @@ class SQLiteBackend(StorageBackend):
             "SELECT DISTINCT entity_id FROM entity_mentions WHERE memory_key = ?", (memory_key,)
         )]
 
-    async def sweep_orphan_entities(self, older_than: Optional[float] = None) -> int:
+    async def sweep_orphan_entities(self, older_than: Optional[float] = None, dry_run: bool = False) -> int:
         """Maintenance: delete every entity with no mentions (one full scan).
 
         Normal writes prune only the entities they touched, and ``init`` sweeps a
         database once; run this to clear orphans left by interrupted writes since.
         Entities saved or relinked within ``older_than`` seconds (default
         ORPHAN_SWEEP_MIN_AGE_SECONDS) are kept, since another process may be
-        about to link them.
+        about to link them. With ``dry_run`` nothing is deleted and the count is returned.
         """
         conn = self._get_conn()
-        removed = self._prune_orphan_entities(
-            conn, older_than=self.ORPHAN_SWEEP_MIN_AGE_SECONDS if older_than is None else older_than
-        )
+        age = self.ORPHAN_SWEEP_MIN_AGE_SECONDS if older_than is None else older_than
+        if dry_run:
+            return conn.execute(
+                """
+                SELECT COUNT(*) FROM entities
+                WHERE updated_at < ?
+                  AND NOT EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = entities.id)
+                """,
+                (time.time() - age,),
+            ).fetchone()[0]
+        removed = self._prune_orphan_entities(conn, older_than=age)
         conn.commit()
         return removed
+
+    async def purge_eval_candidates(self, memory_key: str) -> int:
+        """Delete the capture rows that name ``memory_key`` (as a retrieved key, the query or ``detail.key``).
+
+        The stored form of a key is ``scrub_query(key)``, so both spellings are matched. A row whose
+        query only quotes a purged value, without naming the key, is not found (documented limit).
+        """
+        from bilinc.eval.capture import scrub_query
+
+        keys = list(dict.fromkeys([memory_key, scrub_query(memory_key)]))
+        marks = ",".join("?" * len(keys))
+        conn = self._get_conn()
+        cursor = conn.execute(
+            f"""
+            DELETE FROM eval_candidates
+            WHERE query IN ({marks})
+               OR (json_valid(retrieved_keys)
+                   AND EXISTS (SELECT 1 FROM json_each(eval_candidates.retrieved_keys) WHERE value IN ({marks})))
+               OR (json_valid(detail) AND json_extract(detail, '$.key') IN ({marks}))
+            """,
+            keys * 3,
+        )
+        conn.commit()
+        return cursor.rowcount
 
     def _prune_orphan_entities(self, conn, entity_ids=None, older_than: float = 0.0) -> int:
         """Delete entities with no remaining mentions.
@@ -799,6 +826,27 @@ class SQLiteBackend(StorageBackend):
         placeholders = ",".join("?" for _ in keys)
         sql = f"SELECT * FROM claims WHERE memory_key IN ({placeholders})"
         params: list[object] = list(keys)
+        if active is not None:
+            sql += " AND active = ?"
+            params.append(int(active))
+            if active:
+                now = time.time()
+                sql += " AND (valid_at IS NULL OR valid_at <= ?) AND (invalid_at IS NULL OR invalid_at > ?)"
+                params.extend([now, now])
+        sql += " ORDER BY updated_at DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        rows = self._get_conn().execute(sql, tuple(params)).fetchall()
+        return [self._row_to_claim(row) for row in rows]
+
+    async def list_claims_for_subjects(self, subjects: list[str], active: bool | None = True, limit: int | None = None):
+        names = sorted({str(subject) for subject in subjects if subject is not None})
+        if not names:
+            return []
+        placeholders = ",".join("?" for _ in names)
+        sql = f"SELECT * FROM claims WHERE subject IN ({placeholders})"
+        params: list[object] = list(names)
         if active is not None:
             sql += " AND active = ?"
             params.append(int(active))

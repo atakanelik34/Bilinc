@@ -1,6 +1,6 @@
 """Bilinc Cloud client.
 
-Bilinc 2.6.0 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
+Bilinc 2.6.1 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
 https://bilinc.space. Local self-hosted StatePlane internals are no longer
 shipped in the public package.
 """
@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-__version__ = "2.6.0"
+__version__ = "2.6.1"
 DEFAULT_BASE_URL = "https://bilinc.space"
 SIGNUP_URL = "https://bilinc.space/signup"
 ACTIVATION_CAMPAIGN = "activation_2_3_4"
@@ -842,6 +842,27 @@ class CloudClient:
                 )
             seen.add(next_cursor)
             cursor = next_cursor
+
+    def get_memory(self, key: str, *, values: str = "full") -> dict[str, Any]:
+        """Return one stored memory by its exact key.
+
+        Reads through the same list the SDK already has, so the entry carries
+        ``entryVersion`` like a listed one. Raises :class:`BilincNotFoundError`
+        (``memory_not_found``) when no memory has this key. The key is stripped
+        like in :meth:`history`. Keys that merely start with ``key`` are skipped,
+        whatever order the service returns them in.
+        """
+
+        wanted = _require_key(key)
+        for entry in self.iter_memories(prefix=wanted, values=values, page_size=10):
+            if entry.get("key") == wanted:
+                return entry
+        raise BilincNotFoundError(
+            "Memory not found",
+            code="memory_not_found",
+            status=404,
+            retryable=False,
+        )
 
     def export(
         self,

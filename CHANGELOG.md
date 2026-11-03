@@ -2,6 +2,34 @@
 
 All notable changes to Bilinc.
 
+## [2.6.1] — 2026-11-03
+
+### Added
+
+- `CloudClient.get_memory(key)` returns one memory by its exact key, with its `entryVersion`, or raises `memory_not_found`.
+- `bilinc rollback preview --limit N` and the MCP adapter's `rollback` tool take a `limit` (1-500, default 100) that caps the preview list, as the SDK's `rollback_preview` already did. Execute ignores it.
+- Internal runtime: the hosted runtime can release the resources of projects nobody is using. `BILINC_CLOUD_PLANE_IDLE_SECONDS` unloads a project after that many idle seconds and `BILINC_CLOUD_PLANE_MAX` caps how many projects stay loaded. Both are off by default. A project is never unloaded while a request for it is running, and the next request loads it again from storage; state that only lives in process memory, such as the knowledge graph, starts empty after a reload, as it does after a restart.
+- Maintenance scripts, run from a source checkout and read-only unless `--execute` is given: `scripts/sweep_pg_orphan_entities.py` (orphan entities left in tenant schemas), `scripts/scrub_legacy_previous_value.py` (the legacy `previous_value` field in stored rows; SQLite with a verified backup, or Postgres tenant schemas), `scripts/vacuum_pg_tenants.py` (vacuum, and with `--reindex` or `--full` rebuild, the tables a purge touches) and `scripts/count_legacy_vec_table.py` (read-only: whether a SQLite database still holds the old vector table). `sweep_orphan_entities(dry_run=True)` returns the count without deleting, on both backends.
+
+### Changed
+
+- The security notes now say what a Postgres purge leaves on disk: removed values may remain as dead row versions, in index pages, in freed space that is not overwritten, in the write-ahead log and in backups, until those are vacuumed, reindexed or rewritten, or expire. The earlier text said only that old row versions stay until autovacuum.
+- The field `metadata.previous_value`, which before 2.6.0 held a copy of a replaced value's text, is reserved: it is dropped from any entry that is loaded, rebuilt or written, so a row that still carries it no longer copies it into its next write, event, audit row or snapshot. The first read after the upgrade changes the `entry_version` of such a row once, so a client that sends back an older version gets one `version_conflict`; a fresh read fixes it.
+
+### Fixed
+
+- Hosted forget, purge and rewrite remove the entities a memory alone mentioned. Their names, aliases and metadata, taken from the value, used to stay in the tenant. A mention that moves to another entity prunes the old one too.
+- A purge also deletes the eval-capture rows that name the key, in the hosted runtime and in the local MCP adapter. A capture row whose query merely quotes the purged text, without naming the key, is not found, and capture rows written after the purge can name the key again.
+- A hosted purge clears the key from the runtime's in-memory revision log, as the local MCP adapter's purge already did. The text of a purged value used to stay in that log until the runtime restarted. The log keeps its newest 1000 records; the `operations` figure in the status outputs still counts every operation.
+- The local MCP adapter's `forget` with `purge` answers `purge_incomplete` when the purge fails after the memory was forgotten. Running the purge again finishes it.
+- Rollback and diff (hosted and local) compare old snapshots and audit states without the legacy `previous_value` field, so keys that only differ by it are no longer listed as changed or rewritten. The local `diff` tool no longer returns it.
+- Removed the old vector level of local hybrid search. Nothing had written its vector table for a long time, yet every hybrid search still tried a request to a local embedding service, and old vectors of forgotten memories could be matched to a different memory by row number (possible, not shown on a real database). Search no longer makes that request, and SQL on a Bilinc connection can no longer load extensions. Where no local embedding service runs, which is the normal case, ranking is unchanged. The old vector table and its vectors stay in existing databases until the table is removed by hand.
+- A memory first written long ago and saved again with a new TTL is no longer reported as expired or stale while its new expiry is still ahead. Point-in-time recall, the ranking penalty, the "expired" risk flag, `MemoryEntry.is_stale`, verification and the graph doctor follow one rule: when a row has an expiry time it alone decides; only older rows with a TTL and no expiry time count from their creation.
+- Appending to the audit trail or the event ledger on PostgreSQL takes a short database lock per project and chain, so two writers can no longer link to the same previous entry and split the hash chain. A write that cannot get the lock within ten seconds fails instead of waiting. Each new ledger event is stamped strictly later than the entry it follows, even if the writer's clock steps back, so its recorded time can be a few microseconds past the wall clock.
+- A rollback preview, the confirmation check before a rollback executes, and a diff against the current state read the project's latest state marker from the store instead of a value remembered by the running process. If another process wrote in between, the preview shows the real state and an execute confirmed against the old state is refused with `state_changed_since_preview`.
+- The verified and deep recall profiles load the claims of the memories they return directly, instead of looking only at the newest 1000 claims in the project, and the claim contradiction probe in the evaluation tools does the same. In projects with more than 1000 active claims, evidence and contradictions involving older claims are no longer missed; smaller projects get the same result as before.
+- Internal runtime: the hosted runtime no longer imports the embedding stack while hosted semantic recall is off, and shutting it down also closes each project's audit trail connection.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added

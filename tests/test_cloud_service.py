@@ -1,3 +1,4 @@
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -8,15 +9,58 @@ from fastapi.testclient import TestClient  # noqa: E402
 from bilinc.cloud.service import create_app  # noqa: E402
 
 
-def test_cloud_sidecar_requires_internal_token(tmp_path):
-    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+@pytest.fixture
+def client(tmp_path):
+    """One client for the whole test, entered as a context manager.
+
+    A bare ``TestClient`` starts a new thread with its own event loop for every request, so a project's plane
+    (including its thread-bound SQLite audit connection) was created on one thread and used on another; that
+    only worked while Python happened to reuse the thread identifier. Entering the client keeps one portal thread.
+    """
+    with TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret")) as entered:
+        yield entered
+
+
+def test_requests_of_one_client_share_one_event_loop(client):
+    """Guards the fixture: a bare ``TestClient`` runs every request on a new loop and thread.
+
+    The loops are kept in a list so none can be garbage collected and have its address reused.
+    """
+    loops = []
+
+    @client.app.get("/_probe_loop")
+    async def probe():
+        loops.append(asyncio.get_running_loop())
+        return {}
+
+    for _ in range(3):
+        assert client.get("/_probe_loop").status_code == 200
+    assert len(loops) == 3 and all(loop is loops[0] for loop in loops)
+
+
+def test_a_bare_test_client_uses_a_new_event_loop_per_request(tmp_path):
+    """The behaviour the fixture exists to avoid (deterministic: the loops are kept alive)."""
+    app = create_app(runtime_dir=tmp_path, sidecar_token="secret")
+    loops = []
+
+    @app.get("/_probe_loop")
+    async def probe():
+        loops.append(asyncio.get_running_loop())
+        return {}
+
+    bare = TestClient(app)
+    bare.get("/_probe_loop")
+    bare.get("/_probe_loop")
+    assert len(loops) == 2 and loops[0] is not loops[1]
+
+
+def test_cloud_sidecar_requires_internal_token(client):
 
     assert client.get("/health").status_code == 401
     assert client.get("/health", headers={"X-Bilinc-Sidecar-Token": "secret"}).status_code == 200
 
 
-def test_cloud_sidecar_keeps_project_state_isolated(tmp_path):
-    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+def test_cloud_sidecar_keeps_project_state_isolated(client):
     headers = {"X-Bilinc-Sidecar-Token": "secret"}
     project_a = str(uuid4())
     project_b = str(uuid4())
@@ -47,9 +91,8 @@ def test_cloud_sidecar_keeps_project_state_isolated(tmp_path):
     assert [item["value"] for item in recall_b["results"]] == [{"tenant": "b"}]
 
 
-def test_cloud_sidecar_accepts_the_same_recall_limit_as_the_public_route(tmp_path):
+def test_cloud_sidecar_accepts_the_same_recall_limit_as_the_public_route(client):
     """The route accepted 100 while the sidecar capped at 50, so 51-100 became 503s."""
-    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
     headers = {"X-Bilinc-Sidecar-Token": "secret"}
     project_id = str(uuid4())
 
@@ -68,8 +111,7 @@ def test_cloud_sidecar_accepts_the_same_recall_limit_as_the_public_route(tmp_pat
     assert rejected.status_code == 422
 
 
-def test_cloud_sidecar_forwards_a_bounded_point_in_time_timestamp(tmp_path):
-    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+def test_cloud_sidecar_forwards_a_bounded_point_in_time_timestamp(client):
     headers = {"X-Bilinc-Sidecar-Token": "secret"}
     project_id = str(uuid4())
 
@@ -93,8 +135,7 @@ def test_cloud_sidecar_forwards_a_bounded_point_in_time_timestamp(tmp_path):
     assert rejected.status_code == 422
 
 
-def test_cloud_sidecar_commit_returns_versions_and_carries_provenance(tmp_path):
-    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+def test_cloud_sidecar_commit_returns_versions_and_carries_provenance(client):
     headers = {"X-Bilinc-Sidecar-Token": "secret"}
     project_id = str(uuid4())
 
@@ -116,16 +157,14 @@ def test_cloud_sidecar_commit_returns_versions_and_carries_provenance(tmp_path):
     assert result["state_version"]
 
 
-def test_cloud_sidecar_health_advertises_create_only_commit(tmp_path):
-    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+def test_cloud_sidecar_health_advertises_create_only_commit(client):
 
     health = client.get("/health", headers={"X-Bilinc-Sidecar-Token": "secret"}).json()
 
     assert "commit_if_absent" in health["capabilities"]
 
 
-def test_cloud_sidecar_create_only_commit_never_overwrites(tmp_path):
-    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+def test_cloud_sidecar_create_only_commit_never_overwrites(client):
     headers = {"X-Bilinc-Sidecar-Token": "secret"}
     project_id = str(uuid4())
     commit_url = f"/v1/projects/{project_id}/commit"
@@ -156,8 +195,7 @@ def test_cloud_sidecar_create_only_commit_never_overwrites(tmp_path):
     assert revised.status_code == 200
 
 
-def test_cloud_sidecar_recall_returns_a_version_revise_accepts(tmp_path):
-    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+def test_cloud_sidecar_recall_returns_a_version_revise_accepts(client):
     headers = {"X-Bilinc-Sidecar-Token": "secret"}
     project_id = str(uuid4())
 
@@ -185,8 +223,7 @@ def test_cloud_sidecar_recall_returns_a_version_revise_accepts(tmp_path):
     assert revised.status_code == 200
 
 
-def test_cloud_sidecar_plain_commit_still_revises_existing_keys(tmp_path):
-    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+def test_cloud_sidecar_plain_commit_still_revises_existing_keys(client):
     headers = {"X-Bilinc-Sidecar-Token": "secret"}
     commit_url = f"/v1/projects/{uuid4()}/commit"
 
@@ -194,8 +231,7 @@ def test_cloud_sidecar_plain_commit_still_revises_existing_keys(tmp_path):
     assert client.post(commit_url, headers=headers, json={"key": "k", "value": 2}).status_code == 200
 
 
-def test_cloud_sidecar_rejects_an_unknown_memory_type_with_a_stable_code(tmp_path):
-    client = TestClient(create_app(runtime_dir=tmp_path, sidecar_token="secret"))
+def test_cloud_sidecar_rejects_an_unknown_memory_type_with_a_stable_code(client):
     headers = {"X-Bilinc-Sidecar-Token": "secret"}
     project_id = str(uuid4())
 

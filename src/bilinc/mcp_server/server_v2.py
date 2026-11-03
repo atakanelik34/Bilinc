@@ -1333,12 +1333,27 @@ async def _handle_forget(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
         "backend_removed": backend_removed,
     }
     if purge:
-        result["purged"] = await _purge_key_history(plane, audit, key, reason)
+        try:
+            result["purged"] = await _purge_key_history(plane, audit, key, reason)
+        except Exception as exc:
+            logger.warning("a purge did not finish: %s", type(exc).__name__)  # no key: the log must not keep what was purged
+            # The forget is already committed; every purge step deletes by key, so a retry finishes it.
+            return _result_text({
+                "tool": "forget",
+                "key": key,
+                "success": False,
+                "error": "purge_incomplete",
+                "detail": "The memory was forgotten but the purge did not finish; run the purge again.",
+            })
     return _result_text(result)
 
 
 async def _purge_key_history(plane: StatePlane, audit, key: str, reason: str) -> Dict[str, int]:
     """Remove one key's values from the audit trail, event ledger and entity index (as Bilinc Cloud does)."""
+    # Capture rows that name the key go first, so a failure leaves purgeable audit rows and a retry is admitted.
+    purge_capture = getattr(plane.backend, "purge_eval_candidates", None)
+    if purge_capture is not None:
+        await purge_capture(key)
     audit_rows = audit.purge_key(key, metadata={"reason": reason, "origin": "bilinc_stdio"}) if audit else 0
     events = 0
     purge_events = getattr(plane.backend, "purge_memory_event_payloads", None)
@@ -1518,7 +1533,7 @@ async def _handle_status(plane: StatePlane, args: Dict[str, Any] = None) -> List
         agm = plane.agm_engine
         status["agm"] = {
             "beliefs": len(agm.belief_state.get_all_beliefs()),
-            "operations": len(agm.operation_log),
+            "operations": agm.operations_total,
             "entrenchment_keys": len(agm.entrenchment),
             "last_operation": agm.operation_log[-1].operation.value if agm.operation_log else None,
         }

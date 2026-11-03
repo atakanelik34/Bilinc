@@ -8,7 +8,7 @@ import pytest
 from bilinc.core.models import MemoryEntry
 from bilinc.core.stateplane import StatePlane
 from bilinc.core.text_fold import fold_text, has_turkish_letters, search_terms
-from bilinc.core.vector_search import HybridSearch, VectorStore
+from bilinc.core.vector_search import HybridSearch
 from bilinc.observability.health import HealthCheck
 from bilinc.storage.sqlite import FTS_V2_TABLE, SQLiteBackend
 
@@ -126,7 +126,7 @@ async def test_keyword_search_uses_prefixes_for_turkish_and_stems_for_english(tm
     await backend.save(MemoryEntry(key="en", value="The deployments were running overnight"))
     await backend.save(MemoryEntry(key="agent", value="ajan kayıt defteri"))
     conn = backend._get_conn()
-    search = HybridSearch(conn, VectorStore(conn))
+    search = HybridSearch(conn)
     key_by_rowid = {row[0]: row[1] for row in conn.execute("SELECT rowid, key FROM memories")}
 
     def keys(query: str) -> list[str]:
@@ -265,7 +265,7 @@ async def test_keyword_search_switches_to_the_v2_index_once_another_process_buil
     backend._conn.execute(f"DROP TABLE {FTS_V2_TABLE}")
     backend._conn.commit()
     conn = backend._get_conn()
-    search = HybridSearch(conn, VectorStore(conn))
+    search = HybridSearch(conn)
     assert search._has_folded_fts() is False
 
     assert backend._ensure_fts_v2() is True  # as a newer process opening the file would

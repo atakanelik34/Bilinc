@@ -358,6 +358,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirmation-token",
         help="Token from a preview. Required for execute; there is no interactive prompt.",
     )
+    rollback.add_argument("--limit", type=int, default=100, help="How many changes a preview lists (ignored by execute)")
 
     sub.add_parser("status", help="Show the authenticated Cloud workspace, plan, and capabilities")
     sub.add_parser("health", help="Show public Bilinc Cloud service health")
@@ -601,7 +602,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
             else:
-                _print(client.rollback_preview(args.snapshot, reason=args.reason))
+                _print(client.rollback_preview(args.snapshot, reason=args.reason, limit=args.limit))
         elif args.command == "status":
             _print(client.status())
         elif args.command == "health":

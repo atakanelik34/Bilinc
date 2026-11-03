@@ -1,4 +1,16 @@
-"""Project-isolated hosted runtime manager for Bilinc Cloud."""
+"""Project-isolated hosted runtime manager for Bilinc Cloud.
+
+Loaded projects ("planes") stay in memory until the process ends, unless eviction is switched on:
+
+- ``BILINC_CLOUD_PLANE_IDLE_SECONDS``: evict a plane that no operation has touched for this many seconds
+  (default 0 = off).
+- ``BILINC_CLOUD_PLANE_MAX``: keep at most this many planes loaded, evicting the least recently used idle ones
+  (default 0 = no cap).
+
+A plane is never evicted while an operation on its project is in flight. An evicted plane is rebuilt from storage on
+the next call; state that only lives in process memory (the AGM operation log, working memory, the knowledge graph)
+starts empty again, as it does after a restart.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +34,7 @@ from typing import Any, Awaitable, Callable
 from uuid import UUID
 
 from bilinc.core.audit import OpType
-from bilinc.core.models import MemoryType
+from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.stateplane import StatePlane
 from bilinc.storage.sqlite import SQLiteBackend
 from bilinc.storage.postgres import PostgresBackend
@@ -44,6 +56,64 @@ def _log_indexer_exit(task: asyncio.Task) -> None:
     exc = task.exception()
     if exc is not None:
         logger.error("Embedding indexer stopped: %s", type(exc).__name__, exc_info=exc)
+
+
+def _setting(name: str, default: float, cast: Callable[[str], Any]) -> Any:
+    """A numeric environment setting; anything unusable falls back to ``default`` (the variable is named, not its value)."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = cast(raw.strip())
+    except ValueError:
+        value = None
+    if value is None or not math.isfinite(value) or value < 0:
+        logger.warning("Ignoring invalid value for %s; using %s", name, default)
+        return default
+    return value if value > 0 else default
+
+
+def _log_reaper_exit(task: asyncio.Task) -> None:
+    """The plane reaper runs until shutdown; say so if it stops for any other reason."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Plane reaper stopped: %s", type(exc).__name__)
+
+
+def _leased_plane(
+    method: Callable[..., Awaitable[Any]],
+) -> Callable[..., Awaitable[Any]]:
+    """Mark a project's plane as in use for the whole call, so it cannot be evicted underneath it.
+
+    Outermost decorator: the lease is taken before the first ``await`` (the mutation wrapper awaits the project lock first).
+    """
+
+    @wraps(method)
+    async def wrapped(
+        self: ProjectRuntimeManager,
+        project_id: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        normalized = self.normalize_project_id(project_id)  # invalid id: raises before any bookkeeping
+        self._inflight[normalized] = self._inflight.get(normalized, 0) + 1
+        self._last_used[normalized] = self._clock()
+        try:
+            return await method(self, project_id, *args, **kwargs)
+        finally:
+            remaining = self._inflight.get(normalized, 1) - 1
+            if remaining > 0:
+                self._inflight[normalized] = remaining
+            else:
+                self._inflight.pop(normalized, None)
+                if normalized in self._planes:
+                    self._last_used[normalized] = self._clock()
+                else:
+                    self._last_used.pop(normalized, None)  # no plane was kept: leave no bookkeeping behind
+
+    return wrapped
 
 
 def _serialized_project_mutation(
@@ -176,6 +246,17 @@ def state_version(plane: StatePlane) -> str | None:
     return plane.audit.get_root_hash()
 
 
+def fresh_state_version(plane: StatePlane) -> str | None:
+    """Like ``state_version`` but read from the store, for values that are bound or compared.
+
+    ``state_version`` is this process's cached head, right only while it is the one writer. A failed read
+    raises; the cached value is never used instead.
+    """
+    if not plane.enable_audit or not plane.audit:
+        return None
+    return plane.audit.refresh_root_hash()
+
+
 #: Snapshot identifiers are used as filenames inside the project directory.
 #: Anything outside this alphabet — notably ``/`` and ``..`` — is rejected
 #: before touching the filesystem, so a public identifier can never escape the
@@ -210,6 +291,22 @@ MAX_DIFF_RESPONSE_BYTES = 1_000_000
 def _snapshot_entries(payload: dict[str, Any]) -> dict[str, Any]:
     entries = payload.get("snapshot", {}).get("entries")
     return dict(entries) if isinstance(entries, dict) else {}
+
+
+def _normalized_entries(entries: dict[str, Any]) -> dict[str, Any]:
+    """Snapshot entries as the runtime now builds them, so they compare equal to the stored state.
+
+    An old snapshot can hold fields an entry no longer carries (the reserved ``previous_value``);
+    compared raw, every such key would look changed. ``MemoryEntry.from_dict`` edits its input, so
+    each entry is copied first. An entry that cannot be rebuilt is left as it is.
+    """
+    normalized: dict[str, Any] = {}
+    for key, raw in entries.items():
+        try:
+            normalized[key] = StatePlane._entry_to_state(MemoryEntry.from_dict(dict(raw)))
+        except (TypeError, ValueError, KeyError):
+            normalized[key] = raw
+    return normalized
 
 
 def _diff_record(
@@ -455,6 +552,16 @@ class ProjectRuntimeManager:
         self._indexer: Any = None
         self._indexer_task: asyncio.Task | None = None
         self._encoder_lock = asyncio.Lock()
+        # Plane eviction (off unless configured): see the module docstring.
+        self._clock: Callable[[], float] = time.monotonic
+        self._plane_idle_seconds: float = _setting("BILINC_CLOUD_PLANE_IDLE_SECONDS", 0, float)
+        self._plane_max: int = _setting("BILINC_CLOUD_PLANE_MAX", 0, int)
+        self._reap_interval: float = min(60.0, max(5.0, self._plane_idle_seconds / 4)) if self._plane_idle_seconds else 60.0
+        self._close_timeout: float = 10.0
+        self._inflight: dict[str, int] = {}
+        self._last_used: dict[str, float] = {}
+        self._closing: dict[asyncio.Task, str] = {}
+        self._reaper_task: asyncio.Task | None = None
 
     @staticmethod
     def normalize_project_id(project_id: str) -> str:
@@ -517,9 +624,109 @@ class ProjectRuntimeManager:
             plane.query_encoder = query_encoder
 
             self._planes[normalized] = plane
+            self._last_used.setdefault(normalized, self._clock())
             if self._indexer is not None:
                 self._indexer.nudge()
+            if self._plane_idle_seconds > 0 and self._reaper_task is None:
+                self._reaper_task = asyncio.create_task(self._reap_loop(), name="bilinc-plane-reaper")
+                self._reaper_task.add_done_callback(_log_reaper_exit)
+            if self._plane_max > 0:
+                self._evict_idle(keep=normalized)
             return plane
+
+    async def _reap_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self._reap_interval)
+            try:
+                self._evict_idle()
+            except Exception as exc:  # one failed round must not stop the reaper
+                logger.warning("Plane eviction round failed: %s", type(exc).__name__)
+
+    def _evict_idle(self, keep: str | None = None) -> list[str]:
+        """Pop the planes that are idle past the limit, or over the cap, and close them in the background.
+
+        Only planes with no operation in flight are taken. There is no ``await`` between the check and the pop, so a call
+        that starts later simply builds a fresh plane. ``keep`` is never taken (the plane a ``get_plane`` call returns).
+        """
+        now = self._clock()
+        idle = [
+            (self._last_used.get(project, 0.0), project)
+            for project in self._planes
+            if self._inflight.get(project, 0) == 0 and project != keep
+        ]
+        victims = [project for stamp, project in idle if self._plane_idle_seconds > 0 and now - stamp >= self._plane_idle_seconds]
+        if self._plane_max > 0:
+            survivors = sorted((stamp, project) for stamp, project in idle if project not in victims)
+            excess = len(self._planes) - len(victims) - self._plane_max
+            victims += [project for _stamp, project in survivors[: max(0, excess)]]
+        for project in victims:
+            self._begin_eviction(project)
+        return victims
+
+    def _begin_eviction(self, project: str) -> None:
+        plane = self._planes.pop(project)
+        self._inflight.pop(project, None)
+        self._last_used.pop(project, None)
+        task = asyncio.create_task(self._close_plane(plane), name="bilinc-plane-close")
+        self._closing[task] = project
+        task.add_done_callback(lambda finished: self._closing.pop(finished, None))
+
+    async def _close_plane(self, plane: StatePlane) -> None:
+        """Close what a plane holds; never raises. The same routine serves eviction, purge and shutdown."""
+        backend = getattr(plane, "backend", None)
+        schema = getattr(backend, "schema", None)
+        if self._indexer is not None and schema:
+            self._indexer.forget_tenant(schema)
+        close = getattr(backend, "close", None)
+        if close is not None:
+            try:
+                result = close()
+                if inspect.isawaitable(result):
+                    await asyncio.wait_for(result, self._close_timeout)
+            except asyncio.CancelledError:
+                self._terminate_pool(backend)
+                await self._close_audit(plane)  # best effort, then let the cancellation through
+                if self._indexer is not None and schema:
+                    self._indexer.forget_tenant(schema)
+                raise
+            except Exception as exc:
+                logger.warning("Closing a plane's storage failed: %s", type(exc).__name__)
+                self._terminate_pool(backend)
+        await self._close_audit(plane)
+        if self._indexer is not None and schema:
+            self._indexer.forget_tenant(schema)  # a pass still running may have written leftovers meanwhile
+
+    @staticmethod
+    async def _close_audit(plane: StatePlane) -> None:
+        audit_close = getattr(getattr(plane, "audit", None), "close", None)
+        if audit_close is not None:
+            try:
+                result = audit_close()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as exc:
+                logger.warning("Closing a plane's audit trail failed: %s", type(exc).__name__)
+
+    @staticmethod
+    def _terminate_pool(backend: Any) -> None:
+        """A pool's close() waits for connections still held, so force the rest."""
+        terminate = getattr(getattr(backend, "pool", None), "terminate", None)
+        if terminate is not None:
+            try:
+                terminate()
+            except Exception as exc:
+                logger.warning("Terminating a plane's pool failed: %s", type(exc).__name__)
+
+    async def _await_closing(self, project: str | None = None) -> None:
+        """Wait for background closes (of one project, or all). Each close bounds itself at ``_close_timeout`` and
+        then terminates; twice that is the ceiling here, after which a straggler is cancelled (which terminates too)."""
+        pending = [task for task, owner in self._closing.items() if project is None or owner == project]
+        if pending:
+            _done, still = await asyncio.wait(pending, timeout=self._close_timeout * 2)
+            for task in still:
+                task.cancel()
+            if still:
+                await asyncio.wait(still, timeout=1.0)
 
     async def _semantic_encoder(self) -> Any:
         """The shared encoder, built on first use; None when semantic recall is off or failed to load."""
@@ -560,6 +767,7 @@ class ProjectRuntimeManager:
         async with self._lock:
             return self._mutation_locks.setdefault(normalized, asyncio.Lock())
 
+    @_leased_plane
     @_serialized_project_mutation
     async def commit(
         self,
@@ -657,6 +865,7 @@ class ProjectRuntimeManager:
         entry = await plane.backend.load(key)
         return entry_version(entry.to_dict()) if entry else None
 
+    @_leased_plane
     async def recall(
         self,
         project_id: str,
@@ -694,6 +903,7 @@ class ProjectRuntimeManager:
             payload["query_timestamp_supported"] = False
         return payload
 
+    @_leased_plane
     async def history(
         self,
         project_id: str,
@@ -729,6 +939,7 @@ class ProjectRuntimeManager:
             raise ValueError("response_too_large")
         return result
 
+    @_leased_plane
     async def list_memories(
         self,
         project_id: str,
@@ -852,6 +1063,7 @@ class ProjectRuntimeManager:
             raise ValueError("response_too_large")
         return result
 
+    @_leased_plane
     @_serialized_project_mutation
     async def revise(
         self,
@@ -894,6 +1106,7 @@ class ProjectRuntimeManager:
             response["warnings"] = _redaction_warnings(scan)
         return response
 
+    @_leased_plane
     @_serialized_project_mutation
     async def confirm(
         self,
@@ -1064,6 +1277,7 @@ class ProjectRuntimeManager:
             "updated_at": next_state.get("updated_at"),
         }
 
+    @_leased_plane
     @_serialized_project_mutation
     async def forget(
         self,
@@ -1167,7 +1381,21 @@ class ProjectRuntimeManager:
         reason: str,
         snapshot_files: list[tuple[Path, dict[str, Any]]],
     ) -> dict[str, int]:
-        """Remove one key's values from the audit trail, event ledger, snapshots and entity index."""
+        """Remove one key's values from the audit trail, event ledger, snapshots and entity index.
+
+        The in-process revision log goes first: it only touches memory and cannot fail, so it is
+        clean even if a later step raises. The capture rows that name the key go next: if that step
+        fails, the audit rows are still purgeable, so the forget gate admits a retry (after the audit
+        purge it would answer ``memory_not_found`` and leave them behind). A failure there is not
+        swallowed.
+        """
+        from bilinc.adaptive.agm_engine import redact_operation_log
+
+        if plane.agm_engine is not None:
+            redact_operation_log(plane.agm_engine, key)
+        purge_capture = getattr(plane.backend, "purge_eval_candidates", None)
+        if purge_capture is not None:
+            await purge_capture(key)
         audit_rows = 0
         if plane.enable_audit and plane.audit:
             audit_rows = plane.audit.purge_key(key, metadata={"reason": reason, "origin": "bilinc_cloud"})
@@ -1178,6 +1406,10 @@ class ProjectRuntimeManager:
         delete_mentions = getattr(plane.backend, "delete_entity_mentions_for_memory_key", None)
         if delete_mentions is not None:
             await delete_mentions(key)
+        # SQLite compacts here (secure_delete, FTS merge, WAL truncate). PostgresBackend has no such method on
+        # purpose: Postgres has no secure delete, a vacuum inside a purge would stall the request, and none of
+        # it would reach the write-ahead log or the backups. What a Postgres purge leaves is stated in
+        # docs/security.md; the operator's opt-in tool is described in the docstring of scripts/vacuum_pg_tenants.py.
         compact_index = getattr(plane.backend, "compact_search_index", None)
         if compact_index is not None:
             await compact_index()
@@ -1195,6 +1427,7 @@ class ProjectRuntimeManager:
             snapshots += 1
         return {"audit_rows": audit_rows, "events": events, "snapshots": snapshots}
 
+    @_leased_plane
     @_serialized_project_mutation
     async def purge_project(self, project_id: str, *, dry_run: bool = False) -> dict[str, Any]:
         """Delete everything the runtime holds for a project: its schema or database, snapshots and files.
@@ -1206,6 +1439,8 @@ class ProjectRuntimeManager:
         normalized = self.normalize_project_id(project_id)
         if not dry_run and os.getenv("BILINC_PURGE_ENABLED", "").strip().lower() not in {"1", "true", "on", "yes"}:
             raise ValueError("purge_disabled")
+        if not dry_run:
+            await self._await_closing(normalized)  # never delete under a connection that is still closing
         directory = self.project_dir(normalized)
         snapshot_count = len(list(self.snapshot_dir(normalized).glob("*.json"))) if self.snapshot_dir(normalized).exists() else 0
         postgres = os.getenv("BILINC_STORAGE_BACKEND", "sqlite").lower() == "postgres"
@@ -1221,6 +1456,7 @@ class ProjectRuntimeManager:
                 )
                 if schema_exists and not dry_run:
                     await self._evict_plane(normalized)
+                    await self._await_closing(normalized)
                     await conn.execute(f"DROP SCHEMA IF EXISTS {quoted(schema)} CASCADE")
             finally:
                 await conn.close()
@@ -1239,24 +1475,17 @@ class ProjectRuntimeManager:
         return receipt
 
     async def _evict_plane(self, project_id: str) -> None:
+        self._last_used.pop(project_id, None)
         plane = self._planes.pop(project_id, None)
-        if plane is None:
-            return
-        schema = getattr(getattr(plane, "backend", None), "schema", None)
-        if self._indexer is not None and schema:
-            self._indexer.forget_tenant(schema)
-        for component in (getattr(plane, "backend", None), getattr(plane, "audit", None)):
-            close = getattr(component, "close", None)
-            if close is not None:
-                result = close()
-                if inspect.isawaitable(result):
-                    await result
+        if plane is not None:
+            await self._close_plane(plane)
 
     @staticmethod
     def _assert_expected_version(entry_state: dict[str, Any], expected: str | None) -> None:
         if expected and entry_version(entry_state) != expected:
             raise ValueError("version_conflict")
 
+    @_leased_plane
     @_serialized_project_mutation
     async def create_snapshot(
         self,
@@ -1330,6 +1559,7 @@ class ProjectRuntimeManager:
             raise ValueError("snapshot_unreadable")
         return payload
 
+    @_leased_plane
     async def diff(
         self,
         project_id: str,
@@ -1347,16 +1577,16 @@ class ProjectRuntimeManager:
         """
         normalized = self.normalize_project_id(project_id)
         source = await self.load_snapshot(normalized, from_snapshot_id)
-        from_entries = _snapshot_entries(source)
+        from_entries = _normalized_entries(_snapshot_entries(source))
 
         if to_snapshot_id is None:
             plane = await self.get_plane(normalized)
             to_entries = await plane._persistent_state()
-            to_root = state_version(plane)
+            to_root = fresh_state_version(plane)
             target_label = "current"
         else:
             target = await self.load_snapshot(normalized, to_snapshot_id)
-            to_entries = _snapshot_entries(target)
+            to_entries = _normalized_entries(_snapshot_entries(target))
             to_root = target.get("root_hash")
             target_label = "snapshot"
 
@@ -1396,6 +1626,7 @@ class ProjectRuntimeManager:
             raise ValueError("response_too_large")
         return result
 
+    @_leased_plane
     async def rollback_preview(
         self,
         project_id: str,
@@ -1411,9 +1642,12 @@ class ProjectRuntimeManager:
         """
         normalized = self.normalize_project_id(project_id)
         payload = await self.load_snapshot(normalized, snapshot_id)
-        target_state = _snapshot_entries(payload)
+        target_state = _normalized_entries(_snapshot_entries(payload))
 
         plane = await self.get_plane(normalized)
+        # The head first, the state after it: a write landing in between makes the bound root older than the
+        # state, so an execute confirmed against this preview is refused instead of passing.
+        current_root = fresh_state_version(plane)
         current_state = await plane._persistent_state()
 
         create = sorted(set(target_state) - set(current_state))
@@ -1427,7 +1661,7 @@ class ProjectRuntimeManager:
 
         return {
             "snapshot_id": normalize_snapshot_id(snapshot_id),
-            "current_root_hash": state_version(plane),
+            "current_root_hash": current_root,
             "target_root_hash": payload.get("root_hash"),
             "counts": {"create": len(create), "update": len(update), "remove": len(remove)},
             # Keys only. A preview must not stream back what is about to change.
@@ -1438,6 +1672,7 @@ class ProjectRuntimeManager:
             "destructive": True,
         }
 
+    @_leased_plane
     @_serialized_project_mutation
     async def rollback_execute(
         self,
@@ -1456,13 +1691,13 @@ class ProjectRuntimeManager:
         reason, warnings = _scrub_reason(reason)
         normalized = self.normalize_project_id(project_id)
         payload = await self.load_snapshot(normalized, snapshot_id)
-        target_state = _snapshot_entries(payload)
+        target_state = _normalized_entries(_snapshot_entries(payload))
 
         plane = await self.get_plane(normalized)
         if not plane.backend:
             raise ValueError("invalid_request")
 
-        current_root = state_version(plane)
+        current_root = fresh_state_version(plane)
         if expected_current_root is not None and current_root != expected_current_root:
             raise ValueError("state_changed_since_preview")
 
@@ -1541,6 +1776,13 @@ class ProjectRuntimeManager:
         return response
 
     async def close(self) -> None:
+        if self._reaper_task is not None:
+            self._reaper_task.cancel()
+            try:
+                await self._reaper_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._reaper_task = None
         if self._indexer_task is not None:
             self._indexer_task.cancel()
             try:
@@ -1548,11 +1790,12 @@ class ProjectRuntimeManager:
             except (asyncio.CancelledError, Exception):
                 pass
             self._indexer_task = None
-        for plane in self._planes.values():
-            backend = getattr(plane, "backend", None)
-            if backend and hasattr(backend, "close"):
-                await backend.close()
+        await self._await_closing()
+        for plane in list(self._planes.values()):
+            await self._close_plane(plane)
         self._planes.clear()
+        self._inflight.clear()
+        self._last_used.clear()
         self._mutation_locks.clear()
 
     @staticmethod

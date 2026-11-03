@@ -10,6 +10,19 @@ from typing import Any, Dict, Optional
 from dataclasses import dataclass, field, asdict
 
 
+def ttl_expired(created_at, ttl, invalid_at, now, *, strict=False):
+    """Whether a TTL has run out, the way a TTL write defines it.
+
+    A TTL write sets ``invalid_at = write time + ttl`` and leaves ``created_at`` alone, so a row
+    that has an ``invalid_at`` is judged by that alone (callers check it themselves). Only a legacy
+    row with a TTL and no ``invalid_at`` counts ``created_at + ttl``. Takes parsed numbers; the
+    caller's own parser decides what an odd value means. ``strict`` compares with ``<``.
+    """
+    if invalid_at is not None or created_at is None or ttl is None:
+        return False
+    return created_at + ttl < now if strict else created_at + ttl <= now
+
+
 class MemoryType(str, Enum):
     """Brain-inspired 5-type memory taxonomy."""
     EPISODIC = "episodic"
@@ -106,6 +119,25 @@ class Claim:
         return cls(**{k: v for k, v in payload.items() if k in cls.__dataclass_fields__})
 
 
+#: Metadata keys Bilinc owns. ``previous_value`` held a copy of a replaced value's text before 2.6.0;
+#: it is reserved so that text is neither written again nor carried into events, audit rows and snapshots.
+RESERVED_METADATA_KEYS = ("previous_value",)
+
+
+def strip_reserved_metadata(metadata):
+    """Return ``metadata`` without the reserved keys.
+
+    Returns the same object when there is nothing to strip (``None`` and an empty dict stay as they
+    are, so ``to_dict`` and the version token of such an entry do not change), and a copy otherwise,
+    so a caller's dict is never mutated.
+    """
+    if not metadata or not isinstance(metadata, dict):
+        return metadata  # nothing to strip, or not a dict (a malformed row): leave it for the caller
+    if not any(key in metadata for key in RESERVED_METADATA_KEYS):
+        return metadata
+    return {key: value for key, value in metadata.items() if key not in RESERVED_METADATA_KEYS}
+
+
 @dataclass
 class MemoryEntry:
     """Atomic unit of Bilinc memory with full provenance."""
@@ -121,6 +153,8 @@ class MemoryEntry:
     updated_at: float = field(default_factory=time.time)
     last_accessed: float = 0.0
     access_count: int = 0
+    # No commit path sets valid_at; it is read (as-of recall, visibility, ranking, graph doctor)
+    # and stored, and only arrives through restore/import or direct construction.
     valid_at: Optional[float] = None
     invalid_at: Optional[float] = None
     ttl: Optional[float] = None
@@ -132,6 +166,10 @@ class MemoryEntry:
     current_strength: float = 1.0
     conflict_id: Optional[str] = None
     superseded_by: Optional[str] = None
+
+    def __post_init__(self):
+        # Touches only metadata: to_dict equality drives the rollback and version checks.
+        self.metadata = strip_reserved_metadata(self.metadata)
 
     def to_dict(self):
         d = asdict(self)
@@ -172,7 +210,7 @@ class MemoryEntry:
         now = time.time()
         if self.invalid_at and now > self.invalid_at:
             return True
-        if self.ttl and (now - self.created_at) > self.ttl:
+        if self.ttl and ttl_expired(self.created_at, self.ttl, self.invalid_at or None, now, strict=True):
             return True
         return self.current_strength < 0.1
 

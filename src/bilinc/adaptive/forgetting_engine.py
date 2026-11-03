@@ -11,6 +11,9 @@ Also includes:
 - Spaced repetition scheduler
 - Protection mechanisms (core beliefs, high-frequency, etc.)
 - Explainable forgetting (why trace)
+
+Not wired: nothing in the package imports this module (``bilinc.adaptive`` exports the
+different ``LearnableForgetting``), so none of the above runs today.
 """
 from __future__ import annotations
 import time
@@ -100,7 +103,12 @@ class ForgettingEngine:
         return result
     
     async def forget_by_contradiction(self) -> ForgettingResult:
-        """Remove weaker entries that contradict stronger ones."""
+        """Remove weaker entries that contradict stronger ones.
+
+        Known limitation: it groups entries by key and needs two rows with one key, which a
+        key-unique store never returns, so it cannot trigger; if it did, ``superseded_by`` would be
+        set to the entry's own key (a self-pointer).
+        """
         result = ForgettingResult()
         if not self.backend:
             return result

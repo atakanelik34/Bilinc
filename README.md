@@ -163,12 +163,12 @@ All endpoints live under `https://bilinc.space`. Memory operations need an API k
 
 Send an `Idempotency-Key` header on any write you might retry: the same key with the same payload replays the original result and is billed once; a different payload is refused with `409 idempotency_conflict`. Saves that contain a credential, such as an API key, token or private key, are refused with `secret_detected` and the value is never echoed back.
 
-## What's new in 2.6.0
+## What's new in 2.6.1
 
-- **Sorted lists**: list memories newest or oldest first, and filter them by which app saved them, from the SDK, the CLI, the `bilinc` MCP adapter and the dashboard.
-- **Turkish search**: hosted search ignores case, Turkish dotted and dotless I, and diacritics, so `girisimci` finds `Girişimci`.
-- **Clearer write results**: when a credential-looking field is stored redacted, the response says which field.
-- **Purge from the MCP adapter**: the `bilinc` stdio MCP adapter's `forget` tool takes `purge`.
+- **Forget means gone**: a hosted forget or purge also removes the names and aliases taken from the memory, the purged text the server still held in memory, and the evaluation records that name the key.
+- **Get one memory**: `CloudClient.get_memory(key)` returns a memory by its exact key, and rollback previews take a `limit` in the CLI and the `bilinc` MCP adapter.
+- **Fewer false "expired" flags**: a memory saved again with a new TTL is no longer reported as expired while its new expiry is ahead.
+- **One history under concurrent writes**: two writers can no longer split a project's audit chain.
 
 Every release: [changelog](https://bilinc.space/changelog).
 

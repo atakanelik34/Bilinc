@@ -23,7 +23,7 @@ import json
 import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
-from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core.models import MemoryEntry, MemoryType, strip_reserved_metadata, ttl_expired
 from bilinc.core.event_ledger import EventOperation
 from bilinc.core.working_memory import WorkingMemory
 from bilinc.core.confidence import ConfidenceEstimator
@@ -309,6 +309,31 @@ class StatePlane:
         return entry.to_dict()
 
     @staticmethod
+    def _clean_audit_entry(state: Any) -> Any:
+        """An audit state entry without the reserved metadata field; the audit row itself is untouched."""
+        if isinstance(state, dict) and isinstance(state.get("metadata"), dict):
+            cleaned = strip_reserved_metadata(state["metadata"])
+            if cleaned is not state["metadata"]:
+                return dict(state, metadata=cleaned)
+        return state
+
+    @classmethod
+    def _normalized_audit_state(cls, states: Dict[str, Any]) -> Dict[str, Any]:
+        """Audit states as the entry model now builds them, so they compare equal to stored entries.
+
+        A rollback target taken from an old audit row can hold the reserved legacy field; compared
+        raw, every such key would look changed and be rewritten. An entry that cannot be rebuilt
+        is left as it is and fails later, as before.
+        """
+        normalized: Dict[str, Any] = {}
+        for key, raw in states.items():
+            try:
+                normalized[key] = cls._entry_to_state(cls._coerce_audit_state_entry(key, raw))
+            except (TypeError, ValueError, KeyError):
+                normalized[key] = raw
+        return normalized
+
+    @staticmethod
     def _coerce_audit_state_entry(key: str, raw_state: Any) -> MemoryEntry:
         """
         Convert an audit state payload into a MemoryEntry.
@@ -340,7 +365,11 @@ class StatePlane:
         return name[:-7].lower() if name.endswith("Backend") else name.lower()
 
     def _apply_entry_verification(self, entry: MemoryEntry) -> MemoryEntry:
-        """Apply the current verification policy to an entry in-place."""
+        """Apply the current verification policy to an entry in-place.
+
+        The result is a fixed value, not a graded confidence: ``verification_score`` is 0.8 when
+        every invariant passes and 0.0 when one fails (and stays 0.0 with verification off).
+        """
         if not self.enable_verification or not self.verifier or entry.value is None:
             return entry
 
@@ -1128,7 +1157,13 @@ class StatePlane:
         if not self.backend or not hasattr(self.backend, "list_claims"):
             return evidence
         keys = {str(item.get("key")) for item in results if isinstance(item, dict) and item.get("key") is not None}
-        claims = await self.backend.list_claims(active=True, limit=1000)
+        if not keys:
+            return evidence
+        if hasattr(self.backend, "list_claims_for_memory_keys"):
+            # Ask for the recalled keys only: a newest-N window silently drops the claims of an older memory.
+            claims = await self.backend.list_claims_for_memory_keys(sorted(keys), active=True)
+        else:
+            claims = await self.backend.list_claims(active=True, limit=1000)
         selected = [claim for claim in claims if claim.memory_key in keys]
         evidence["claims"] = [claim.to_dict() for claim in selected]
         if profile.get("include_contradictions") and selected:
@@ -1286,9 +1321,11 @@ class StatePlane:
                 flags.append("expired" if float(entry.invalid_at) <= now else "stale_possible")
             except (TypeError, ValueError):
                 flags.append("stale_possible")
-        if entry.ttl is not None:
+        if entry.ttl is not None and entry.invalid_at is None:
             try:
-                if entry.created_at + float(entry.ttl) <= now:
+                if entry.created_at is None:
+                    flags.append("stale_possible")
+                elif ttl_expired(entry.created_at, float(entry.ttl), None, now):
                     flags.append("expired")
             except (TypeError, ValueError):
                 flags.append("stale_possible")
@@ -1853,7 +1890,7 @@ class StatePlane:
                 continue
             created_at = parse_temporal_timestamp(entry.created_at)
             ttl = parse_temporal_timestamp(entry.ttl)
-            if created_at is not None and ttl is not None and created_at + ttl <= cutoff:
+            if ttl_expired(created_at, ttl, invalid_at, cutoff):
                 continue
             filtered[key] = entry
         return filtered
@@ -1923,7 +1960,7 @@ class StatePlane:
         )
         projection = copy(entry)
         projection.value = f"Current {subject or 'state'}: {new_value.rstrip('.')}."
-        projection.metadata = metadata
+        projection.metadata = strip_reserved_metadata(metadata)
         return projection
 
     def _is_recallable_entry(self, entry: MemoryEntry, now: Optional[float] = None) -> bool:
@@ -1951,7 +1988,7 @@ class StatePlane:
         # write; a TTL set on a later write must not count from the first one.
         ttl = _timestamp(entry.ttl)
         created_at = _timestamp(entry.created_at)
-        if invalid_at is None and ttl is not None and created_at is not None and created_at + ttl <= now:
+        if ttl_expired(created_at, ttl, invalid_at, now):
             return False
 
         return True
@@ -2695,11 +2732,11 @@ class StatePlane:
             invalid_at = _timestamp(entry.invalid_at)
             created_at = _timestamp(entry.created_at) or 0.0
             ttl = _timestamp(entry.ttl)
-            ttl_expired = ttl is not None and created_at + ttl <= now
+            ttl_lapsed = ttl_expired(created_at, ttl, invalid_at, now)
             explicitly_stale = (
                 entry.superseded_by is not None
                 or (invalid_at is not None and float(invalid_at) <= now)
-                or ttl_expired
+                or ttl_lapsed
             )
             valid_at = _timestamp(entry.valid_at)
             future_dated = valid_at is not None and valid_at > now
@@ -3017,7 +3054,6 @@ class StatePlane:
         except Exception:
             return None
 
-    _cached_vector_store = None
     _cached_hybrid_search = None
 
     def _get_hybrid_search(self):
@@ -3028,10 +3064,8 @@ class StatePlane:
         if conn is None:
             return None
         try:
-            from bilinc.core.vector_search import VectorStore, HybridSearch
-            vs = VectorStore(conn)
-            self._cached_vector_store = vs
-            self._cached_hybrid_search = HybridSearch(conn, vs)
+            from bilinc.core.vector_search import HybridSearch
+            self._cached_hybrid_search = HybridSearch(conn)
             self._cached_hybrid_search.query_stopwords = self.LEXICAL_QUERY_STOPWORDS
             return self._cached_hybrid_search
         except Exception:
@@ -3071,19 +3105,26 @@ class StatePlane:
             state_a = self.audit.get_state_at(timestamp_a)
             state_b = self.audit.get_state_at(timestamp_b)
             all_keys = set(list(state_a.keys()) + list(state_b.keys()))
+            # The audit rows keep what was written; what is returned drops the reserved legacy field.
             added = [
-                {"key": key, "after": state_b[key]}
+                {"key": key, "after": self._clean_audit_entry(state_b[key])}
                 for key in sorted(all_keys) if key in state_b and key not in state_a
             ]
             removed = [
-                {"key": key, "before": state_a[key]}
+                {"key": key, "before": self._clean_audit_entry(state_a[key])}
                 for key in sorted(all_keys) if key in state_a and key not in state_b
             ]
             modified = [
-                {"key": key, "before": state_a[key], "after": state_b[key]}
+                {
+                    "key": key,
+                    "before": self._clean_audit_entry(state_a[key]),
+                    "after": self._clean_audit_entry(state_b[key]),
+                }
                 for key in sorted(all_keys)
                 if key in state_a and key in state_b and state_a[key] != state_b[key]
             ]
+            # A key whose only change was the removal of the legacy field now reads as unchanged.
+            modified = [item for item in modified if item["before"] != item["after"]]
 
             result = {
                 "timestamp_a": timestamp_a,
@@ -3116,7 +3157,7 @@ class StatePlane:
             if not self.backend or not self.enable_audit or not self.audit:
                 raise NotImplementedError("Rollback requires persistent storage with audit trail enabled.")
 
-            target_state = self.audit.get_state_at(target_timestamp)
+            target_state = self._normalized_audit_state(self.audit.get_state_at(target_timestamp))
             current_state = await self._persistent_state()
 
             deleted_keys = []
@@ -3203,7 +3244,11 @@ class StatePlane:
 
     
     async def verify(self, key: str) -> Dict[str, Any]:
-        """Full verification of a single entry + audit trail."""
+        """Full verification of a single entry + audit trail.
+
+        Works, but nothing calls it: the MCP ``verify`` tool reads the stored row itself and
+        returns different fields (``is_verified``, ``verification_score``, strength).
+        """
         result = {"key": key, "exists": False, "audit_entries": [], "invariant_checks": []}
         
         # Load entry
@@ -3492,6 +3537,8 @@ class StatePlane:
             # Hermes metadata contract
             if metadata:
                 entry.metadata.update(metadata)
+                # The merge runs after construction, so the entry's own check did not see it.
+                entry.metadata = strip_reserved_metadata(entry.metadata)
             if source:
                 entry.source = source
             if session_id:
@@ -3616,7 +3663,7 @@ class StatePlane:
         if hasattr(self, "agm_engine") and self.agm_engine:
             stats["agm"] = {
                 "beliefs": len(self.agm_engine.belief_state.beliefs),
-                "operations": len(self.agm_engine.operation_log),
+                "operations": self.agm_engine.operations_total,
                 "entrenchment_count": len(self.agm_engine.entrenchment),
             }
         if hasattr(self, "knowledge_graph") and self.knowledge_graph:

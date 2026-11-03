@@ -1,22 +1,22 @@
 """
 Vector Search + Hybrid Retrieval for Bilinc.
 
-3-level recall architecture:
+Recall architecture here:
   Level 1: FTS5 keyword search (exact matches, BM25)
-  Level 2: Vector similarity search (semantic matches)
+  Level 2: persisted semantic vectors, when a model is configured (see ``bilinc.embeddings``)
   Level 3: Knowledge graph traversal (multi-hop)
-  
-RRF fusion + decay-aware reranking + temporal boost.
+
+Keyword scores go through RRF fusion, then decay-aware reranking and a temporal boost. (An earlier
+vector level over a ``vec_bilinc`` table and a local Ollama server was removed: nothing wrote the
+table any more.)
 ORIGINAL implementation.
 """
 from __future__ import annotations
 from collections import OrderedDict
 from functools import lru_cache
 import hashlib
-import json
 import os
 import re
-import struct
 from threading import RLock
 import time
 from typing import Dict, List, Optional, Tuple
@@ -36,22 +36,6 @@ FTS_PREFIX_MIN_CHARS = 4
 # there says more than one word somewhere in a long transcript.
 FTS_KEY_WEIGHT = 10.0
 FTS_BODY_WEIGHT = 1.0
-
-
-def serialize_float32(vector: List[float]) -> bytes:
-    return struct.pack(f"{len(vector)}f", *vector)
-
-
-def get_embedding(text: str, base_url: str = "http://localhost:11434") -> Optional[List[float]]:
-    import urllib.request
-    payload = json.dumps({"model": "nomic-embed-text:latest", "prompt": text}).encode()
-    try:
-        req = urllib.request.Request(f"{base_url}/api/embeddings", data=payload,
-                                     headers={"Content-Type": "application/json"})
-        resp = urllib.request.urlopen(req, timeout=10)
-        return json.loads(resp.read()).get("embedding")
-    except Exception:
-        return None
 
 
 @lru_cache(maxsize=4)
@@ -175,66 +159,6 @@ def _clear_semantic_document_cache() -> None:
         _semantic_document_cache_bytes = 0
 
 
-class VectorStore:
-    def __init__(self, conn):
-        self.conn = conn
-        self._ensure_schema()
-
-    def _ensure_schema(self):
-        try:
-            self.conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS vec_bilinc USING vec0(embedding float[768])")
-            self.conn.commit()
-        except Exception:
-            pass
-
-    def is_available(self) -> bool:
-        try:
-            self.conn.execute("SELECT COUNT(*) FROM vec_bilinc").fetchone()
-            return True
-        except Exception:
-            return False
-
-    def index_entry(self, rowid: int, text: str) -> bool:
-        embedding = get_embedding(text)
-        if not embedding:
-            return False
-        try:
-            self.conn.execute("DELETE FROM vec_bilinc WHERE rowid = ?", (rowid,))
-            self.conn.execute("INSERT INTO vec_bilinc (rowid, embedding) VALUES (?, ?)",
-                              (rowid, serialize_float32(embedding)))
-            self.conn.commit()
-            return True
-        except Exception:
-            return False
-
-    def search(
-        self,
-        query_embedding: List[float],
-        top_k: int = 10,
-        allowed_rowids: Optional[set[int]] = None,
-    ) -> List[Tuple[int, float]]:
-        try:
-            fetch_limit = top_k
-            if allowed_rowids is not None:
-                if not allowed_rowids:
-                    return []
-                fetch_limit = max(top_k, len(allowed_rowids))
-            results = self.conn.execute("""
-                SELECT rowid, distance FROM vec_bilinc
-                WHERE embedding MATCH ? ORDER BY distance LIMIT ?
-            """, (serialize_float32(query_embedding), fetch_limit)).fetchall()
-            filtered = [r for r in results if allowed_rowids is None or int(r[0]) in allowed_rowids]
-            return [(r[0], r[1]) for r in filtered[:top_k]]
-        except Exception:
-            return []
-
-    def count(self) -> int:
-        try:
-            return self.conn.execute("SELECT COUNT(*) FROM vec_bilinc").fetchone()[0]
-        except Exception:
-            return 0
-
-
 # =============================================================================
 # QUERY EXPANSION
 # =============================================================================
@@ -304,9 +228,8 @@ def detect_query_type(query: str) -> str:
 # =============================================================================
 
 class HybridSearch:
-    def __init__(self, conn, vector_store: VectorStore):
+    def __init__(self, conn):
         self.conn = conn
-        self.vs = vector_store
         self._semantic_embeddings: Dict[int, Tuple[str, object]] = {}
         self._semantic_matrix: object | None = None
         self._semantic_matrix_row_ids: Tuple[int, ...] = ()
@@ -522,14 +445,11 @@ class HybridSearch:
         allowed_keys: Optional[set[str]] = None,
     ) -> List[Tuple[int, float]]:
         """
-        Hybrid search with adaptive RRF fusion.
-        
-        Query type affects weighting:
-          - temporal: boost keyword (exact dates/names)
-          - causal: balance keyword + vector
-          - factual: boost vector (semantic understanding)
-          - relational: boost vector (relationship understanding)
-          - general: balanced
+        Keyword search with adaptive RRF weighting.
+
+        The query type sets the weight of the keyword scores (temporal: higher, for exact dates and
+        names; factual and relational: lower). The semantic level is fused elsewhere, from persisted
+        vectors; this method no longer has a vector half.
         """
         if query_type is None:
             query_type = detect_query_type(query)
@@ -541,34 +461,19 @@ class HybridSearch:
         # Level 1: Keyword (FTS5)
         kw_results = self.keyword_search(query, top_k * 2, allowed_keys=allowed_keys)
 
-        # Level 2: Vector
-        vec_results = []
-        query_emb = get_embedding(query)
-        if query_emb:
-            vector_limit = top_k * 2
-            if allowed_rowids is not None:
-                vector_limit = max(vector_limit, len(allowed_rowids))
-            vec_results = self.vs.search(
-                query_emb,
-                vector_limit,
-                allowed_rowids=allowed_rowids,
-            )
+        # Adaptive RRF weight of the keyword scores, based on the query type
+        kw_weight = {
+            "temporal": 0.7,
+            "causal": 0.5,
+            "factual": 0.3,
+            "relational": 0.3,
+            "general": 0.5,
+        }.get(query_type, 0.5)
 
-        # Adaptive RRF weights based on query type
-        kw_weight, vec_weight = {
-            "temporal": (0.7, 0.3),
-            "causal": (0.5, 0.5),
-            "factual": (0.3, 0.7),
-            "relational": (0.3, 0.7),
-            "general": (0.5, 0.5),
-        }.get(query_type, (0.5, 0.5))
-
-        # RRF fusion with weighted scoring
+        # RRF scoring
         fused = {}
         for rank, (rowid, _) in enumerate(kw_results):
             fused[rowid] = fused.get(rowid, 0) + kw_weight / (60 + rank + 1)
-        for rank, (rowid, _) in enumerate(vec_results):
-            fused[rowid] = fused.get(rowid, 0) + vec_weight / (60 + rank + 1)
 
         sorted_results = sorted(fused.items(), key=lambda x: x[1], reverse=True)
         return sorted_results[:top_k]
