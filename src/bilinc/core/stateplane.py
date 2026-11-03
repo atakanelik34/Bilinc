@@ -309,6 +309,31 @@ class StatePlane:
         return entry.to_dict()
 
     @staticmethod
+    def _clean_audit_entry(state: Any) -> Any:
+        """An audit state entry without the reserved metadata field; the audit row itself is untouched."""
+        if isinstance(state, dict) and isinstance(state.get("metadata"), dict):
+            cleaned = strip_reserved_metadata(state["metadata"])
+            if cleaned is not state["metadata"]:
+                return dict(state, metadata=cleaned)
+        return state
+
+    @classmethod
+    def _normalized_audit_state(cls, states: Dict[str, Any]) -> Dict[str, Any]:
+        """Audit states as the entry model now builds them, so they compare equal to stored entries.
+
+        A rollback target taken from an old audit row can hold the reserved legacy field; compared
+        raw, every such key would look changed and be rewritten. An entry that cannot be rebuilt
+        is left as it is and fails later, as before.
+        """
+        normalized: Dict[str, Any] = {}
+        for key, raw in states.items():
+            try:
+                normalized[key] = cls._entry_to_state(cls._coerce_audit_state_entry(key, raw))
+            except (TypeError, ValueError, KeyError):
+                normalized[key] = raw
+        return normalized
+
+    @staticmethod
     def _coerce_audit_state_entry(key: str, raw_state: Any) -> MemoryEntry:
         """
         Convert an audit state payload into a MemoryEntry.
@@ -3071,19 +3096,26 @@ class StatePlane:
             state_a = self.audit.get_state_at(timestamp_a)
             state_b = self.audit.get_state_at(timestamp_b)
             all_keys = set(list(state_a.keys()) + list(state_b.keys()))
+            # The audit rows keep what was written; what is returned drops the reserved legacy field.
             added = [
-                {"key": key, "after": state_b[key]}
+                {"key": key, "after": self._clean_audit_entry(state_b[key])}
                 for key in sorted(all_keys) if key in state_b and key not in state_a
             ]
             removed = [
-                {"key": key, "before": state_a[key]}
+                {"key": key, "before": self._clean_audit_entry(state_a[key])}
                 for key in sorted(all_keys) if key in state_a and key not in state_b
             ]
             modified = [
-                {"key": key, "before": state_a[key], "after": state_b[key]}
+                {
+                    "key": key,
+                    "before": self._clean_audit_entry(state_a[key]),
+                    "after": self._clean_audit_entry(state_b[key]),
+                }
                 for key in sorted(all_keys)
                 if key in state_a and key in state_b and state_a[key] != state_b[key]
             ]
+            # A key whose only change was the removal of the legacy field now reads as unchanged.
+            modified = [item for item in modified if item["before"] != item["after"]]
 
             result = {
                 "timestamp_a": timestamp_a,
@@ -3116,7 +3148,7 @@ class StatePlane:
             if not self.backend or not self.enable_audit or not self.audit:
                 raise NotImplementedError("Rollback requires persistent storage with audit trail enabled.")
 
-            target_state = self.audit.get_state_at(target_timestamp)
+            target_state = self._normalized_audit_state(self.audit.get_state_at(target_timestamp))
             current_state = await self._persistent_state()
 
             deleted_keys = []
