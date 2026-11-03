@@ -153,6 +153,8 @@ class MemoryEntry:
     updated_at: float = field(default_factory=time.time)
     last_accessed: float = 0.0
     access_count: int = 0
+    # No commit path sets valid_at; it is read (as-of recall, visibility, ranking, graph doctor)
+    # and stored, and only arrives through restore/import or direct construction.
     valid_at: Optional[float] = None
     invalid_at: Optional[float] = None
     ttl: Optional[float] = None
