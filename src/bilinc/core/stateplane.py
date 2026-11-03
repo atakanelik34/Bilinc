@@ -23,7 +23,7 @@ import json
 import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
-from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core.models import MemoryEntry, MemoryType, strip_reserved_metadata
 from bilinc.core.event_ledger import EventOperation
 from bilinc.core.working_memory import WorkingMemory
 from bilinc.core.confidence import ConfidenceEstimator
@@ -1923,7 +1923,7 @@ class StatePlane:
         )
         projection = copy(entry)
         projection.value = f"Current {subject or 'state'}: {new_value.rstrip('.')}."
-        projection.metadata = metadata
+        projection.metadata = strip_reserved_metadata(metadata)
         return projection
 
     def _is_recallable_entry(self, entry: MemoryEntry, now: Optional[float] = None) -> bool:
@@ -3492,6 +3492,8 @@ class StatePlane:
             # Hermes metadata contract
             if metadata:
                 entry.metadata.update(metadata)
+                # The merge runs after construction, so the entry's own check did not see it.
+                entry.metadata = strip_reserved_metadata(entry.metadata)
             if source:
                 entry.source = source
             if session_id:
