@@ -1169,10 +1169,16 @@ class ProjectRuntimeManager:
     ) -> dict[str, int]:
         """Remove one key's values from the audit trail, event ledger, snapshots and entity index.
 
-        The capture rows that name the key go first: if that step fails, the audit rows are still
-        purgeable, so the forget gate admits a retry (after the audit purge it would answer
-        ``memory_not_found`` and leave them behind). A failure here is not swallowed.
+        The in-process revision log goes first: it only touches memory and cannot fail, so it is
+        clean even if a later step raises. The capture rows that name the key go next: if that step
+        fails, the audit rows are still purgeable, so the forget gate admits a retry (after the audit
+        purge it would answer ``memory_not_found`` and leave them behind). A failure there is not
+        swallowed.
         """
+        from bilinc.adaptive.agm_engine import redact_operation_log
+
+        if plane.agm_engine is not None:
+            redact_operation_log(plane.agm_engine, key)
         purge_capture = getattr(plane.backend, "purge_eval_candidates", None)
         if purge_capture is not None:
             await purge_capture(key)
