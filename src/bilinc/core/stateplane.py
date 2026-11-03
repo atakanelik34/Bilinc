@@ -1288,7 +1288,9 @@ class StatePlane:
                 flags.append("stale_possible")
         if entry.ttl is not None and entry.invalid_at is None:
             try:
-                if ttl_expired(entry.created_at, float(entry.ttl), None, now):
+                if entry.created_at is None:
+                    flags.append("stale_possible")
+                elif ttl_expired(entry.created_at, float(entry.ttl), None, now):
                     flags.append("expired")
             except (TypeError, ValueError):
                 flags.append("stale_possible")

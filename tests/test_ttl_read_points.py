@@ -6,7 +6,10 @@ rows that have a TTL but no ``invalid_at``.
 """
 from __future__ import annotations
 
+import asyncio
+import os
 import time
+import uuid
 
 import pytest
 
@@ -62,14 +65,20 @@ def test_is_stale_controls_stay_expired():
     assert _entry(invalid_in=None).is_stale() is True  # legacy ttl-only row
 
 
-def test_is_stale_boundary_and_zero_invalid_at_keep_todays_behaviour():
+def test_is_stale_boundary_and_zero_invalid_at_keep_todays_behaviour(monkeypatch):
     now = time.time()
     # invalid_at == 0.0 is "not set" for is_stale today, so the legacy ttl clause still applies
     legacy_zero = MemoryEntry(key="z", value="v", created_at=now - 3600, ttl=60.0, invalid_at=0.0)
     assert legacy_zero.is_stale() is True
     # the ttl clause is strict ("> ttl"): a row exactly ttl old is not stale yet
-    exact = MemoryEntry(key="e", value="v", created_at=now - 60.0, ttl=1e9)
-    assert exact.is_stale() is False
+    from bilinc.core import models
+
+    row = MemoryEntry(key="e", value="v", created_at=1000.0, ttl=60.0)
+    monkeypatch.setattr(models.time, "time", lambda: 1060.0)  # now == created_at + ttl
+    assert row.is_stale() is False
+    assert VerificationGate()._check_staleness(row).status != VerificationStatus.STALE
+    monkeypatch.setattr(models.time, "time", lambda: 1060.5)
+    assert row.is_stale() is True
 
 
 def test_belief_state_active_beliefs_keep_a_recommitted_ttl_row():
@@ -106,6 +115,12 @@ def test_graph_doctor_entry_status():
 
 
 # ---- read point 3: quality flags -----------------------------------------------------------
+
+def test_risk_flags_keep_stale_possible_for_a_ttl_row_without_created_at():
+    row = _entry(invalid_in=None)
+    row.created_at = None
+    assert "stale_possible" in StatePlane()._recall_risk_flags(row)
+
 
 def test_risk_flags_do_not_call_a_live_recommitted_row_expired():
     plane = StatePlane()
@@ -198,10 +213,6 @@ async def test_forgetting_engine_does_not_treat_a_recommitted_ttl_row_as_stale()
 
 
 # ---- end to end through the hosted runtime on Postgres --------------------------------------
-
-import asyncio
-import os
-import uuid
 
 _DSN = os.getenv("BILINC_TEST_POSTGRES_DSN")
 
