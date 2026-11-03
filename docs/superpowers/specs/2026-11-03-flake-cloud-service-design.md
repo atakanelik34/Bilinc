@@ -41,12 +41,14 @@ documented and a later change to it (approach 1) is a conscious one.
 
 ## Changes
 - `tests/test_cloud_service.py`: a `client` fixture that yields `with TestClient(create_app(runtime_dir=tmp_path,
-  sidecar_token="secret")) as client`; the ten tests use it instead of building a client per test. A test pins that the fixture's client
-  keeps one portal (so a future edit back to a bare `TestClient` is caught).
+  sidecar_token="secret")) as client`; the ten tests use it instead of building a client per test. A test pins the observable behaviour: a handler records `threading.get_ident()` across two requests of the fixture's client and the
+  identifiers must be equal (no private Starlette attribute), so a future edit back to a bare `TestClient` is caught.
 - `tests/test_audit_thread_binding.py`: an `AuditTrail` created on one thread raises `sqlite3.ProgrammingError` when `log` is
-  called from another thread while the first thread is alive (deterministic, no timing); with the docstring saying a failure
-  here is expected once approach 1 is done and should then be updated.
+  called from another thread while the first thread is alive (deterministic, no timing); with a docstring that names it plainly: "known limit, not a contract"; a failure here is expected once approach 1 is done and the test
+  is then updated on purpose. The first thread is kept alive with an `Event` (no sleeps).
 - No change under `src/`.
+- Side effect, to be stated in the ready note: entering the client runs the app's lifespan, so `manager.close()` (cloud/service.py:213-216) now
+  runs at the end of each test. I check that no test in the file relies on state surviving across two app instances in one `tmp_path`.
 
 ## Test plan
 - Red first (measured): the stress runs above (3 of 24 fail on the unchanged file). After the change the same stress, 3 rounds of 8
@@ -54,7 +56,7 @@ documented and a later change to it (approach 1) is a conscious one.
   that sample.
 - The deterministic audit-thread test and the one-portal test fail when the thing they pin is changed (hand mutation checks,
   recorded in the ready note, not committed).
-- Full `bilinc-test` set and ruff as regression.
+- Full `bilinc-test` set and ruff as regression; the ready note records that the Postgres-marked tests ran (DSN set) and were not skipped.
 
 ## Release-chain impact
 - None: tests only. No PyPI, SDK, hosted runtime, site, MCP registry, migration or CHANGELOG change.
