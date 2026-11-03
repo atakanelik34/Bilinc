@@ -168,7 +168,8 @@ def test_rollback_preview_and_execute_ignore_the_legacy_field(kind, tmp_path, mo
 
     preview, before, after, text = _run(go())
     assert preview["counts"] == {"create": 0, "update": 0, "remove": 0} and preview["update_keys"] == []
-    assert after == before  # keys that did not really differ were not rewritten
+    # only the rollback's own audit marker is added; no key was rewritten (no UPDATE row, no event)
+    assert after == (before[0] + 1, before[1])
     assert "Dana Whitfield" not in text
 
 
