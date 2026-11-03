@@ -2,6 +2,19 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- Hosted forget, purge and rewrite now remove the entities a memory alone mentioned. Their names, aliases and metadata, taken from the value, used to stay in the tenant after a forget, a purge or a rewrite. A mention that moves to another entity prunes the old one too.
+- A purge also deletes the eval-capture rows that name the key, in the hosted runtime and in the local MCP adapter. A capture row whose query merely quotes the purged text, without naming the key, is not found, and capture rows written after the purge can name the key again.
+- The local MCP adapter's `forget` with `purge` answers `purge_incomplete` when the purge fails after the memory was forgotten. Running the purge again finishes it.
+
+### Added
+
+- `scripts/sweep_pg_orphan_entities.py` counts, and with `--execute` deletes, the orphan entities that already exist in tenant schemas. Without `--execute` it only reads. Opening a tenant never deletes existing rows.
+- `sweep_orphan_entities(dry_run=True)` returns the count without deleting, on both backends.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added

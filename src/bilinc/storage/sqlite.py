@@ -494,21 +494,53 @@ class SQLiteBackend(StorageBackend):
             "SELECT DISTINCT entity_id FROM entity_mentions WHERE memory_key = ?", (memory_key,)
         )]
 
-    async def sweep_orphan_entities(self, older_than: Optional[float] = None) -> int:
+    async def sweep_orphan_entities(self, older_than: Optional[float] = None, dry_run: bool = False) -> int:
         """Maintenance: delete every entity with no mentions (one full scan).
 
         Normal writes prune only the entities they touched, and ``init`` sweeps a
         database once; run this to clear orphans left by interrupted writes since.
         Entities saved or relinked within ``older_than`` seconds (default
         ORPHAN_SWEEP_MIN_AGE_SECONDS) are kept, since another process may be
-        about to link them.
+        about to link them. With ``dry_run`` nothing is deleted and the count is returned.
         """
         conn = self._get_conn()
-        removed = self._prune_orphan_entities(
-            conn, older_than=self.ORPHAN_SWEEP_MIN_AGE_SECONDS if older_than is None else older_than
-        )
+        age = self.ORPHAN_SWEEP_MIN_AGE_SECONDS if older_than is None else older_than
+        if dry_run:
+            return conn.execute(
+                """
+                SELECT COUNT(*) FROM entities
+                WHERE updated_at < ?
+                  AND NOT EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = entities.id)
+                """,
+                (time.time() - age,),
+            ).fetchone()[0]
+        removed = self._prune_orphan_entities(conn, older_than=age)
         conn.commit()
         return removed
+
+    async def purge_eval_candidates(self, memory_key: str) -> int:
+        """Delete the capture rows that name ``memory_key`` (as a retrieved key, the query or ``detail.key``).
+
+        The stored form of a key is ``scrub_query(key)``, so both spellings are matched. A row whose
+        query only quotes a purged value, without naming the key, is not found (documented limit).
+        """
+        from bilinc.eval.capture import scrub_query
+
+        keys = list(dict.fromkeys([memory_key, scrub_query(memory_key)]))
+        marks = ",".join("?" * len(keys))
+        conn = self._get_conn()
+        cursor = conn.execute(
+            f"""
+            DELETE FROM eval_candidates
+            WHERE query IN ({marks})
+               OR (json_valid(retrieved_keys)
+                   AND EXISTS (SELECT 1 FROM json_each(eval_candidates.retrieved_keys) WHERE value IN ({marks})))
+               OR (json_valid(detail) AND json_extract(detail, '$.key') IN ({marks}))
+            """,
+            keys * 3,
+        )
+        conn.commit()
+        return cursor.rowcount
 
     def _prune_orphan_entities(self, conn, entity_ids=None, older_than: float = 0.0) -> int:
         """Delete entities with no remaining mentions.

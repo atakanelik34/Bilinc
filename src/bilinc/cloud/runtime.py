@@ -1167,7 +1167,15 @@ class ProjectRuntimeManager:
         reason: str,
         snapshot_files: list[tuple[Path, dict[str, Any]]],
     ) -> dict[str, int]:
-        """Remove one key's values from the audit trail, event ledger, snapshots and entity index."""
+        """Remove one key's values from the audit trail, event ledger, snapshots and entity index.
+
+        The capture rows that name the key go first: if that step fails, the audit rows are still
+        purgeable, so the forget gate admits a retry (after the audit purge it would answer
+        ``memory_not_found`` and leave them behind). A failure here is not swallowed.
+        """
+        purge_capture = getattr(plane.backend, "purge_eval_candidates", None)
+        if purge_capture is not None:
+            await purge_capture(key)
         audit_rows = 0
         if plane.enable_audit and plane.audit:
             audit_rows = plane.audit.purge_key(key, metadata={"reason": reason, "origin": "bilinc_cloud"})
