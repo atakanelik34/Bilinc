@@ -643,15 +643,15 @@ class PostgresBackend(StorageBackend):
         params: list[Any] = []
         if entity_id is not None:
             params.append(entity_id)
-            clauses.append("entity_id = " + chr(36) + str(len(params)))
+            clauses.append(f"entity_id = ${len(params)}")
         if memory_key is not None:
             params.append(memory_key)
-            clauses.append("memory_key = " + chr(36) + str(len(params)))
+            clauses.append(f"memory_key = ${len(params)}")
         params.append(int(limit))
         sql = "SELECT * FROM entity_mentions"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY created_at DESC LIMIT " + chr(36) + str(len(params))
+        sql += f" ORDER BY created_at DESC LIMIT ${len(params)}"
         rows = await self.pool.fetch(sql, *params)
         return [self._row_to_entity_mention(row) for row in rows]
 
@@ -660,7 +660,7 @@ class PostgresBackend(StorageBackend):
         if entity is None:
             return []
         rows = await self.pool.fetch(
-            "SELECT memory_key FROM entity_mentions WHERE entity_id=" + chr(36) + "1 GROUP BY memory_key ORDER BY MAX(created_at) DESC LIMIT " + chr(36) + "2",
+            "SELECT memory_key FROM entity_mentions WHERE entity_id=$1 GROUP BY memory_key ORDER BY MAX(created_at) DESC LIMIT $2",
             entity.id,
             int(limit),
         )
@@ -679,12 +679,12 @@ class PostgresBackend(StorageBackend):
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 touched = await self._entity_ids(conn, memory_key)
-                result = await conn.execute("DELETE FROM entity_mentions WHERE memory_key=" + chr(36) + "1", memory_key)
+                result = await conn.execute("DELETE FROM entity_mentions WHERE memory_key=$1", memory_key)
                 if prune:
                     await self._prune_orphans(conn, touched)
                 elif touched:
                     await conn.execute(
-                        "UPDATE entities SET updated_at=" + chr(36) + "2 WHERE id = ANY(" + chr(36) + "1::text[])",
+                        "UPDATE entities SET updated_at=$2 WHERE id = ANY($1::text[])",
                         touched,
                         time.time(),
                     )
@@ -722,7 +722,7 @@ class PostgresBackend(StorageBackend):
 
     @staticmethod
     async def _entity_ids(conn, memory_key: str) -> list:
-        rows = await conn.fetch("SELECT DISTINCT entity_id FROM entity_mentions WHERE memory_key=" + chr(36) + "1", memory_key)
+        rows = await conn.fetch("SELECT DISTINCT entity_id FROM entity_mentions WHERE memory_key=$1", memory_key)
         return [row["entity_id"] for row in rows]
 
     @staticmethod
@@ -738,7 +738,7 @@ class PostgresBackend(StorageBackend):
         if not ids:
             return 0
         result = await conn.execute(
-            "DELETE FROM entities WHERE id = ANY(" + chr(36) + "1::text[]) "
+            "DELETE FROM entities WHERE id = ANY($1::text[]) "
             "AND NOT EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = entities.id)",
             ids,
         )
