@@ -1153,7 +1153,13 @@ class StatePlane:
         if not self.backend or not hasattr(self.backend, "list_claims"):
             return evidence
         keys = {str(item.get("key")) for item in results if isinstance(item, dict) and item.get("key") is not None}
-        claims = await self.backend.list_claims(active=True, limit=1000)
+        if not keys:
+            return evidence
+        if hasattr(self.backend, "list_claims_for_memory_keys"):
+            # Ask for the recalled keys only: a newest-N window silently drops the claims of an older memory.
+            claims = await self.backend.list_claims_for_memory_keys(sorted(keys), active=True)
+        else:
+            claims = await self.backend.list_claims(active=True, limit=1000)
         selected = [claim for claim in claims if claim.memory_key in keys]
         evidence["claims"] = [claim.to_dict() for claim in selected]
         if profile.get("include_contradictions") and selected:
