@@ -32,7 +32,7 @@ async def test_the_audit_connection_cannot_be_used_from_another_thread(tmp_path)
             done.set()
 
     worker = threading.Thread(target=other_thread)
-    worker.start()                       # this thread stays alive, so its identifier cannot be reused
+    worker.start()                       # the creating (test) thread stays alive, so the worker cannot get its identifier
     assert done.wait(10)
     worker.join()
     try:

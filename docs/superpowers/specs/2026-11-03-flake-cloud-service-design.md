@@ -41,11 +41,13 @@ documented and a later change to it (approach 1) is a conscious one.
 
 ## Changes
 - `tests/test_cloud_service.py`: a `client` fixture that yields `with TestClient(create_app(runtime_dir=tmp_path,
-  sidecar_token="secret")) as client`; the ten tests use it instead of building a client per test. A test pins the observable behaviour: a handler records `threading.get_ident()` across two requests of the fixture's client and the
-  identifiers must be equal (no private Starlette attribute), so a future edit back to a bare `TestClient` is caught.
+  sidecar_token="secret")) as client`; the ten tests use it instead of building a client per test. A test pins the observable behaviour: a handler records `asyncio.get_running_loop()` across three requests of the fixture's client and the loops must be the same object (the loops are
+  kept in a list so none is garbage collected and its address reused, which is also why thread identifiers are not used; no private Starlette attribute), so a future edit back to a bare `TestClient` is caught.
 - `tests/test_audit_thread_binding.py`: an `AuditTrail` created on one thread raises `sqlite3.ProgrammingError` when `log` is
   called from another thread while the first thread is alive (deterministic, no timing); with a docstring that names it plainly: "known limit, not a contract"; a failure here is expected once approach 1 is done and the test
   is then updated on purpose. The first thread is kept alive with an `Event` (no sleeps).
+- A second, characterization test shows the opposite for a bare `TestClient` (a new loop per request). It describes Starlette's current
+  behaviour, not Bilinc's: if a future Starlette reuses the portal it fails and can simply be removed; the fixture guard above is the one that protects the suite.
 - No change under `src/`.
 - Side effect, to be stated in the ready note: entering the client runs the app's lifespan, so `manager.close()` (cloud/service.py:213-216) now
   runs at the end of each test. I check that no test in the file relies on state surviving across two app instances in one `tmp_path`.
