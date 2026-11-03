@@ -29,6 +29,7 @@ except ImportError:
     register_vector = None
 from bilinc.core.text_fold import fold_text
 from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core import postgres_chain_lock
 from bilinc.core.event_ledger import MemoryEvent, create_memory_event, event_from_dict
 from bilinc.observability.health import _redact_dsn
 from bilinc.storage.backend import StorageBackend
@@ -417,9 +418,14 @@ class PostgresBackend(StorageBackend):
             await self.init()
         async with self.pool.acquire() as conn:
             async with conn.transaction():
+                await conn.execute(postgres_chain_lock.lock_timeout_sql())
+                await conn.execute(postgres_chain_lock.lock_sql("memory_events"))
                 previous = await conn.fetchrow(
-                    "SELECT event_hash FROM memory_events ORDER BY time DESC, id DESC LIMIT 1"
+                    "SELECT event_hash, time FROM memory_events ORDER BY time DESC, id DESC LIMIT 1"
                 )
+                # The head is the row with the greatest time, so every new event must be later than it,
+                # whatever this writer's clock says (a second writer's clock can differ, or step back).
+                created_at = max(time.time(), previous["time"] + 1e-6) if previous else None
                 event = create_memory_event(
                     operation=operation,
                     subject=subject,
@@ -438,6 +444,7 @@ class PostgresBackend(StorageBackend):
                     audit_log_id=audit_log_id,
                     prev_event_hash=previous["event_hash"] if previous else None,
                     checkpoint_root=checkpoint_root,
+                    created_at=created_at,
                 )
                 await conn.execute(
                     """
