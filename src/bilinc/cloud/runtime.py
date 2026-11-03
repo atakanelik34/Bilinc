@@ -658,10 +658,19 @@ class ProjectRuntimeManager:
                     await asyncio.wait_for(result, self._close_timeout)
             except asyncio.CancelledError:
                 self._terminate_pool(backend)
+                await self._close_audit(plane)  # best effort, then let the cancellation through
+                if self._indexer is not None and schema:
+                    self._indexer.forget_tenant(schema)
                 raise
             except Exception as exc:
                 logger.warning("Closing a plane's storage failed: %s", type(exc).__name__)
                 self._terminate_pool(backend)
+        await self._close_audit(plane)
+        if self._indexer is not None and schema:
+            self._indexer.forget_tenant(schema)  # a pass still running may have written leftovers meanwhile
+
+    @staticmethod
+    async def _close_audit(plane: StatePlane) -> None:
         audit_close = getattr(getattr(plane, "audit", None), "close", None)
         if audit_close is not None:
             try:
@@ -670,8 +679,6 @@ class ProjectRuntimeManager:
                     await result
             except Exception as exc:
                 logger.warning("Closing a plane's audit trail failed: %s", type(exc).__name__)
-        if self._indexer is not None and schema:
-            self._indexer.forget_tenant(schema)  # a pass still running may have written leftovers meanwhile
 
     @staticmethod
     def _terminate_pool(backend: Any) -> None:

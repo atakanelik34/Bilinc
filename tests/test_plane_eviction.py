@@ -264,6 +264,27 @@ async def test_the_cap_never_evicts_the_plane_its_own_get_plane_returns(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_with_every_plane_in_flight_the_cap_evicts_nothing(tmp_path, monkeypatch):
+    clock = Clock()
+    manager = _manager(tmp_path, monkeypatch, idle=0, cap=2, clock=clock)
+    try:
+        for _ in range(2):
+            await manager.commit(_pid(), key="k", value="v")
+            clock.advance(1)
+        for key in manager._planes:
+            manager._inflight[key] = 1                     # both are running an operation
+        third = await manager.get_plane(_pid())            # over the cap, but nothing is idle
+        await _settle(manager)
+        assert len(manager._planes) == 3 and third in manager._planes.values()
+        for key in manager._planes:
+            manager._inflight[key] = 1
+        assert manager._evict_idle() == []
+    finally:
+        manager._inflight.clear()
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_a_missing_last_used_counts_as_the_oldest(tmp_path, monkeypatch):
     clock = Clock()
     manager = _manager(tmp_path, monkeypatch, idle=0, cap=1, clock=clock)
@@ -421,13 +442,15 @@ async def test_a_close_cancelled_at_the_ceiling_still_terminates_the_pool(tmp_pa
     a = _pid()
     try:
         await manager.commit(a, key="k", value="v")
-        terminated = _hang_the_close(manager._planes[manager.normalize_project_id(a)])
+        plane = manager._planes[manager.normalize_project_id(a)]
+        terminated = _hang_the_close(plane)
         clock.advance()
         manager._evict_idle()
         await asyncio.sleep(0.05)                          # the close task is now waiting inside its own 30 s bound
         manager._close_timeout = 0.05                      # the ceiling for waiting is twice this
         await manager._await_closing()
         assert terminated == [True] and manager._closing == {}
+        assert plane.audit.conn is None                    # the cancelled close still closed the audit trail
     finally:
         await manager.close()
 
@@ -618,6 +641,42 @@ def test_hosted_postgres_eviction_closes_pool_and_audit_and_reloads(tmp_path, mo
             assert after[len(before)][1] == before[-1][2]      # prev_root == last root_hash before the eviction
             recalled = await manager.recall(project, query="note", profile="fast", limit=5)
             assert "note" in {item["key"] for item in recalled["results"]}
+        finally:
+            await manager.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(not _DSN, reason="BILINC_TEST_POSTGRES_DSN not set")
+def test_hosted_postgres_purge_after_an_eviction_drops_the_schema(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILINC_STORAGE_BACKEND", "postgres")
+    monkeypatch.setenv("BILINC_POSTGRES_DSN", _DSN)
+    monkeypatch.setenv("BILINC_CLOUD_PLANE_IDLE_SECONDS", str(IDLE))
+    monkeypatch.setenv("BILINC_PURGE_ENABLED", "1")
+    monkeypatch.delenv("BILINC_CLOUD_EMBEDDINGS", raising=False)
+    from bilinc.storage.postgres_tenancy import project_schema
+
+    clock = Clock()
+    project = _pid()
+
+    async def scenario():
+        import asyncpg
+
+        manager = ProjectRuntimeManager(tmp_path)
+        manager._clock = clock
+        try:
+            await manager.commit(project, key="note", value="kept")
+            clock.advance()
+            assert manager._evict_idle()                     # evicted; its pool is closing in the background
+            receipt = await manager.purge_project(project)
+            assert receipt["purged"] is True
+            conn = await asyncpg.connect(_DSN)
+            try:
+                found = await conn.fetchval(
+                    "SELECT 1 FROM information_schema.schemata WHERE schema_name = $1", project_schema(project))
+            finally:
+                await conn.close()
+            assert found is None and manager._closing == {}
         finally:
             await manager.close()
 
