@@ -13,7 +13,7 @@ __all__ = [
     # KG-enhanced retrieval (Fix #17)
     "KGSpreadingActivation", "ActivationResult", "kg_enhanced_recall",
     # Vector search (Fix #7)
-    "VectorStore", "HybridSearch",
+    "HybridSearch",
     # Cognitive runtime
     "ContextAssembler", "ContextBundle", "ContextSection",
     "SalienceEngine", "SalienceDecision", "MemoryWriteProposal", "WritebackRouter",
@@ -47,7 +47,6 @@ _IMPORTS = {
     "ActivationResult": "bilinc.core.kg_retrieval",
     "kg_enhanced_recall": "bilinc.core.kg_retrieval",
     # Vector search
-    "VectorStore": "bilinc.core.vector_search",
     "HybridSearch": "bilinc.core.vector_search",
     # Cognitive runtime
     "ContextAssembler": "bilinc.core.context_assembler",

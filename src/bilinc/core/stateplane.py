@@ -3017,7 +3017,6 @@ class StatePlane:
         except Exception:
             return None
 
-    _cached_vector_store = None
     _cached_hybrid_search = None
 
     def _get_hybrid_search(self):
@@ -3028,10 +3027,8 @@ class StatePlane:
         if conn is None:
             return None
         try:
-            from bilinc.core.vector_search import VectorStore, HybridSearch
-            vs = VectorStore(conn)
-            self._cached_vector_store = vs
-            self._cached_hybrid_search = HybridSearch(conn, vs)
+            from bilinc.core.vector_search import HybridSearch
+            self._cached_hybrid_search = HybridSearch(conn)
             self._cached_hybrid_search.query_stopwords = self.LEXICAL_QUERY_STOPWORDS
             return self._cached_hybrid_search
         except Exception:

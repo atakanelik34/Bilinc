@@ -98,13 +98,8 @@ class SQLiteBackend(StorageBackend):
         # forgotten or purged value does not survive in the file's pages.
         self._conn.execute("PRAGMA secure_delete=ON")
 
-        # Load sqlite-vec extension for vector search
-        try:
-            self._conn.enable_load_extension(True)
-            import sqlite_vec
-            sqlite_vec.load(self._conn)
-        except (ImportError, Exception):
-            pass  # sqlite-vec not available
+        # No extension is loaded and extension loading stays off: the old sqlite-vec vector table
+        # (vec_bilinc) is no longer read or written, and SQL must not be able to call load_extension().
 
         # Schema versioning table
         self._conn.execute("""

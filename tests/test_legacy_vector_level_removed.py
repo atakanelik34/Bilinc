@@ -170,7 +170,8 @@ def test_the_core_package_imports_without_the_vector_store():
         "assert 'VectorStore' not in c.__all__\n"
         "assert hasattr(c, 'HybridSearch')\n"
     )
-    result = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True,
+    # no -I: isolated mode ignores PYTHONPATH, and this must import this checkout's code
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd="/",
                             env={"PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")})
     assert result.returncode == 0, result.stderr
 

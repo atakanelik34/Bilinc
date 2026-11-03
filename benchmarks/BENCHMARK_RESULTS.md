@@ -33,7 +33,7 @@ LoCoMo:    9.1% → 37% → 58% → 70% → 79% → 85.8% → 90.35%
 ## Recall Architecture
 3-level hybrid search:
   Level 1: FTS5 keyword (BM25 + porter stemming + query expansion with 14 synonym groups)
-  Level 2: Vector similarity (sqlite-vec + Ollama nomic-embed-text 768-dim)
+  Level 2: Vector similarity (sqlite-vec + Ollama nomic-embed-text 768-dim)  [historical: this level was removed in the C2 change; the figures here describe the code as it was then]
   Level 3: Knowledge graph (HippoRAG-inspired spreading activation)
   + Decay-aware reranking + temporal boost + importance + access frequency
 

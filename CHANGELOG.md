@@ -2,6 +2,16 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- Removed the old vector level of hybrid search (the `vec_bilinc` table, the `sqlite-vec` extension and the local Ollama call). Nothing had written that table for a long time, yet every hybrid search tried an HTTP request to `localhost:11434`, and a database written by an older version could still hold vectors of memories that were later forgotten, which a search on a machine running Ollama could match to a different memory by row number (possible, not shown on a real database). Search no longer makes a network request, and SQL on a Bilinc connection can no longer call `load_extension()`. Where Ollama is not running, which is the normal case, ranking is unchanged.
+
+### Added
+
+- `scripts/count_legacy_vec_table.py` reports, read-only, whether a SQLite database still holds the old `vec_bilinc` table and how many vectors it holds. Dropping the table stays a manual owner step.
+
 ## [2.6.0] — 2026-10-22
 
 ### Added
