@@ -200,24 +200,51 @@ async def probe_claim_contradictions_for_queries(plane, queries: list[str], top_
     if not getattr(plane, "backend", None) or not hasattr(plane.backend, "list_claims"):
         return ContradictionReport.from_findings([], queries_evaluated=len(queries), queries_with_contradiction=0)
 
-    all_claims = await plane.backend.list_claims(active=True, limit=1000)
+    backend = plane.backend
+    keyed = hasattr(backend, "list_claims_for_memory_keys") and hasattr(backend, "list_claims_for_subjects")
     by_memory_key: dict[str, list[Claim]] = {}
     by_subject: dict[str, list[Claim]] = {}
-    for claim in all_claims:
-        by_memory_key.setdefault(claim.memory_key, []).append(claim)
-        by_subject.setdefault(claim.subject, []).append(claim)
+    if not keyed:
+        # No keyed reads (no such backend in the tree): the old newest-1000 window.
+        for claim in await backend.list_claims(active=True, limit=1000):
+            by_memory_key.setdefault(claim.memory_key, []).append(claim)
+            by_subject.setdefault(claim.subject, []).append(claim)
+
+    async def load_keys(keys: list[str]) -> None:
+        missing = sorted({key for key in keys if key not in by_memory_key})
+        if not missing:
+            return
+        for key in missing:
+            by_memory_key[key] = []
+        for claim in await backend.list_claims_for_memory_keys(missing, active=True):
+            by_memory_key.setdefault(claim.memory_key, []).append(claim)
+
+    async def load_subjects(subjects: list[str]) -> None:
+        missing = sorted({subject for subject in subjects if subject not in by_subject})
+        if not missing:
+            return
+        for subject in missing:
+            by_subject[subject] = []
+        for claim in await backend.list_claims_for_subjects(missing, active=True):
+            by_subject.setdefault(claim.subject, []).append(claim)
 
     findings: list[ContradictionFinding] = []
     queries_with_contradiction = 0
     seen_finding_keys: set[tuple[str, str, str]] = set()
     for query in queries:
         results = await plane.recall_intelligent(query, limit=top_k)
-        selected: list[Claim] = []
+        recalled: list[str] = []
         for result in results:
             key = result.get("key") if isinstance(result, dict) else getattr(result, "key", None)
-            if key is None:
-                continue
-            for claim in by_memory_key.get(str(key), []):
+            if key is not None:
+                recalled.append(str(key))
+        if keyed and recalled:
+            # Only the claims of the recalled keys, then of their subjects: no newest-N window.
+            await load_keys(recalled)
+            await load_subjects([claim.subject for key in recalled for claim in by_memory_key.get(key, [])])
+        selected: list[Claim] = []
+        for key in recalled:
+            for claim in by_memory_key.get(key, []):
                 selected.append(claim)
                 selected.extend(by_subject.get(claim.subject, []))
         query_findings = detect_claim_contradictions(_dedupe_claims(selected))
