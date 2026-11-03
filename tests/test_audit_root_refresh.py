@@ -70,44 +70,45 @@ async def _two_workers(tmp_path, monkeypatch, backend):
     return ProjectRuntimeManager(tmp_path), ProjectRuntimeManager(tmp_path)
 
 
-async def _stale_root_scenario(tmp_path, monkeypatch, backend):
+async def _stale_root_scenario(tmp_path, monkeypatch, backend, site):
+    """Each site runs first after the other worker's write, so nothing has refreshed this worker's cache yet."""
     a, b = await _two_workers(tmp_path, monkeypatch, backend)
     project = str(uuid.uuid4())
     try:
         await a.commit(project, key="base", value="1")
         snapshot = await a.create_snapshot(project, label="before")
-        preview = await a.rollback_preview(project, snapshot_id=snapshot.id)
-        stale = preview["current_root_hash"]
-        intruder = await b.commit(project, key="intruder", value="2")     # another worker writes
-        head = intruder["state_version"]
+        stale = (await a.rollback_preview(project, snapshot_id=snapshot.id))["current_root_hash"]
+        head = (await b.commit(project, key="intruder", value="2"))["state_version"]   # another worker writes
         assert head != stale
 
-        # the preview and the diff report the store's head, not this worker's cache
-        assert (await a.rollback_preview(project, snapshot_id=snapshot.id))["current_root_hash"] == head
-        assert (await a.diff(project, from_snapshot_id=snapshot.id))["to_root_hash"] == head
-
-        # an execute bound to the stale root is refused and changes nothing
-        with pytest.raises(ValueError, match="state_changed_since_preview"):
-            await a.rollback_execute(project, snapshot_id=snapshot.id, reason="test", expected_current_root=stale)
-        assert await (await b.get_plane(project)).backend.load("intruder") is not None
-
-        # an execute bound to the fresh root goes through
-        await a.rollback_execute(project, snapshot_id=snapshot.id, reason="test", expected_current_root=head)
-        assert await (await a.get_plane(project)).backend.load("intruder") is None
+        if site == "preview":
+            assert (await a.rollback_preview(project, snapshot_id=snapshot.id))["current_root_hash"] == head
+        elif site == "diff":
+            assert (await a.diff(project, from_snapshot_id=snapshot.id))["to_root_hash"] == head
+        else:
+            # an execute bound to the stale root is refused and changes nothing
+            with pytest.raises(ValueError, match="state_changed_since_preview"):
+                await a.rollback_execute(project, snapshot_id=snapshot.id, reason="test", expected_current_root=stale)
+            assert await (await b.get_plane(project)).backend.load("intruder") is not None
+            # an execute bound to the fresh root goes through
+            await a.rollback_execute(project, snapshot_id=snapshot.id, reason="test", expected_current_root=head)
+            assert await (await a.get_plane(project)).backend.load("intruder") is None
     finally:
         await a.close()
         await b.close()
 
 
 @pytest.mark.asyncio
-async def test_sqlite_two_workers_rollback_check_sees_the_other_writer(tmp_path, monkeypatch):
-    await _stale_root_scenario(tmp_path, monkeypatch, "sqlite")
+@pytest.mark.parametrize("site", ["preview", "diff", "execute"])
+async def test_sqlite_two_workers_rollback_check_sees_the_other_writer(tmp_path, monkeypatch, site):
+    await _stale_root_scenario(tmp_path, monkeypatch, "sqlite", site)
 
 
 @needs_postgres
 @pytest.mark.asyncio
-async def test_postgres_two_workers_rollback_check_sees_the_other_writer(tmp_path, monkeypatch):
-    await _stale_root_scenario(tmp_path, monkeypatch, "postgres")
+@pytest.mark.parametrize("site", ["preview", "diff", "execute"])
+async def test_postgres_two_workers_rollback_check_sees_the_other_writer(tmp_path, monkeypatch, site):
+    await _stale_root_scenario(tmp_path, monkeypatch, "postgres", site)
 
 
 @pytest.mark.asyncio
