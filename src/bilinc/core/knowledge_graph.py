@@ -428,6 +428,14 @@ class KnowledgeGraph:
 
         Uses an index dict keyed by (source, target) pair to avoid
         the previous O(n^2) nested scan over all edges.
+
+        Dormant in practice: nothing in core creates a ``CONTRADICTS`` edge
+        (``ingest_memory_entry`` only adds ``RELATED_TO`` and ``SUPPORTS``), so
+        this finds something only after a caller adds such an edge explicitly,
+        for example through the MCP add-relation tool, and the ``contradictions``
+        count in the graph stats is 0 otherwise. The claim-based check in
+        ``bilinc.eval.contradictions`` (used by the verified recall profile) is a
+        separate mechanism and does work from stored claims.
         """
         from collections import defaultdict
 
@@ -466,7 +474,8 @@ class KnowledgeGraph:
         Auto-extract entities and relations from a MemoryEntry.
         
         Simple NLP: capitalized words → entities, co-occurrence → relations.
-        Returns count of entities and relations created.
+        Returns count of entities and relations created. Only ``RELATED_TO`` and
+        ``SUPPORTS`` edges are created here, never ``CONTRADICTS``.
         """
         entities_created = 0
         relations_created = 0

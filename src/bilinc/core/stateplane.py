@@ -340,7 +340,11 @@ class StatePlane:
         return name[:-7].lower() if name.endswith("Backend") else name.lower()
 
     def _apply_entry_verification(self, entry: MemoryEntry) -> MemoryEntry:
-        """Apply the current verification policy to an entry in-place."""
+        """Apply the current verification policy to an entry in-place.
+
+        The result is a fixed value, not a graded confidence: ``verification_score`` is 0.8 when
+        every invariant passes and 0.0 when one fails (and stays 0.0 with verification off).
+        """
         if not self.enable_verification or not self.verifier or entry.value is None:
             return entry
 
@@ -3203,7 +3207,11 @@ class StatePlane:
 
     
     async def verify(self, key: str) -> Dict[str, Any]:
-        """Full verification of a single entry + audit trail."""
+        """Full verification of a single entry + audit trail.
+
+        Works, but nothing calls it: the MCP ``verify`` tool reads the stored row itself and
+        returns different fields (``is_verified``, ``verification_score``, strength).
+        """
         result = {"key": key, "exists": False, "audit_entries": [], "invariant_checks": []}
         
         # Load entry
