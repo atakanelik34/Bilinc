@@ -5,7 +5,6 @@ import pytest
 
 from bilinc.core.time_intent import (
     TimeIntent,
-    has_relative_time_phrase,
     mentions_low_signal,
     parse_time_intent,
     resolve_timezone,
@@ -251,14 +250,6 @@ def test_mentions_low_signal():
     assert not mentions_low_signal("bugünkü kararlar")
 
 
-def test_has_relative_time_phrase():
-    assert has_relative_time_phrase("what changed today")
-    assert has_relative_time_phrase("dünkü kararlar")
-    assert not has_relative_time_phrase("what's new")  # implicit, not explicit
-    assert not has_relative_time_phrase("dünya")
-    assert not has_relative_time_phrase("bugüne kadar ne var")
-
-
 @pytest.mark.parametrize(
     "query",
     [
@@ -382,3 +373,9 @@ def test_local_timezone_missing_localtime_is_utc(monkeypatch, tmp_path):
     monkeypatch.delenv("BILINC_TIMEZONE", raising=False)
     monkeypatch.delenv("TZ", raising=False)
     assert local_timezone(localtime_path=tmp_path / "missing") is timezone.utc
+
+
+def test_standalone_dunden_is_yesterday():
+    intent = window("dünden kalan işler")
+    assert (intent.start, intent.end) == (local(2026, 11, 4), local(2026, 11, 5))
+    assert window("dünden beri").label == "since_yesterday"

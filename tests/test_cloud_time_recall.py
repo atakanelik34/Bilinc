@@ -256,6 +256,8 @@ NON_TIME = [
     "since we started", "when did we ship", "timeline of releases", "Monday meeting notes",
     "bugüne kadar ne var", "all decisions to date", "what have we decided so far", "as of today",
     "datetime.today() usage", "decisions before today",
+    # every cumulative phrase the spec guards
+    "bugüne dek yapılanlar", "bugün itibarıyla durum", "until today", "till today", "up to today", "so far",
 ]
 
 

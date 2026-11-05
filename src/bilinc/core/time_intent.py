@@ -22,7 +22,6 @@ from bilinc.core.text_fold import fold_text
 
 __all__ = [
     "TimeIntent",
-    "has_relative_time_phrase",
     "local_timezone",
     "mentions_low_signal",
     "parse_time_intent",
@@ -265,6 +264,8 @@ _RULES: list[tuple[re.Pattern, Builder, str, bool]] = [
     (re.compile(rf"(?<![\w.])bugun(?:ku|un)?{_WORD_END}"), _today, "today", False),
     (re.compile(rf"(?<![\w.])yesterday(?:'?s)?{_WORD_END}"), _yesterday, "yesterday", False),
     (re.compile(rf"(?<![\w.])dun(?:ku|un)?{_WORD_END}"), _yesterday, "yesterday", False),
+    # "dünden kalan işler" (left over from yesterday); "dünden beri" matched above
+    (re.compile(rf"(?<![\w.])dunden{_WORD_END}"), _yesterday, "yesterday", False),
     (re.compile(r"\bthis\s+week(?:'?s)?\b"), _this_week, "this_week", False),
     (re.compile(r"\bbu\s+hafta(?:ki|nin)?\b"), _this_week, "this_week", False),
     (re.compile(r"\blast\s+week(?:'?s)?\b"), _last_week, "last_week", False),
@@ -349,8 +350,3 @@ def parse_time_intent(query: str, *, now: datetime, tz: tzinfo) -> Optional[Time
         residual_query=_residual(folded, spans),
         implicit=explicit is None,
     )
-
-
-def has_relative_time_phrase(query: str) -> bool:
-    intent = parse_time_intent(query, now=datetime.now(timezone.utc), tz=timezone.utc)
-    return intent is not None and not intent.implicit
