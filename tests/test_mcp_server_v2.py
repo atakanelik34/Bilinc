@@ -632,3 +632,74 @@ class TestMCPForgetPurge:
         _call(_handle_forget, p, {"key": "profile"})
         assert "user_name" in p.knowledge_graph._nodes
         assert "profile" not in p.knowledge_graph._nodes
+
+
+# ── Time-window routing in local recall_smart ────────────────
+
+class TestRecallSmartTimeRouting:
+    @pytest.fixture
+    def routed_plane(self, monkeypatch):
+        import time as _time
+        from bilinc.core.models import MemoryEntry, MemoryType
+
+        monkeypatch.setenv("BILINC_TIMEZONE", "UTC")
+        monkeypatch.setenv("BILINC_LOW_SIGNAL_SOURCES", "sample-chat-transcript")
+        with tempfile.TemporaryDirectory() as td:
+            backend = SQLiteBackend(db_path=f"{td}/route.db")
+            asyncio.run(backend.init())
+            p = StatePlane(backend=backend, enable_verification=False, enable_audit=False)
+            p.init_agm()
+            p.init_knowledge_graph()
+            stamp = _time.time() - 60
+            for key, value, source in [
+                ("decision.today", "pricing page decision recorded", "agent"),
+                ("chat.today", "small talk about lunch", "sample-chat-transcript"),
+            ]:
+                asyncio.run(backend.restore(MemoryEntry(
+                    key=key, value=value, source=source, memory_type=MemoryType.SEMANTIC,
+                    created_at=stamp, updated_at=stamp,
+                )))
+            yield p
+            asyncio.run(backend.close())
+
+    def test_profile_branch_routes(self, routed_plane):
+        result = _call(_handle_bilinc_recall_smart, routed_plane, {
+            "query": "what happened today", "profile": "balanced", "limit": 10,
+        })
+        keys = [r["key"] for r in result["results"]]
+        assert "decision.today" in keys
+        assert "chat.today" not in keys
+        assert result["routed"] == "time_window"
+        assert "profile" in result
+        assert result["success"] is True and result["tool"] == "bilinc_recall_smart"
+
+    def test_no_profile_branch_routes(self, routed_plane):
+        result = _call(_handle_bilinc_recall_smart, routed_plane, {
+            "query": "what happened today", "max_reflections": 1, "adequacy_threshold": 0.4,
+        })
+        assert result["routed"] == "time_window"
+        assert "decision.today" in [r["key"] for r in result["results"]]
+        for key in ("profile", "recall_profile", "read_only"):
+            assert key not in result
+        assert result["max_reflections"] == 1
+        assert result["adequacy_threshold"] == 0.4
+
+    def test_eval_capture_records_routed(self, routed_plane, monkeypatch):
+        monkeypatch.setenv("BILINC_EVAL_CAPTURE", "1")
+        _call(_handle_bilinc_recall_smart, routed_plane, {"query": "what happened today"})
+        rows = asyncio.run(routed_plane.backend.list_eval_candidates())
+        assert len(rows) == 1
+        assert rows[0].detail["routed"] == "time_window"
+        assert rows[0].detail["time_window_label"]
+        assert rows[0].detail["profile"] is None
+        assert rows[0].detail["queries_tried"] == ["what happened today"]
+
+    def test_non_time_query_is_not_routed(self, routed_plane):
+        result = _call(_handle_bilinc_recall_smart, routed_plane, {"query": "pricing page decision"})
+        assert "routed" not in result
+
+    def test_query_timestamp_is_not_routed(self, routed_plane):
+        result = _call(_handle_bilinc_recall_smart, routed_plane, {
+            "query": "what happened today", "query_timestamp": "2999-01-01T00:00:00+00:00",
+        })
+        assert "routed" not in result

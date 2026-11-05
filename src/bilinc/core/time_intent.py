@@ -10,9 +10,11 @@ clock, so a DST change keeps "yesterday" midnight to midnight. Elapsed windows
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
+from pathlib import Path
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -21,6 +23,7 @@ from bilinc.core.text_fold import fold_text
 __all__ = [
     "TimeIntent",
     "has_relative_time_phrase",
+    "local_timezone",
     "mentions_low_signal",
     "parse_time_intent",
     "resolve_timezone",
@@ -49,6 +52,39 @@ def resolve_timezone(name: Optional[str]) -> tzinfo:
         return ZoneInfo(str(name))
     except (ZoneInfoNotFoundError, ValueError, OSError):
         return timezone.utc
+
+
+LOCALTIME_PATH = Path("/etc/localtime")
+
+
+def _valid_zone(name: Optional[str]) -> Optional[tzinfo]:
+    name = (name or "").strip()
+    if not name:
+        return None
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return None
+
+
+def local_timezone(localtime_path: Optional[Path] = None) -> tzinfo:
+    """Machine zone as an IANA zone: BILINC_TIMEZONE, then TZ, then /etc/localtime, else UTC."""
+    zone = _valid_zone(os.environ.get("BILINC_TIMEZONE"))
+    if zone is not None:
+        return zone
+    zone = _valid_zone((os.environ.get("TZ") or "").lstrip(":"))
+    if zone is not None:
+        return zone
+    try:
+        target = os.readlink(localtime_path if localtime_path is not None else LOCALTIME_PATH)
+    except OSError:
+        return timezone.utc
+    marker = "zoneinfo/"
+    if marker in target:
+        zone = _valid_zone(target.split(marker, 1)[1])
+        if zone is not None:
+            return zone
+    return timezone.utc
 
 
 _EN_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]

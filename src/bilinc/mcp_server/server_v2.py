@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -527,7 +528,11 @@ def _create_server_v2(
             ),
             Tool(
                 name="bilinc_recall_smart",
-                description="Advanced recall with reflection loop and adequacy scoring.",
+                description=(
+                    "Advanced recall with reflection loop and adequacy scoring. "
+                    "Time questions such as 'today', 'yesterday', 'since Monday', 'bugün', 'dün' "
+                    "return the entries written in that window, newest first."
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -1836,7 +1841,36 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
             memory_types.append(MemoryType(mt))
         except Exception:
             continue
-    if profile:
+    payload = None
+    if not query_timestamp:
+        from bilinc.core.time_intent import local_timezone, mentions_low_signal, parse_time_intent
+
+        intent = parse_time_intent(query, now=datetime.now(timezone.utc), tz=local_timezone())
+        if intent:
+            low_signal = [s.strip() for s in os.environ.get("BILINC_LOW_SIGNAL_SOURCES", "").split(",") if s.strip()]
+            if profile:
+                window_reflections = args.get("max_reflections") if "max_reflections" in args else None
+                window_threshold = args.get("adequacy_threshold") if "adequacy_threshold" in args else None
+            else:
+                window_reflections, window_threshold = max_reflections, adequacy_threshold
+            payload = await plane.recall_time_window(
+                intent,
+                limit=limit,
+                memory_types=memory_types or None,
+                low_signal_sources=low_signal,
+                include_low_signal=mentions_low_signal(query),
+                query=query,
+                profile=profile or None,
+                explain=explain,
+                max_reflections=window_reflections,
+                adequacy_threshold=window_threshold,
+            )
+            if payload is not None:
+                max_reflections = int(payload.get("max_reflections", max_reflections))
+                adequacy_threshold = float(payload.get("adequacy_threshold", adequacy_threshold))
+    if payload is not None:
+        pass
+    elif profile:
         payload = await plane.recall_profiled(
             query=query,
             profile=profile,
@@ -1874,6 +1908,8 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
                 "queries_tried": payload.get("queries_tried", []),
                 "profile": payload.get("profile"),
                 "query_timestamp": query_timestamp,
+                "routed": payload.get("routed"),
+                "time_window_label": (payload.get("time_window") or {}).get("label"),
             },
         )
     payload["tool"] = "bilinc_recall_smart"

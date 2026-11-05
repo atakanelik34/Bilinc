@@ -317,3 +317,56 @@ def test_turkish_negation_vetoes(query):
 def test_since_last_weeks_event_is_not_since_last_week():
     assert parse_time_intent("since last week's release", now=NOW, tz=IST) is None
     assert parse_time_intent("since last months launch", now=NOW, tz=IST) is None
+
+
+# --- local_timezone ---------------------------------------------------------
+
+def _tzname(tz):
+    return getattr(tz, "key", None) or str(tz)
+
+
+def test_local_timezone_prefers_bilinc_timezone(monkeypatch, tmp_path):
+    from bilinc.core.time_intent import local_timezone
+
+    monkeypatch.setenv("BILINC_TIMEZONE", "Europe/Berlin")
+    monkeypatch.setenv("TZ", "Asia/Tokyo")
+    assert _tzname(local_timezone(localtime_path=tmp_path / "none")) == "Europe/Berlin"
+
+
+def test_local_timezone_invalid_bilinc_timezone_falls_to_tz(monkeypatch, tmp_path):
+    from bilinc.core.time_intent import local_timezone
+
+    monkeypatch.setenv("BILINC_TIMEZONE", "Not/AZone")
+    monkeypatch.setenv("TZ", ":Europe/Istanbul")
+    assert _tzname(local_timezone(localtime_path=tmp_path / "none")) == "Europe/Istanbul"
+
+
+def test_local_timezone_uses_localtime_symlink(monkeypatch, tmp_path):
+    from bilinc.core.time_intent import local_timezone
+
+    monkeypatch.delenv("BILINC_TIMEZONE", raising=False)
+    monkeypatch.setenv("TZ", "garbage/zone")
+    link = tmp_path / "localtime"
+    link.symlink_to("/usr/share/zoneinfo/Asia/Tokyo")
+    assert _tzname(local_timezone(localtime_path=link)) == "Asia/Tokyo"
+
+
+def test_local_timezone_invalid_symlink_target_is_utc(monkeypatch, tmp_path):
+    from bilinc.core.time_intent import local_timezone
+
+    monkeypatch.delenv("BILINC_TIMEZONE", raising=False)
+    monkeypatch.delenv("TZ", raising=False)
+    link = tmp_path / "localtime"
+    link.symlink_to("/usr/share/zoneinfo/Not/AZone")
+    assert local_timezone(localtime_path=link) is timezone.utc
+    plain = tmp_path / "plain"
+    plain.write_text("x")
+    assert local_timezone(localtime_path=plain) is timezone.utc
+
+
+def test_local_timezone_missing_localtime_is_utc(monkeypatch, tmp_path):
+    from bilinc.core.time_intent import local_timezone
+
+    monkeypatch.delenv("BILINC_TIMEZONE", raising=False)
+    monkeypatch.delenv("TZ", raising=False)
+    assert local_timezone(localtime_path=tmp_path / "missing") is timezone.utc
