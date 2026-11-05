@@ -257,3 +257,41 @@ def test_has_relative_time_phrase():
     assert not has_relative_time_phrase("what's new")  # implicit, not explicit
     assert not has_relative_time_phrase("dünya")
     assert not has_relative_time_phrase("bugüne kadar ne var")
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "decisions before today", "before yesterday", "until yesterday", "not today",
+        "the day before yesterday deploy", "prior to today", "after yesterday's call",
+        "since 12 march 2025", "since march 5, 2025", "since 2 may 2025",
+        "datetime.today() usage", "date.today", "today.py bug",
+        "son güncelleme tarihi", "son değişiklik zamanı",
+    ],
+)
+def test_review_false_positives_do_not_trigger(query):
+    assert parse_time_intent(query, now=NOW, tz=IST) is None, query
+
+
+def test_since_last_week_and_month_run_to_now():
+    assert (window("since last week").start, window("since last week").end) == (local(2026, 10, 26), NOW)
+    assert window("since this week").start == local(2026, 11, 2)
+    assert (window("since last month").start, window("since last month").end) == (local(2026, 10, 1), NOW)
+    assert window("since last week").residual_query == ""
+
+
+def test_day_word_at_sentence_end_still_triggers():
+    assert window("what changed today.").start == local(2026, 11, 5)
+
+
+def test_since_weekday_on_that_weekday_means_today():
+    monday = datetime(2026, 11, 2, 9, 0, tzinfo=timezone.utc)
+    assert parse_time_intent("since Monday", now=monday, tz=IST).start == local(2026, 11, 2)
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [("since sunday's release", "release"), ("this month to date", ""), ("dün'den beri", "")],
+)
+def test_residual_drops_time_leftovers(query, expected):
+    assert window(query).residual_query == expected

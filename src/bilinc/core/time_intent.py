@@ -67,7 +67,7 @@ _FILLERS = frozenset(
     our the a an in on of for from about show me list any is are was were there has have tell give summary recap
     so far ne neler nedir degisti degisen degisiklik degisiklikler degisiklikleri guncelleme guncellemeler
     guncellemeleri guncellemesi yeni var yapildi yaptik yaptim oldu olan olanlar neydi bana goster ozet ozeti
-    ozetle hakkinda ile ve mi mu bir kayit kayitlar kadar
+    ozetle hakkinda ile ve mi mu bir kayit kayitlar kadar to date s den beri since
     """.split()
 )
 
@@ -162,6 +162,12 @@ def _since_day(names):
     return build
 
 
+def _since_period(start_of):
+    def build(m, now, tz):
+        return start_of(now), now
+    return build
+
+
 def _since_yesterday(m, now, tz):
     return _midnight(now) - timedelta(days=1), now
 
@@ -190,6 +196,9 @@ _EN_DAY_RE = "|".join(_EN_DAYS)
 _TR_DAY_RE = "|".join(_TR_DAYS)
 _EN_MONTH_RE = "|".join(_EN_MONTHS)
 _TR_MONTH_RE = "|".join(_TR_MONTHS)
+_NO_YEAR = r"(?!\s*,?\s*\d{4}\b)"
+# A day word that is part of a code identifier ("datetime.today()", "today.py") is not a time phrase.
+_WORD_END = r"(?![\w(]|\.\w)"
 
 _RULES: list[tuple[re.Pattern, Builder, str, bool]] = [
     # since … (checked first so "since yesterday" is not read as "yesterday")
@@ -199,17 +208,22 @@ _RULES: list[tuple[re.Pattern, Builder, str, bool]] = [
     (re.compile(r"\bdunden\s+beri\b"), _since_yesterday, "since_yesterday", False),
     (re.compile(r"\bsince\s+(\d{4})-(\d{2})-(\d{2})\b"), _since_iso, "since_date", False),
     (re.compile(rf"\b(\d{{4}})-(\d{{2}})-(\d{{2}}){_ABL}\s+beri\b"), _since_iso, "since_date", False),
-    (re.compile(rf"\bsince\s+(\d{{1,2}})\s+({_EN_MONTH_RE})\b"), _since_day_month(_EN_MONTHS, 1, 2), "since_date", False),
-    (re.compile(rf"\bsince\s+({_EN_MONTH_RE})\s+(\d{{1,2}})\b"), _since_day_month(_EN_MONTHS, 2, 1), "since_date", False),
+    # a day and month without a year; a stated year is not guessed (no match)
+    (re.compile(rf"\bsince\s+(\d{{1,2}})\s+({_EN_MONTH_RE})\b{_NO_YEAR}"), _since_day_month(_EN_MONTHS, 1, 2), "since_date", False),
+    (re.compile(rf"\bsince\s+({_EN_MONTH_RE})\s+(\d{{1,2}})\b{_NO_YEAR}"), _since_day_month(_EN_MONTHS, 2, 1), "since_date", False),
     (re.compile(rf"\b(\d{{1,2}})\s+({_TR_MONTH_RE}){_ABL}\s+beri\b"), _since_day_month(_TR_MONTHS, 1, 2), "since_date", False),
+    (re.compile(r"\bsince\s+(?:the\s+start\s+of\s+)?this\s+week\b"), _since_period(_monday), "since_period", False),
+    (re.compile(r"\bsince\s+last\s+week\b"), _since_period(lambda now: _monday(now) - timedelta(days=7)), "since_period", False),
+    (re.compile(r"\bsince\s+(?:the\s+start\s+of\s+)?this\s+month\b"), _since_period(_month_start), "since_period", False),
+    (re.compile(r"\bsince\s+last\s+month\b"), _since_period(_prev_month_start), "since_period", False),
     # last / past N units
     (re.compile(rf"\b(?:in\s+the\s+)?(?:past|last)\s+(\d{{1,3}})\s+{_UNIT_EN}\b"), _last_n, "last_n", False),
     (re.compile(rf"\bson\s+(\d{{1,3}})\s+{_UNIT_TR}(?:te|ta|de|da|tir|dir|dur|tur)?(?:\s+icinde)?\b"), _last_n, "last_n", False),
     # named periods
-    (re.compile(r"\btoday(?:'?s)?\b"), _today, "today", False),
-    (re.compile(r"\bbugun(?:ku|un)?\b"), _today, "today", False),
-    (re.compile(r"\byesterday(?:'?s)?\b"), _yesterday, "yesterday", False),
-    (re.compile(r"\bdun(?:ku|un)?\b"), _yesterday, "yesterday", False),
+    (re.compile(rf"(?<![\w.])today(?:'?s)?{_WORD_END}"), _today, "today", False),
+    (re.compile(rf"(?<![\w.])bugun(?:ku|un)?{_WORD_END}"), _today, "today", False),
+    (re.compile(rf"(?<![\w.])yesterday(?:'?s)?{_WORD_END}"), _yesterday, "yesterday", False),
+    (re.compile(rf"(?<![\w.])dun(?:ku|un)?{_WORD_END}"), _yesterday, "yesterday", False),
     (re.compile(r"\bthis\s+week(?:'?s)?\b"), _this_week, "this_week", False),
     (re.compile(r"\bbu\s+hafta(?:ki|nin)?\b"), _this_week, "this_week", False),
     (re.compile(r"\blast\s+week(?:'?s)?\b"), _last_week, "last_week", False),
@@ -225,7 +239,7 @@ _RULES: list[tuple[re.Pattern, Builder, str, bool]] = [
     (re.compile(r"\blatest\s+(?:changes|updates)\b"), _implicit, "recent", True),
     (re.compile(r"\byeni\s+ne\s+var\b"), _implicit, "recent", True),
     (re.compile(r"\bne\s+degisti\b"), _implicit, "recent", True),
-    (re.compile(r"\bson\s+(?:degisiklik|guncelleme)\w*\b"), _implicit, "recent", True),
+    (re.compile(r"\bson\s+(?:degisiklik|guncelleme)\w*\b(?!\s+(?:tarih|zaman))"), _implicit, "recent", True),
     (re.compile(r"\bson\s+zamanlarda\b"), _implicit, "recent", True),
     (re.compile(r"\ben\s+son\s+ne\b"), _implicit, "recent", True),
 ]
@@ -237,6 +251,10 @@ _GUARDS = re.compile(
     r"\bbugune\s+(?:kadar|dek)\b"
     r"|\bbugun\s+itibari(?:yla|yle)\b"
     r"|\b(?:as\s+of|until|till|up\s+to)\s+today\b"
+    # A period that is negated or bounded from the other side ("before today",
+    # "not today", "the day before yesterday") is not that period's window.
+    r"|\b(?:before|until|till|after|not|prior\s+to|day\s+before)\s+(?:the\s+)?"
+    r"(?:today|yesterday|this|last|bugun|dun)\b"
 )
 # "to date" and "so far" are cumulative too, unless the query names a period
 # ("today so far", "this week to date"): they only veto an implicit match.
@@ -247,8 +265,8 @@ def _residual(folded: str, spans: list[tuple[int, int]]) -> str:
     kept = []
     last = 0
     for start, end in sorted(spans):
-        kept.append(folded[last:start])
-        last = end
+        kept.append(folded[last:max(last, start)])
+        last = max(last, end)
     kept.append(folded[last:])
     tokens = re.findall(r"[a-z0-9][a-z0-9'_.-]*", " ".join(kept))
     return " ".join(t.strip("'") for t in tokens if t.strip("'") not in _FILLERS)
