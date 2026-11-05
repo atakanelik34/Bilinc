@@ -888,11 +888,17 @@ class ProjectRuntimeManager:
         supported = _supported_recall_kwargs(type(plane))
 
         # Time questions ("what changed today") read a time window; as-of queries keep their own path.
-        if query_timestamp is None and hasattr(plane, "recall_time_window"):
+        # Whether a query is a time question does not depend on the time zone (except
+        # "since <date>" for a date still ahead in UTC, which just keeps the normal
+        # path), so the settings file is read only for time questions.
+        now = datetime.now(timezone.utc)
+        if (
+            query_timestamp is None
+            and hasattr(plane, "recall_time_window")
+            and parse_time_intent(query, now=now, tz=timezone.utc) is not None
+        ):
             settings = await asyncio.to_thread(load_project_settings, self.project_dir(project_id))
-            intent = parse_time_intent(
-                query, now=datetime.now(timezone.utc), tz=resolve_timezone(settings.timezone)
-            )
+            intent = parse_time_intent(query, now=now, tz=resolve_timezone(settings.timezone))
             if intent is not None:
                 routed = await plane.recall_time_window(
                     intent,
