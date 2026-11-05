@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -248,7 +249,7 @@ def test_invisible_entries_are_absent(kind, tmp_path):
             entry("ttl", "expired", when=stamp, ttl=60.0),
             entry("inv", "invalidated", when=stamp, invalid_at=at(0, hours=1).timestamp()),
             entry("sup", "superseded", when=stamp, superseded_by="ok"),
-            entry("fut", "future", when=stamp, valid_at=(NOW + timedelta(days=3650)).timestamp()),
+            entry("fut", "future", when=stamp, valid_at=time.time() + 365 * 86400),
         ])
         payload = await plane.recall_time_window(intent_for("today"), limit=10, query="today")
         assert [r["key"] for r in payload["results"]] == ["ok"]

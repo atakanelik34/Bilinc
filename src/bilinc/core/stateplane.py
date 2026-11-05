@@ -1299,8 +1299,9 @@ class StatePlane:
                 reflections = resolved["max_reflections"]
                 threshold = resolved["adequacy_threshold"]
             else:
+                # Same defaults as recall_reflective, which a profile-less caller would have used.
                 resolved = None
-                reflections, threshold = 2, 0.55
+                reflections, threshold = 3, 0.55
             if max_reflections is not None:
                 reflections = max(0, int(max_reflections))
             if adequacy_threshold is not None:
