@@ -1245,7 +1245,8 @@ class SQLiteBackend(StorageBackend):
         then key; the cursor is then the last entry's ``(updated_at, key)``
         passed as ``after_updated`` and ``after_key``.
         ``sources`` keeps only entries whose effective source (the source
-        column, else metadata.source, else '') is one of the given strings.
+        column, else metadata.source, else '') is one of the given strings;
+        ``exclude_sources`` drops those whose effective source is one of them.
         """
         clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before, sources, exclude_sources)
         if order == "key":
