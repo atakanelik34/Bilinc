@@ -28,14 +28,17 @@ import shutil
 import time
 import dataclasses
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from uuid import UUID
 
+from bilinc.cloud.project_settings import load_project_settings
 from bilinc.core.audit import OpType
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.stateplane import StatePlane
+from bilinc.core.time_intent import mentions_low_signal, parse_time_intent, resolve_timezone
 from bilinc.storage.sqlite import SQLiteBackend
 from bilinc.storage.postgres import PostgresBackend
 from bilinc.storage.postgres_tenancy import project_schema, quoted
@@ -883,6 +886,29 @@ class ProjectRuntimeManager:
         # even on a runtime that could not have filtered by it anyway.
         coerced_types = _coerce_memory_types(memory_types)
         supported = _supported_recall_kwargs(type(plane))
+
+        # Time questions ("what changed today") read a time window; as-of queries keep their own path.
+        if query_timestamp is None and hasattr(plane, "recall_time_window"):
+            settings = await asyncio.to_thread(load_project_settings, self.project_dir(project_id))
+            intent = parse_time_intent(
+                query, now=datetime.now(timezone.utc), tz=resolve_timezone(settings.timezone)
+            )
+            if intent is not None:
+                routed = await plane.recall_time_window(
+                    intent,
+                    limit=limit,
+                    memory_types=coerced_types,
+                    low_signal_sources=list(settings.low_signal_sources),
+                    include_low_signal=mentions_low_signal(query),
+                    query=query,
+                    profile=profile,
+                    explain=explain,
+                )
+                if routed is not None:
+                    routed["time_window"]["timezone"] = settings.timezone
+                    routed["state_version"] = state_version(plane)
+                    await self._attach_provenance(plane, routed.get("results"))
+                    return routed
 
         kwargs: dict[str, Any] = {"query": query, "profile": profile, "limit": limit}
         if coerced_types is not None and "memory_types" in supported:
