@@ -694,6 +694,13 @@ class TestRecallSmartTimeRouting:
         assert rows[0].detail["profile"] is None
         assert rows[0].detail["queries_tried"] == ["what happened today"]
 
+    def test_eval_capture_of_a_normal_recall_is_unchanged(self, routed_plane, monkeypatch):
+        monkeypatch.setenv("BILINC_EVAL_CAPTURE", "1")
+        _call(_handle_bilinc_recall_smart, routed_plane, {"query": "pricing page decision"})
+        rows = asyncio.run(routed_plane.backend.list_eval_candidates())
+        assert len(rows) == 1
+        assert "routed" not in rows[0].detail and "time_window_label" not in rows[0].detail
+
     def test_non_time_query_is_not_routed(self, routed_plane):
         result = _call(_handle_bilinc_recall_smart, routed_plane, {"query": "pricing page decision"})
         assert "routed" not in result

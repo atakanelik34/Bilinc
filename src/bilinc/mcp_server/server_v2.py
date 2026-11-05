@@ -38,6 +38,7 @@ from starlette.routing import Mount, Route
 
 from bilinc.core.stateplane import PersistenceWriteError, StatePlane
 from bilinc.core.models import MemoryEntry, MemoryType
+from bilinc.core.time_intent import local_timezone, mentions_low_signal, parse_time_intent
 from bilinc.core.audit import OpType
 from bilinc.core.cognitive_workspace import CognitiveWorkspace
 from bilinc.integrations.agent_runtime import BilincAgentRuntime
@@ -1843,8 +1844,6 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
             continue
     payload = None
     if not query_timestamp:
-        from bilinc.core.time_intent import local_timezone, mentions_low_signal, parse_time_intent
-
         intent = parse_time_intent(query, now=datetime.now(timezone.utc), tz=local_timezone())
         if intent:
             low_signal = [s.strip() for s in os.environ.get("BILINC_LOW_SIGNAL_SOURCES", "").split(",") if s.strip()]
@@ -1868,9 +1867,7 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
             if payload is not None:
                 max_reflections = int(payload.get("max_reflections", max_reflections))
                 adequacy_threshold = float(payload.get("adequacy_threshold", adequacy_threshold))
-    if payload is not None:
-        pass
-    elif profile:
+    if payload is None and profile:
         payload = await plane.recall_profiled(
             query=query,
             profile=profile,
@@ -1883,7 +1880,7 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
         )
         max_reflections = int(payload.get("max_reflections", max_reflections))
         adequacy_threshold = float(payload.get("adequacy_threshold", adequacy_threshold))
-    else:
+    elif payload is None:
         payload = await plane.recall_reflective(
             query=query,
             limit=limit,
@@ -1908,8 +1905,12 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
                 "queries_tried": payload.get("queries_tried", []),
                 "profile": payload.get("profile"),
                 "query_timestamp": query_timestamp,
-                "routed": payload.get("routed"),
-                "time_window_label": (payload.get("time_window") or {}).get("label"),
+                # Lets fusion tuning tell time-window answers from fused recall.
+                **(
+                    {"routed": payload["routed"], "time_window_label": payload["time_window"]["label"]}
+                    if payload.get("routed")
+                    else {}
+                ),
             },
         )
     payload["tool"] = "bilinc_recall_smart"
