@@ -81,7 +81,12 @@ def local_timezone(localtime_path: Optional[Path] = None) -> tzinfo:
         return timezone.utc
     marker = "zoneinfo/"
     if marker in target:
-        zone = _valid_zone(target.split(marker, 1)[1])
+        name = target.split(marker, 1)[1]
+        # posix/ and right/ are tzdata mirrors of the same zones (right/ counts leap seconds).
+        for prefix in ("posix/", "right/"):
+            if name.startswith(prefix):
+                name = name[len(prefix):]
+        zone = _valid_zone(name)
         if zone is not None:
             return zone
     return timezone.utc

@@ -351,6 +351,18 @@ def test_local_timezone_uses_localtime_symlink(monkeypatch, tmp_path):
     assert _tzname(local_timezone(localtime_path=link)) == "Asia/Tokyo"
 
 
+@pytest.mark.parametrize("target", ["/usr/share/zoneinfo/posix/Asia/Tokyo", "/usr/share/zoneinfo/right/Asia/Tokyo",
+                                    "../usr/share/zoneinfo/Asia/Tokyo"])
+def test_local_timezone_symlink_variants(monkeypatch, tmp_path, target):
+    from bilinc.core.time_intent import local_timezone
+
+    monkeypatch.delenv("BILINC_TIMEZONE", raising=False)
+    monkeypatch.delenv("TZ", raising=False)
+    link = tmp_path / "localtime"
+    link.symlink_to(target)
+    assert _tzname(local_timezone(localtime_path=link)) == "Asia/Tokyo"
+
+
 def test_local_timezone_invalid_symlink_target_is_utc(monkeypatch, tmp_path):
     from bilinc.core.time_intent import local_timezone
 

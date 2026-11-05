@@ -701,6 +701,11 @@ class TestRecallSmartTimeRouting:
         assert len(rows) == 1
         assert "routed" not in rows[0].detail and "time_window_label" not in rows[0].detail
 
+    def test_implicit_question_without_a_hit_falls_back_to_normal_recall(self, routed_plane):
+        result = _call(_handle_bilinc_recall_smart, routed_plane, {"query": "what changed in zebrafish"})
+        assert "routed" not in result
+        assert "adequacy" in result
+
     def test_non_time_query_is_not_routed(self, routed_plane):
         result = _call(_handle_bilinc_recall_smart, routed_plane, {"query": "pricing page decision"})
         assert "routed" not in result
