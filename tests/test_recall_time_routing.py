@@ -17,7 +17,7 @@ import pytest
 
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.stateplane import StatePlane
-from bilinc.core.time_intent import parse_time_intent
+from bilinc.core.time_intent import mentions_low_signal, parse_time_intent
 from bilinc.storage.postgres import PostgresBackend
 from bilinc.storage.sqlite import SQLiteBackend
 
@@ -108,7 +108,7 @@ def test_today_returns_only_todays_entries_newest_first(kind, tmp_path):
 
 def test_low_signal_sources_are_excluded_unless_asked(kind, tmp_path):
     async def scenario(plane):
-        rows = [entry(f"chat{i}", "we talked", "sample-chat-transcript", at(0, hours=1, seconds=i)) for i in range(150)]
+        rows = [entry(f"chat{i}", "we talked", "sample-chat-transcript", at(0, hours=1, seconds=i)) for i in range(200)]
         rows += [entry(f"dec{i}", f"decision {i}", "agent", at(0, hours=2, seconds=i)) for i in range(20)]
         await fill(plane, rows)
         intent = intent_for("what changed today")
@@ -119,6 +119,12 @@ def test_low_signal_sources_are_excluded_unless_asked(kind, tmp_path):
             intent, limit=10, low_signal_sources=["sample-chat-transcript"], include_low_signal=True,
             query="today's chats")
         assert any(r["key"].startswith("chat") for r in asked["results"])
+        turkish = "bugünkü sohbetler"
+        assert mentions_low_signal(turkish)
+        asked_tr = await plane.recall_time_window(
+            intent_for(turkish), limit=10, low_signal_sources=["sample-chat-transcript"],
+            include_low_signal=mentions_low_signal(turkish), query=turkish)
+        assert any(r["key"].startswith("chat") for r in asked_tr["results"])
     run_with_plane(kind, tmp_path, scenario)
 
 
@@ -436,5 +442,35 @@ def test_widening_shares_one_scan_budget(kind, tmp_path):
         plane.backend.list_page = counting
         assert await plane.recall_time_window(intent_for("what's new"), limit=5, query="what's new") is None
         assert sum(reads) <= 30
+
+    run_with_plane(kind, tmp_path, scenario)
+
+
+SLICE_ZONES = ["Europe/Istanbul", "Asia/Tokyo"]
+# Thursday 2026-11-05; boundaries written out by hand, not computed by the parser.
+SLICE_WINDOWS = {
+    "bugünün güncellemeleri": ((2026, 11, 5), None),
+    "dünkü kararlar": ((2026, 11, 4), (2026, 11, 5)),
+    "since Monday": ((2026, 11, 2), None),
+    "geçen hafta": ((2026, 10, 26), (2026, 11, 2)),
+}
+
+
+@pytest.mark.parametrize("zone", SLICE_ZONES)
+def test_temporal_slice_returns_exact_sets(kind, tmp_path, zone):
+    tz = ZoneInfo(zone)
+    # 50 entries spread over 30 days before NOW.
+    stamps = {f"s{k:02d}": NOW - timedelta(hours=k * 14.4, seconds=60) for k in range(50)}
+
+    async def scenario(plane):
+        await fill(plane, [entry(key, f"slice note {key}", when=when) for key, when in stamps.items()])
+        for query, (first, last) in SLICE_WINDOWS.items():
+            start = datetime(*first, tzinfo=tz)
+            end = datetime(*last, tzinfo=tz) if last else NOW
+            expected = [k for k, w in sorted(stamps.items(), key=lambda kv: kv[1], reverse=True) if start <= w < end]
+            intent = parse_time_intent(query, now=NOW, tz=tz)
+            payload = await plane.recall_time_window(intent, limit=100, query=query, time_zone=zone)
+            assert [r["key"] for r in payload["results"]] == expected, (zone, query)
+            assert payload["time_window"]["timezone"] == zone
 
     run_with_plane(kind, tmp_path, scenario)

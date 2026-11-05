@@ -670,6 +670,7 @@ class TestRecallSmartTimeRouting:
         assert "decision.today" in keys
         assert "chat.today" not in keys
         assert result["routed"] == "time_window"
+        assert result["time_window"]["timezone"] == "UTC"
         assert "profile" in result
         assert result["success"] is True and result["tool"] == "bilinc_recall_smart"
 

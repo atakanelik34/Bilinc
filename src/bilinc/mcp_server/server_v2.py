@@ -1844,7 +1844,8 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
             continue
     payload = None
     if not query_timestamp:
-        intent = parse_time_intent(query, now=datetime.now(timezone.utc), tz=local_timezone())
+        tz = local_timezone()
+        intent = parse_time_intent(query, now=datetime.now(timezone.utc), tz=tz)
         if intent:
             low_signal = [s.strip() for s in os.environ.get("BILINC_LOW_SIGNAL_SOURCES", "").split(",") if s.strip()]
             if profile:
@@ -1863,6 +1864,7 @@ async def _handle_bilinc_recall_smart(plane: StatePlane, args: Dict[str, Any]) -
                 explain=explain,
                 max_reflections=window_reflections,
                 adequacy_threshold=window_threshold,
+                time_zone=str(getattr(tz, "key", None) or "UTC"),
             )
             if payload is not None:
                 max_reflections = int(payload.get("max_reflections", max_reflections))

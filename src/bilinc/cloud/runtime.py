@@ -913,9 +913,9 @@ class ProjectRuntimeManager:
                     query=query,
                     profile=profile,
                     explain=explain,
+                    time_zone=settings.timezone,
                 )
                 if routed is not None:
-                    routed["time_window"]["timezone"] = settings.timezone
                     routed["state_version"] = state_version(plane)
                     await self._attach_provenance(plane, routed.get("results"))
                     return routed

@@ -1221,6 +1221,7 @@ class StatePlane:
         explain: bool = False,
         max_reflections: Optional[int] = None,
         adequacy_threshold: Optional[float] = None,
+        time_zone: str = "UTC",
     ) -> Optional[Dict[str, Any]]:
         """Entries written inside ``intent``'s window, newest first (topic matches first).
 
@@ -1331,6 +1332,7 @@ class StatePlane:
                 "routed": "time_window",
                 "time_window": {
                     "label": intent.label,
+                    "timezone": time_zone,
                     "start": datetime.fromtimestamp(window_start, tz=timezone.utc).isoformat(),
                     "end": intent.end.astimezone(timezone.utc).isoformat(),
                     "count": len(ordered),
