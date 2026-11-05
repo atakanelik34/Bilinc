@@ -249,3 +249,39 @@ async def test_time_window_stays_inside_the_project_and_drops_forgotten(tmp_path
         assert mine["results"] == []
     finally:
         await manager.close()
+
+
+NON_TIME = [
+    "pricing plan", "f6s profile", "dünya kupası", "gündem", "daytona deck", "last version of the deck",
+    "since we started", "when did we ship", "timeline of releases", "Monday meeting notes",
+    "bugüne kadar ne var", "all decisions to date", "what have we decided so far", "as of today",
+    "datetime.today() usage", "decisions before today",
+]
+
+
+@pytest.mark.asyncio
+async def test_non_time_queries_keep_the_fused_recall_payload(tmp_path):
+    from datetime import datetime, timezone
+
+    from bilinc.cloud.runtime import state_version
+    from bilinc.core.time_intent import parse_time_intent
+
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    _settings(manager, project, timezone="Europe/Istanbul", low_signal_sources=(LOW,))
+    await manager.commit(project, key="pricing.plan", value="Pro is 15 dollars, decided so far", source="agent")
+    await manager.commit(project, key="deck.version", value="last version of the deck is v3", source=LOW)
+    await manager.commit(project, key="release.timeline", value="timeline of releases since we started", source="agent")
+    plane = await manager.get_plane(project)
+    try:
+        for query in NON_TIME:
+            assert parse_time_intent(query, now=datetime.now(timezone.utc), tz=timezone.utc) is None, query
+            payload = await manager.recall(project, query=query, profile="balanced", limit=5)
+            # The pre-change path: fused recall, then state version and provenance.
+            expected = await plane.recall_profiled(query=query, profile="balanced", limit=5)
+            expected["state_version"] = state_version(plane)
+            await manager._attach_provenance(plane, expected.get("results"))
+            assert payload == expected, query
+            assert "routed" not in payload and "time_window" not in payload
+    finally:
+        await manager.close()
