@@ -379,3 +379,39 @@ def test_no_backend_is_not_routed():
     payload = asyncio.new_event_loop().run_until_complete(
         plane.recall_time_window(intent_for("today"), limit=5, query="today"))
     assert payload is None
+
+
+def test_hidden_rows_take_no_slot_before_the_cap(kind, tmp_path):
+    async def scenario(plane):
+        rows = [entry(f"g{i:03d}", "x", when=at(0, hours=1, seconds=i), superseded_by="z") for i in range(60)]
+        rows += [entry(f"k{i:04d}", "v", when=at(0, hours=2, seconds=i)) for i in range(500)]
+        await fill(plane, rows)
+        payload = await plane.recall_time_window(intent_for("today"), limit=500, query="today")
+        assert payload["time_window"]["count"] == 500
+        assert payload["time_window"]["truncated"] is False
+        assert not any(r["key"].startswith("g") for r in payload["results"])
+
+    run_with_plane(kind, tmp_path, scenario)
+
+
+def test_rows_sharing_a_stamp_page_without_loss_or_repeat(kind, tmp_path):
+    async def scenario(plane):
+        same = at(0, hours=1)
+        await fill(plane, [entry(f"k{i:04d}", "v", when=same) for i in range(250)])
+        payload = await plane.recall_time_window(intent_for("today"), limit=500, query="today")
+        keys = [r["key"] for r in payload["results"]]
+        assert len(keys) == 250 and len(set(keys)) == 250
+
+    run_with_plane(kind, tmp_path, scenario)
+
+
+def test_window_bounds_are_utc_and_zero_limit_is_empty(kind, tmp_path):
+    async def scenario(plane):
+        await fill(plane, [entry("a", "v", when=at(0, hours=1))])
+        payload = await plane.recall_time_window(intent_for("today"), limit=0, query="  today ")
+        assert payload["results"] == []
+        assert payload["final_query"] == "today"
+        assert payload["time_window"]["start"].endswith("+00:00")
+        assert payload["time_window"]["end"].endswith("+00:00")
+
+    run_with_plane(kind, tmp_path, scenario)

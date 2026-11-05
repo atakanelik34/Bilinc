@@ -1270,7 +1270,8 @@ class StatePlane:
             else:
                 seen = set(hits)
                 ordered = [candidates[key] for key in hits] + [e for k, e in candidates.items() if k not in seen]
-            selected = ordered[: max(1, int(limit))]
+            # Same as normal recall: a non-positive limit returns no results.
+            selected = ordered[: max(0, int(limit))]
             hit_score = {key: round(1.0 - (rank / len(hits)), 6) for rank, key in enumerate(hits)}
             results: List[Dict[str, Any]] = []
             for index, entry in enumerate(selected):
@@ -1312,7 +1313,7 @@ class StatePlane:
 
             payload: Dict[str, Any] = {
                 "query": query,
-                "final_query": query,
+                "final_query": (query or "").strip(),
                 "adequacy": round(self._evaluate_recall_adequacy(query, results), 6),
                 "adequacy_threshold": threshold,
                 "reflections_used": 0,
@@ -1322,12 +1323,8 @@ class StatePlane:
                 "routed": "time_window",
                 "time_window": {
                     "label": intent.label,
-                    "start": (
-                        datetime.fromtimestamp(window_start, tz=timezone.utc).isoformat()
-                        if widened
-                        else intent.start.isoformat()
-                    ),
-                    "end": intent.end.isoformat(),
+                    "start": datetime.fromtimestamp(window_start, tz=timezone.utc).isoformat(),
+                    "end": intent.end.astimezone(timezone.utc).isoformat(),
                     "count": len(ordered),
                     "truncated": truncated,
                     "widened": widened,
