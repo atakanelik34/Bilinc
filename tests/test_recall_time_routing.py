@@ -415,3 +415,26 @@ def test_window_bounds_are_utc_and_zero_limit_is_empty(kind, tmp_path):
         assert payload["time_window"]["end"].endswith("+00:00")
 
     run_with_plane(kind, tmp_path, scenario)
+
+
+def test_widening_shares_one_scan_budget(kind, tmp_path):
+    async def scenario(plane):
+        plane.TIME_WINDOW_PAGE = 10
+        plane.TIME_WINDOW_SCAN_MAX = 30
+        # 40 hidden rows in the last 24 h exhaust the budget; the 7-day row is never scanned.
+        rows = [entry(f"h{i:02d}", "x", when=at(0, hours=1, seconds=i), superseded_by="z") for i in range(40)]
+        rows.append(entry("old", "weekly", when=at(3)))
+        await fill(plane, rows)
+        reads = []
+        original = plane.backend.list_page
+
+        async def counting(*args, **kwargs):
+            page = await original(*args, **kwargs)
+            reads.append(len(page))
+            return page
+
+        plane.backend.list_page = counting
+        assert await plane.recall_time_window(intent_for("what's new"), limit=5, query="what's new") is None
+        assert sum(reads) <= 30
+
+    run_with_plane(kind, tmp_path, scenario)

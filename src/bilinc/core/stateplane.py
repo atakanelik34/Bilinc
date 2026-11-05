@@ -1167,8 +1167,10 @@ class StatePlane:
         memory_types: Optional[List[MemoryType]],
         exclude_sources: Optional[List[str]],
         now: float,
-    ) -> Tuple[List[MemoryEntry], bool]:
-        """Recallable rows written in ``[start, end)``, newest first, and whether the window was cut short."""
+        scan_budget: int,
+    ) -> Tuple[List[MemoryEntry], bool, int]:
+        """Recallable rows written in ``[start, end)``, newest first, whether the window
+        was cut short, and how many rows were read (at most ``scan_budget``, rounded up to a page)."""
         wanted = {mt.value if hasattr(mt, "value") else str(mt) for mt in memory_types} if memory_types else None
         single_type = next(iter(wanted)) if wanted and len(wanted) == 1 else None
         rows: List[MemoryEntry] = []
@@ -1196,11 +1198,11 @@ class StatePlane:
                     continue
                 rows.append(entry)
             if len(rows) > self.TIME_WINDOW_CAP:
-                return rows[: self.TIME_WINDOW_CAP], True
+                return rows[: self.TIME_WINDOW_CAP], True, read
             if len(page) < self.TIME_WINDOW_PAGE:
-                return rows, False
-            if read >= self.TIME_WINDOW_SCAN_MAX:
-                return rows, True
+                return rows, False, read
+            if read >= scan_budget:
+                return rows, True, read
             last = page[-1]
             stamp = getattr(last, "list_stamp", None)
             after_key = last.key
@@ -1245,11 +1247,17 @@ class StatePlane:
             truncated = False
             widened = False
             routed = False
+            # One scan budget for the whole call, so widening cannot double the rows read.
+            budget = self.TIME_WINDOW_SCAN_MAX
             for index, window_start in enumerate(windows):
+                if budget <= 0:
+                    break
                 widened = index > 0
-                rows, truncated = await self._time_window_rows(
-                    window_start, end, memory_types=memory_types, exclude_sources=exclude, now=now
+                rows, truncated, read = await self._time_window_rows(
+                    window_start, end, memory_types=memory_types, exclude_sources=exclude, now=now,
+                    scan_budget=budget,
                 )
+                budget -= read
                 by_key = {entry.key: entry for entry in rows}
                 # Same transforms as normal recall, so a routed value equals the normal one.
                 by_key = self._project_current_state_candidates(by_key, include_stale=False, query_timestamp=None)

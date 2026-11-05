@@ -228,3 +228,24 @@ async def test_storage_error_on_a_time_question_propagates(tmp_path):
     with pytest.raises(RuntimeError, match="storage down"):
         await manager.recall(project, query="what changed today", profile="balanced", limit=5)
     await manager.close()
+
+
+@pytest.mark.parametrize("backend", ["sqlite", pytest.param("postgres", marks=pytest.mark.skipif(not _DSN, reason="BILINC_TEST_POSTGRES_DSN not set"))])
+@pytest.mark.asyncio
+async def test_time_window_stays_inside_the_project_and_drops_forgotten(tmp_path, monkeypatch, backend):
+    if backend == "postgres":
+        monkeypatch.setenv("BILINC_STORAGE_BACKEND", "postgres")
+        monkeypatch.setenv("BILINC_POSTGRES_DSN", _DSN)
+        monkeypatch.delenv("BILINC_CLOUD_EMBEDDINGS", raising=False)
+    manager = ProjectRuntimeManager(tmp_path)
+    first, second = str(uuid4()), str(uuid4())
+    try:
+        await manager.commit(first, key="first.secret", value="only in the first project", source="agent")
+        await manager.commit(second, key="second.note", value="second project note", source="agent")
+        other = await manager.recall(second, query="what changed today", profile="balanced", limit=10)
+        assert [r["key"] for r in other["results"]] == ["second.note"]
+        await manager.forget(first, key="first.secret", reason="test", purge=True)
+        mine = await manager.recall(first, query="what changed today", profile="balanced", limit=10)
+        assert mine["results"] == []
+    finally:
+        await manager.close()
