@@ -52,7 +52,9 @@ async def test_query_timestamp_is_never_routed(tmp_path):
     manager = ProjectRuntimeManager(tmp_path)
     project = str(uuid4())
     await manager.commit(project, key="k", value="v")
-    payload = await manager.recall(project, query="today", profile="balanced", query_timestamp="2030-01-01T00:00:00Z")
+    payload = await manager.recall(
+        project, query="what changed today", profile="balanced", query_timestamp="2030-01-01T00:00:00Z"
+    )
     assert "routed" not in payload
     await manager.close()
 
@@ -193,4 +195,36 @@ async def test_non_time_query_never_reads_settings(tmp_path, monkeypatch):
     await manager.commit(project, key="pricing.plan", value="Pro is 15 dollars", source="agent")
     payload = await manager.recall(project, query="pricing plan", profile="balanced", limit=5)
     assert payload["results"][0]["key"] == "pricing.plan"
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_project_time_zone_sets_the_day_boundary(tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    _settings(manager, project, timezone="Europe/Istanbul")
+    await manager.commit(project, key="decision.today", value="ship it", source="agent")
+    payload = await manager.recall(project, query="what changed today", profile="balanced", limit=5)
+    start = datetime.fromisoformat(payload["time_window"]["start"]).astimezone(ZoneInfo("Europe/Istanbul"))
+    assert (start.hour, start.minute) == (0, 0)
+    assert payload["time_window"]["timezone"] == "Europe/Istanbul"
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_storage_error_on_a_time_question_propagates(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    await manager.commit(project, key="k", value="v", source="agent")
+    plane = await manager.get_plane(project)
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("storage down")
+
+    plane.backend.list_page = broken
+    with pytest.raises(RuntimeError, match="storage down"):
+        await manager.recall(project, query="what changed today", profile="balanced", limit=5)
     await manager.close()

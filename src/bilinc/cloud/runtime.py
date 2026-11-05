@@ -28,7 +28,7 @@ import shutil
 import time
 import dataclasses
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -511,6 +511,10 @@ def _belief_is_stale(cached: Any, persisted_state: dict[str, Any]) -> bool:
     return any(cached_state.get(name) != persisted_state.get(name) for name in _BELIEF_IDENTITY_FIELDS)
 
 
+# Time-question pre-check zone: a calendar date has started here before anywhere else.
+_EARLIEST_ZONE = timezone(timedelta(hours=14))
+
+
 @dataclass(frozen=True)
 class ProjectSnapshot:
     """Persisted project snapshot metadata.
@@ -888,14 +892,14 @@ class ProjectRuntimeManager:
         supported = _supported_recall_kwargs(type(plane))
 
         # Time questions ("what changed today") read a time window; as-of queries keep their own path.
-        # Whether a query is a time question does not depend on the time zone (except
-        # "since <date>" for a date still ahead in UTC, which just keeps the normal
-        # path), so the settings file is read only for time questions.
+        # Whether a query is a time question does not depend on the time zone, so the
+        # settings file is read only for time questions. The check runs in the most
+        # advanced zone (UTC+14), where "since <date>" is never still ahead.
         now = datetime.now(timezone.utc)
         if (
             query_timestamp is None
             and hasattr(plane, "recall_time_window")
-            and parse_time_intent(query, now=now, tz=timezone.utc) is not None
+            and parse_time_intent(query, now=now, tz=_EARLIEST_ZONE) is not None
         ):
             settings = await asyncio.to_thread(load_project_settings, self.project_dir(project_id))
             intent = parse_time_intent(query, now=now, tz=resolve_timezone(settings.timezone))
