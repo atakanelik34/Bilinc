@@ -163,12 +163,11 @@ All endpoints live under `https://bilinc.space`. Memory operations need an API k
 
 Send an `Idempotency-Key` header on any write you might retry: the same key with the same payload replays the original result and is billed once; a different payload is refused with `409 idempotency_conflict`. Saves that contain a credential, such as an API key, token or private key, are refused with `secret_detected` and the value is never echoed back.
 
-## What's new in 2.6.1
+## What's new in 2.6.2
 
-- **Forget means gone**: a hosted forget or purge also removes the names and aliases taken from the memory, the purged text the server still held in memory, and the evaluation records that name the key.
-- **Get one memory**: `CloudClient.get_memory(key)` returns a memory by its exact key, and rollback previews take a `limit` in the CLI and the `bilinc` MCP adapter.
-- **Fewer false "expired" flags**: a memory saved again with a new TTL is no longer reported as expired while its new expiry is ahead.
-- **One history under concurrent writes**: two writers can no longer split a project's audit chain.
+- **"What changed today?"**: recall answers time questions in English and Turkish ("since Monday", "dünkü kararlar", "son 3 günde") with the memories written in that window, newest first, in the project's time zone.
+- **Less noise in time questions**: sources such as raw chat transcripts can be left out of time answers unless you ask for chats.
+- **Nothing else moves**: queries without a time phrase are answered exactly as before.
 
 Every release: [changelog](https://bilinc.space/changelog).
 
