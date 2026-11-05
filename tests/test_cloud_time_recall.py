@@ -178,3 +178,19 @@ async def test_cloud_recall_routes_today_on_postgres(tmp_path, monkeypatch):
         assert "state_version" in payload
     finally:
         await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_non_time_query_never_reads_settings(tmp_path, monkeypatch):
+    import bilinc.cloud.runtime as runtime_module
+
+    def explode(_project_dir):
+        raise AssertionError("settings read on a non-time query")
+
+    monkeypatch.setattr(runtime_module, "load_project_settings", explode)
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    await manager.commit(project, key="pricing.plan", value="Pro is 15 dollars", source="agent")
+    payload = await manager.recall(project, query="pricing plan", profile="balanced", limit=5)
+    assert payload["results"][0]["key"] == "pricing.plan"
+    await manager.close()
