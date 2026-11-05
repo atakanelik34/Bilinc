@@ -213,9 +213,9 @@ _RULES: list[tuple[re.Pattern, Builder, str, bool]] = [
     (re.compile(rf"\bsince\s+({_EN_MONTH_RE})\s+(\d{{1,2}})\b{_NO_YEAR}"), _since_day_month(_EN_MONTHS, 2, 1), "since_date", False),
     (re.compile(rf"\b(\d{{1,2}})\s+({_TR_MONTH_RE}){_ABL}\s+beri\b"), _since_day_month(_TR_MONTHS, 1, 2), "since_date", False),
     (re.compile(r"\bsince\s+(?:the\s+start\s+of\s+)?this\s+week\b"), _since_period(_monday), "since_period", False),
-    (re.compile(r"\bsince\s+last\s+week\b"), _since_period(lambda now: _monday(now) - timedelta(days=7)), "since_period", False),
+    (re.compile(r"\bsince\s+last\s+week\b(?!'?s\b)"), _since_period(lambda now: _monday(now) - timedelta(days=7)), "since_period", False),
     (re.compile(r"\bsince\s+(?:the\s+start\s+of\s+)?this\s+month\b"), _since_period(_month_start), "since_period", False),
-    (re.compile(r"\bsince\s+last\s+month\b"), _since_period(_prev_month_start), "since_period", False),
+    (re.compile(r"\bsince\s+last\s+month\b(?!'?s\b)"), _since_period(_prev_month_start), "since_period", False),
     # last / past N units
     (re.compile(rf"\b(?:in\s+the\s+)?(?:past|last)\s+(\d{{1,3}})\s+{_UNIT_EN}\b"), _last_n, "last_n", False),
     (re.compile(rf"\bson\s+(\d{{1,3}})\s+{_UNIT_TR}(?:te|ta|de|da|tir|dir|dur|tur)?(?:\s+icinde)?\b"), _last_n, "last_n", False),
@@ -254,7 +254,10 @@ _GUARDS = re.compile(
     # A period that is negated or bounded from the other side ("before today",
     # "not today", "the day before yesterday") is not that period's window.
     r"|\b(?:before|until|till|after|not|prior\s+to|day\s+before)\s+(?:the\s+)?"
-    r"(?:today|yesterday|this|last|bugun|dun)\b"
+    r"(?:today|yesterday|(?:this|last)\s+(?:week|month|year)|bugun|dun)\b"
+    r"|\b(?:bugun|dun)\s+degil\b"
+    # "since last week's release" counts from an event, not from the period
+    r"|\bsince\s+(?:this|last)\s+(?:week|month)'?s\b"
 )
 # "to date" and "so far" are cumulative too, unless the query names a period
 # ("today so far", "this week to date"): they only veto an implicit match.

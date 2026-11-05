@@ -295,3 +295,25 @@ def test_since_weekday_on_that_weekday_means_today():
 )
 def test_residual_drops_time_leftovers(query, expected):
     assert window(query).residual_query == expected
+
+
+@pytest.mark.parametrize(
+    "query,label",
+    [
+        ("what changed today after this deploy", "today"),
+        ("what did we do yesterday before this migration", "yesterday"),
+        ("what happened last week after the last release", "last_week"),
+    ],
+)
+def test_ordinary_this_or_last_does_not_veto(query, label):
+    assert window(query).label == label
+
+
+@pytest.mark.parametrize("query", ["bugün değil", "dün değil, geçen hafta"])
+def test_turkish_negation_vetoes(query):
+    assert parse_time_intent(query, now=NOW, tz=IST) is None
+
+
+def test_since_last_weeks_event_is_not_since_last_week():
+    assert parse_time_intent("since last week's release", now=NOW, tz=IST) is None
+    assert parse_time_intent("since last months launch", now=NOW, tz=IST) is None
