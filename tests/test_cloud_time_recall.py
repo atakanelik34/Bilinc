@@ -1,0 +1,289 @@
+"""Cloud recall routes time questions through the time-window path."""
+
+import os
+from uuid import uuid4
+
+import pytest
+
+from bilinc.cloud.project_settings import SETTINGS_FILE, ProjectSettings, save_project_settings
+from bilinc.cloud.runtime import ProjectRuntimeManager
+
+LOW = "sample-chat-transcript"
+
+
+def _settings(manager, project, **kwargs):
+    save_project_settings(manager.project_dir(project), ProjectSettings(**kwargs))
+
+
+async def _seed(manager, project):
+    await manager.commit(project, key="decision.today", value="ship 2.6.2", source="agent")
+    await manager.commit(project, key="chat.today", value="small talk", source=LOW)
+
+
+@pytest.mark.asyncio
+async def test_cloud_recall_routes_today_and_skips_low_signal(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    _settings(manager, project, timezone="UTC", low_signal_sources=(LOW,))
+    await _seed(manager, project)
+    payload = await manager.recall(project, query="what changed today", profile="balanced", limit=10)
+    assert [r["key"] for r in payload["results"]] == ["decision.today"]
+    assert payload["routed"] == "time_window"
+    assert payload["results"][0]["entry_version"]
+    assert "state_version" in payload
+    assert payload["time_window"]["timezone"] == "UTC"
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_cloud_recall_non_time_query_is_unchanged(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    await manager.commit(project, key="pricing.plan", value="Pro is 15 dollars", source="agent")
+    payload = await manager.recall(project, query="pricing plan", profile="balanced", limit=5)
+    assert "routed" not in payload
+    assert "time_window" not in payload
+    assert payload["results"][0]["key"] == "pricing.plan"
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_query_timestamp_is_never_routed(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    await manager.commit(project, key="k", value="v")
+    payload = await manager.recall(
+        project, query="what changed today", profile="balanced", query_timestamp="2030-01-01T00:00:00Z"
+    )
+    assert "routed" not in payload
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_invalid_zone_in_settings_falls_back_to_utc(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    await _seed(manager, project)
+    directory = manager.project_dir(project)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / SETTINGS_FILE).write_text('{"timezone": "Mars/Olympus", "low_signal_sources": []}')
+    payload = await manager.recall(project, query="what changed today", profile="balanced", limit=10)
+    assert payload["routed"] == "time_window"
+    assert payload["time_window"]["timezone"] == "UTC"
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_corrupt_settings_do_not_break_recall(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    await _seed(manager, project)
+    directory = manager.project_dir(project)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / SETTINGS_FILE).write_text("{not json")
+    payload = await manager.recall(project, query="what changed today", profile="balanced", limit=10)
+    assert payload["routed"] == "time_window"
+    assert payload["time_window"]["timezone"] == "UTC"
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_verified_profile_routed_has_evidence(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    await _seed(manager, project)
+    payload = await manager.recall(project, query="what changed today", profile="verified", limit=10)
+    assert payload["routed"] == "time_window"
+    assert "evidence" in payload
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_explain_on_routed_query_reports_unsupported(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    await _seed(manager, project)
+    payload = await manager.recall(project, query="what changed today", profile="balanced", limit=10, explain=True)
+    assert payload["routed"] == "time_window"
+    assert payload["explain_supported"] is False
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_types_filter_applies_when_routed(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    await manager.commit(project, key="sem.k", value="semantic fact", memory_type="semantic", source="agent")
+    await manager.commit(project, key="epi.k", value="episodic event", memory_type="episodic", source="agent")
+    await manager.commit(project, key="proc.k", value="procedural step", memory_type="procedural", source="agent")
+    payload = await manager.recall(
+        project, query="what changed today", profile="balanced", limit=10, memory_types=["semantic", "episodic"]
+    )
+    assert payload["routed"] == "time_window"
+    assert {r["key"] for r in payload["results"]} == {"sem.k", "epi.k"}
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_query_naming_low_signal_includes_it(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    _settings(manager, project, timezone="UTC", low_signal_sources=(LOW,))
+    await _seed(manager, project)
+    payload = await manager.recall(project, query="chat transcripts today", profile="balanced", limit=10)
+    assert payload["routed"] == "time_window"
+    assert "chat.today" in {r["key"] for r in payload["results"]}
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_implicit_query_with_topic_outside_window_falls_back(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    plane = await manager.get_plane(project)
+    from bilinc.core.models import MemoryEntry, MemoryType
+    import time
+
+    await plane.backend.restore(
+        MemoryEntry(
+            key="zebrafish.note",
+            value="zebrafish migration finished",
+            memory_type=MemoryType.SEMANTIC,
+            created_at=time.time() - 30 * 86400,
+            updated_at=time.time() - 30 * 86400,
+        )
+    )
+    payload = await manager.recall(project, query="what changed in zebrafish", profile="balanced", limit=10)
+    assert "routed" not in payload
+    assert "zebrafish.note" in {r["key"] for r in payload["results"]}
+    await manager.close()
+
+
+_DSN = os.getenv("BILINC_TEST_POSTGRES_DSN")
+
+
+@pytest.mark.skipif(not _DSN, reason="BILINC_TEST_POSTGRES_DSN not set")
+@pytest.mark.asyncio
+async def test_cloud_recall_routes_today_on_postgres(tmp_path, monkeypatch):
+    monkeypatch.setenv("BILINC_STORAGE_BACKEND", "postgres")
+    monkeypatch.setenv("BILINC_POSTGRES_DSN", _DSN)
+    monkeypatch.delenv("BILINC_CLOUD_EMBEDDINGS", raising=False)
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    try:
+        _settings(manager, project, timezone="UTC", low_signal_sources=(LOW,))
+        await _seed(manager, project)
+        payload = await manager.recall(project, query="what changed today", profile="balanced", limit=10)
+        assert [r["key"] for r in payload["results"]] == ["decision.today"]
+        assert payload["routed"] == "time_window"
+        assert payload["results"][0]["entry_version"]
+        assert "state_version" in payload
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_non_time_query_never_reads_settings(tmp_path, monkeypatch):
+    import bilinc.cloud.runtime as runtime_module
+
+    def explode(_project_dir):
+        raise AssertionError("settings read on a non-time query")
+
+    monkeypatch.setattr(runtime_module, "load_project_settings", explode)
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    await manager.commit(project, key="pricing.plan", value="Pro is 15 dollars", source="agent")
+    payload = await manager.recall(project, query="pricing plan", profile="balanced", limit=5)
+    assert payload["results"][0]["key"] == "pricing.plan"
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_project_time_zone_sets_the_day_boundary(tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    _settings(manager, project, timezone="Europe/Istanbul")
+    await manager.commit(project, key="decision.today", value="ship it", source="agent")
+    payload = await manager.recall(project, query="what changed today", profile="balanced", limit=5)
+    start = datetime.fromisoformat(payload["time_window"]["start"]).astimezone(ZoneInfo("Europe/Istanbul"))
+    assert (start.hour, start.minute) == (0, 0)
+    assert payload["time_window"]["timezone"] == "Europe/Istanbul"
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_storage_error_on_a_time_question_propagates(tmp_path):
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    await manager.commit(project, key="k", value="v", source="agent")
+    plane = await manager.get_plane(project)
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("storage down")
+
+    plane.backend.list_page = broken
+    with pytest.raises(RuntimeError, match="storage down"):
+        await manager.recall(project, query="what changed today", profile="balanced", limit=5)
+    await manager.close()
+
+
+@pytest.mark.parametrize("backend", ["sqlite", pytest.param("postgres", marks=pytest.mark.skipif(not _DSN, reason="BILINC_TEST_POSTGRES_DSN not set"))])
+@pytest.mark.asyncio
+async def test_time_window_stays_inside_the_project_and_drops_forgotten(tmp_path, monkeypatch, backend):
+    if backend == "postgres":
+        monkeypatch.setenv("BILINC_STORAGE_BACKEND", "postgres")
+        monkeypatch.setenv("BILINC_POSTGRES_DSN", _DSN)
+        monkeypatch.delenv("BILINC_CLOUD_EMBEDDINGS", raising=False)
+    manager = ProjectRuntimeManager(tmp_path)
+    first, second = str(uuid4()), str(uuid4())
+    try:
+        await manager.commit(first, key="first.secret", value="only in the first project", source="agent")
+        await manager.commit(second, key="second.note", value="second project note", source="agent")
+        other = await manager.recall(second, query="what changed today", profile="balanced", limit=10)
+        assert [r["key"] for r in other["results"]] == ["second.note"]
+        await manager.forget(first, key="first.secret", reason="test", purge=True)
+        mine = await manager.recall(first, query="what changed today", profile="balanced", limit=10)
+        assert mine["results"] == []
+    finally:
+        await manager.close()
+
+
+NON_TIME = [
+    "pricing plan", "f6s profile", "dünya kupası", "gündem", "daytona deck", "last version of the deck",
+    "since we started", "when did we ship", "timeline of releases", "Monday meeting notes",
+    "bugüne kadar ne var", "all decisions to date", "what have we decided so far", "as of today",
+    "datetime.today() usage", "decisions before today",
+    # every cumulative phrase the spec guards
+    "bugüne dek yapılanlar", "bugün itibarıyla durum", "until today", "till today", "up to today", "so far",
+]
+
+
+@pytest.mark.asyncio
+async def test_non_time_queries_keep_the_fused_recall_payload(tmp_path):
+    from datetime import datetime, timezone
+
+    from bilinc.cloud.runtime import state_version
+    from bilinc.core.time_intent import parse_time_intent
+
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid4())
+    _settings(manager, project, timezone="Europe/Istanbul", low_signal_sources=(LOW,))
+    await manager.commit(project, key="pricing.plan", value="Pro is 15 dollars, decided so far", source="agent")
+    await manager.commit(project, key="deck.version", value="last version of the deck is v3", source=LOW)
+    await manager.commit(project, key="release.timeline", value="timeline of releases since we started", source="agent")
+    plane = await manager.get_plane(project)
+    try:
+        for query in NON_TIME:
+            assert parse_time_intent(query, now=datetime.now(timezone.utc), tz=timezone.utc) is None, query
+            payload = await manager.recall(project, query=query, profile="balanced", limit=5)
+            # The pre-change path: fused recall, then state version and provenance.
+            expected = await plane.recall_profiled(query=query, profile="balanced", limit=5)
+            expected["state_version"] = state_version(plane)
+            await manager._attach_provenance(plane, expected.get("results"))
+            assert payload == expected, query
+            assert "routed" not in payload and "time_window" not in payload
+    finally:
+        await manager.close()

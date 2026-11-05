@@ -22,7 +22,8 @@ import re
 import json
 import time
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from bilinc.core.models import MemoryEntry, MemoryType, strip_reserved_metadata, ttl_expired
 from bilinc.core.event_ledger import EventOperation
 from bilinc.core.working_memory import WorkingMemory
@@ -32,6 +33,7 @@ from bilinc.core.verifier import StateVerifier
 from bilinc.core.audit import AuditTrail, OpType
 from bilinc.core.decay import compute_new_strength, should_prune
 from bilinc.core.rerank import rerank_config, rerank_keys
+from bilinc.core.time_intent import TimeIntent
 from bilinc.core.text_fold import TURKISH_STOPWORDS, fold_text, folded_terms, query_stopwords, search_terms
 from bilinc.core.temporal import (
     classify_temporal_query,
@@ -179,6 +181,11 @@ class StatePlane:
             "prefers",
         }
     )
+    # Time-window recall: recallable rows kept, rows per storage page, rows read before giving up.
+    TIME_WINDOW_CAP = 500
+    TIME_WINDOW_PAGE = 100
+    TIME_WINDOW_SCAN_MAX = 5000
+
     LEXICAL_QUERY_STOPWORDS = frozenset(
         {
             "a",
@@ -1151,6 +1158,207 @@ class StatePlane:
         if resolved.get("include_claims"):
             payload["evidence"] = await self._recall_profile_evidence(payload.get("results", []), resolved)
         return payload
+
+    async def _time_window_rows(
+        self,
+        start: float,
+        end: float,
+        *,
+        memory_types: Optional[List[MemoryType]],
+        exclude_sources: Optional[List[str]],
+        now: float,
+        scan_budget: int,
+    ) -> Tuple[List[MemoryEntry], bool, int]:
+        """Recallable rows written in ``[start, end)``, newest first, whether the window
+        was cut short, and how many rows were read (at most ``scan_budget``, rounded up to a page)."""
+        wanted = {mt.value if hasattr(mt, "value") else str(mt) for mt in memory_types} if memory_types else None
+        single_type = next(iter(wanted)) if wanted and len(wanted) == 1 else None
+        rows: List[MemoryEntry] = []
+        read = 0
+        after_key: Optional[str] = None
+        after_updated: Optional[float] = None
+        while True:
+            page = await self.backend.list_page(
+                # The storage bounds are strict; widen the lower one so a row stamped exactly at ``start`` is inside.
+                updated_after=start - 1e-6,
+                updated_before=end,
+                memory_type=single_type,
+                exclude_sources=exclude_sources or None,
+                after_key=after_key,
+                after_updated=after_updated,
+                order="newest",
+                limit=self.TIME_WINDOW_PAGE,
+            )
+            read += len(page)
+            for entry in page:
+                # Same visibility as normal recall, applied before the cap so hidden rows never take a slot.
+                if not self._is_recallable_entry(entry, now):
+                    continue
+                if wanted is not None and entry.memory_type.value not in wanted:
+                    continue
+                rows.append(entry)
+            if len(rows) > self.TIME_WINDOW_CAP:
+                return rows[: self.TIME_WINDOW_CAP], True, read
+            if len(page) < self.TIME_WINDOW_PAGE:
+                return rows, False, read
+            if read >= scan_budget:
+                return rows, True, read
+            last = page[-1]
+            stamp = getattr(last, "list_stamp", None)
+            after_key = last.key
+            after_updated = float(stamp if stamp is not None else (last.updated_at or 0.0))
+
+    async def recall_time_window(
+        self,
+        intent: TimeIntent,
+        *,
+        limit: int = 10,
+        memory_types: Optional[List[MemoryType]] = None,
+        low_signal_sources: Sequence[str] = (),
+        include_low_signal: bool = False,
+        query: str = "",
+        profile: Optional[str] = None,
+        explain: bool = False,
+        max_reflections: Optional[int] = None,
+        adequacy_threshold: Optional[float] = None,
+        time_zone: str = "UTC",
+    ) -> Optional[Dict[str, Any]]:
+        """Entries written inside ``intent``'s window, newest first (topic matches first).
+
+        Returns ``None`` when there is nothing to route: no backend, or an implicit
+        window (no stated period) with no usable rows in 24 h and 7 d, so the caller
+        falls back to normal recall. Storage errors propagate.
+        """
+        if not self.backend or not hasattr(self.backend, "list_page"):
+            return None
+        start_time = time.perf_counter()
+        try:
+            exclude = None if include_low_signal else [s for s in low_signal_sources if s]
+            now = time.time()
+            residual = (intent.residual_query or "").strip()
+            stopwords = query_stopwords(residual, self.LEXICAL_QUERY_STOPWORDS)
+            has_topic = any(token not in stopwords for token in self._tokenize_query(residual))
+
+            start, end = intent.start.timestamp(), intent.end.timestamp()
+            windows = [start]
+            if intent.implicit:
+                windows.append(end - 7 * 86400)
+            candidates: Dict[str, MemoryEntry] = {}
+            hits: List[str] = []
+            truncated = False
+            widened = False
+            routed = False
+            # One scan budget for the whole call, so widening cannot double the rows read.
+            budget = self.TIME_WINDOW_SCAN_MAX
+            for index, window_start in enumerate(windows):
+                if budget <= 0:
+                    break
+                widened = index > 0
+                rows, truncated, read = await self._time_window_rows(
+                    window_start, end, memory_types=memory_types, exclude_sources=exclude, now=now,
+                    scan_budget=budget,
+                )
+                budget -= read
+                by_key = {entry.key: entry for entry in rows}
+                # Same transforms as normal recall, so a routed value equals the normal one.
+                by_key = self._project_current_state_candidates(by_key, include_stale=False, query_timestamp=None)
+                if residual:
+                    by_key = self._collapse_current_state_candidates(residual, by_key)
+                hits = self._rank_lexical_keys(residual, by_key) if has_topic else []
+                if not by_key or (intent.implicit and has_topic and not hits):
+                    continue
+                candidates, routed = by_key, True
+                break
+            if not routed and intent.implicit:
+                return None
+            if not routed:
+                window_start = windows[0]
+
+            if intent.implicit and has_topic:
+                ordered = [candidates[key] for key in hits]
+            else:
+                seen = set(hits)
+                ordered = [candidates[key] for key in hits] + [e for k, e in candidates.items() if k not in seen]
+            # Same as normal recall: a non-positive limit returns no results.
+            selected = ordered[: max(0, int(limit))]
+            hit_score = {key: round(1.0 - (rank / len(hits)), 6) for rank, key in enumerate(hits)}
+            results: List[Dict[str, Any]] = []
+            for index, entry in enumerate(selected):
+                score = round(1.0 - (index / len(selected)), 6)
+                result = {
+                    "key": entry.key,
+                    "value": entry.value,
+                    "memory_type": entry.memory_type.value,
+                    "importance": entry.importance,
+                    "score": score,
+                    "signals": {
+                        "lexical": hit_score.get(entry.key, 0.0),
+                        "hybrid": 0.0,
+                        "semantic": 0.0,
+                        "sparse": 0.0,
+                        "temporal": score,
+                        "entity": 0.0,
+                    },
+                }
+                if isinstance(entry.metadata, dict) and entry.metadata.get("source_key"):
+                    result["source_key"] = str(entry.metadata["source_key"])
+                results.append(result)
+
+            if profile is not None:
+                resolved: Optional[Dict[str, Any]] = self.resolve_recall_profile(profile)
+                reflections = resolved["max_reflections"]
+                threshold = resolved["adequacy_threshold"]
+            else:
+                # Same defaults as recall_reflective, which a profile-less caller would have used.
+                resolved = None
+                reflections, threshold = 3, 0.55
+            if max_reflections is not None:
+                reflections = max(0, int(max_reflections))
+            if adequacy_threshold is not None:
+                threshold = max(0.0, min(1.0, float(adequacy_threshold)))
+            if resolved is not None:
+                resolved["max_reflections"] = reflections
+                resolved["adequacy_threshold"] = threshold
+
+            payload: Dict[str, Any] = {
+                "query": query,
+                "final_query": (query or "").strip(),
+                "adequacy": round(self._evaluate_recall_adequacy(query, results), 6),
+                "adequacy_threshold": threshold,
+                "reflections_used": 0,
+                "max_reflections": reflections,
+                "queries_tried": [query],
+                "results": results,
+                "routed": "time_window",
+                "time_window": {
+                    "label": intent.label,
+                    "timezone": time_zone,
+                    "start": datetime.fromtimestamp(window_start, tz=timezone.utc).isoformat(),
+                    "end": intent.end.astimezone(timezone.utc).isoformat(),
+                    "count": len(ordered),
+                    "truncated": truncated,
+                    "widened": widened,
+                    "topic_hits": len(hits),
+                },
+            }
+            if resolved is not None:
+                payload["profile"] = resolved["name"]
+                payload["recall_profile"] = resolved
+                payload["read_only"] = True
+                if resolved.get("include_claims"):
+                    payload["evidence"] = await self._recall_profile_evidence(results, resolved)
+            if explain:
+                payload["explain_supported"] = False
+            self._record_success(
+                "recall_time_window",
+                start_time,
+                query_len=len(query or ""),
+                result_count=len(results),
+            )
+            return payload
+        except Exception as exc:
+            self._record_failure("recall_time_window", start_time, exc, query_len=len(query or ""))
+            raise
 
     async def _recall_profile_evidence(self, results: List[Dict[str, Any]], profile: Dict[str, Any]) -> Dict[str, Any]:
         evidence: Dict[str, Any] = {"claims": [], "contradictions": {"count": 0, "findings": []}}

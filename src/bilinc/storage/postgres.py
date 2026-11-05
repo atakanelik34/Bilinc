@@ -208,6 +208,7 @@ class PostgresBackend(StorageBackend):
                 CREATE INDEX IF NOT EXISTS idx_bilinc_key ON bilinc_entries(key);
                 CREATE INDEX IF NOT EXISTS idx_bilinc_type ON bilinc_entries(memory_type);
                 CREATE INDEX IF NOT EXISTS idx_bilinc_strength ON bilinc_entries(current_strength);
+                CREATE INDEX IF NOT EXISTS idx_bilinc_updated_at ON bilinc_entries(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_bilinc_verified ON bilinc_entries(is_verified) WHERE is_verified = true;
                 CREATE INDEX IF NOT EXISTS idx_bilinc_embedding ON bilinc_entries USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
                 CREATE INDEX IF NOT EXISTS idx_bilinc_gin_metadata ON bilinc_entries USING GIN (metadata);
@@ -1390,6 +1391,7 @@ class PostgresBackend(StorageBackend):
         updated_after: Optional[float],
         updated_before: Optional[float],
         sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
     ) -> tuple[list[str], list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -1415,6 +1417,13 @@ class PostgresBackend(StorageBackend):
                 "THEN NULLIF(metadata ->> 'source', '') END, '') "
                 f"= ANY({bind(list(sources))}::text[])"
             )
+        if exclude_sources:
+            # Rows with no source compare as '' and stay.
+            clauses.append(
+                "COALESCE(NULLIF(source, ''), CASE WHEN jsonb_typeof(metadata -> 'source') = 'string' "
+                "THEN NULLIF(metadata ->> 'source', '') END, '') "
+                f"<> ALL({bind(list(exclude_sources))}::text[])"
+            )
         return clauses, params
 
     async def list_page(
@@ -1425,6 +1434,7 @@ class PostgresBackend(StorageBackend):
         updated_after: Optional[float] = None,
         updated_before: Optional[float] = None,
         sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
         after_key: Optional[str] = None,
         after_updated: Optional[float] = None,
         order: str = "key",
@@ -1433,7 +1443,7 @@ class PostgresBackend(StorageBackend):
         """Return one page of entries, by key or update time (see SQLiteBackend.list_page)."""
         if not self._initialized:
             await self.init()
-        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before, sources)
+        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before, sources, exclude_sources)
         # COLLATE "C" (byte order) on both the cursor comparison and ORDER BY,
         # so paging agrees with SQLite regardless of the database's locale.
         if order == "key":
@@ -1468,10 +1478,11 @@ class PostgresBackend(StorageBackend):
         updated_after: Optional[float] = None,
         updated_before: Optional[float] = None,
         sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
     ) -> int:
         if not self._initialized:
             await self.init()
-        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before, sources)
+        clauses, params = self._page_filters(prefix, memory_type, updated_after, updated_before, sources, exclude_sources)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         async with self.pool.acquire() as conn:
             return int(await conn.fetchval(f"SELECT COUNT(*) FROM bilinc_entries {where}", *params))

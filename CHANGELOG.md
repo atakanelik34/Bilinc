@@ -2,6 +2,16 @@
 
 All notable changes to Bilinc.
 
+## [2.6.2] — 2026-11-05
+
+### Added
+
+- Recall answers time questions. A query such as "what changed today", "yesterday's decisions", "since Monday", "last week" or "in the last 3 days", or the Turkish "bugünün güncellemeleri", "dünkü kararlar", "pazartesiden beri", "geçen hafta" or "son 3 günde", returns the memories written in that window, newest first. Any other words in the query rank the memories inside the window by topic, so "F6S today" puts today's memories about F6S first. "What's new" and "ne değişti" with no stated period look at the last 24 hours, then at the last 7 days if that is empty, and otherwise fall back to normal recall. Windows are computed in code, never by a model, in the project's time zone; weeks start on Monday. Hosted recall and the `bilinc` stdio MCP adapter's `bilinc_recall_smart` both do this, and memories that normal recall hides (expired, invalidated or superseded) stay hidden. Queries without a time phrase are answered exactly as before.
+- A window holds at most the 500 newest memories; when there were more, `time_window.truncated` is true. Internal runtime: the recall payload of a time question carries a `time_window` object (`label`, `start`, `end`, `timezone`, `count`, `truncated`); the hosted MCP connector's `recall` output is unchanged.
+- `list_page` and `count` on both storage backends take `exclude_sources`, which drops memories by their effective source (the source column, else `metadata.source`). An index on `updated_at` keeps newest-first paging fast; it is created on startup if missing.
+- Internal runtime: each hosted project can have a time zone (default UTC) and a list of low-signal sources, such as raw chat transcripts, that time questions leave out unless the query asks for chats or transcripts. They are stored next to the project's runtime database and set by the operator with `python -m bilinc.cloud.project_settings`.
+- The `bilinc` stdio MCP adapter reads the time zone from `BILINC_TIMEZONE`, then `TZ`, then the machine's zone, and the low-signal sources from `BILINC_LOW_SIGNAL_SOURCES` (comma-separated).
+
 ## [2.6.1] — 2026-11-03
 
 ### Added

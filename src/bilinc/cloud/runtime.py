@@ -28,14 +28,17 @@ import shutil
 import time
 import dataclasses
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from uuid import UUID
 
+from bilinc.cloud.project_settings import load_project_settings
 from bilinc.core.audit import OpType
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.stateplane import StatePlane
+from bilinc.core.time_intent import mentions_low_signal, parse_time_intent, resolve_timezone
 from bilinc.storage.sqlite import SQLiteBackend
 from bilinc.storage.postgres import PostgresBackend
 from bilinc.storage.postgres_tenancy import project_schema, quoted
@@ -508,6 +511,10 @@ def _belief_is_stale(cached: Any, persisted_state: dict[str, Any]) -> bool:
     return any(cached_state.get(name) != persisted_state.get(name) for name in _BELIEF_IDENTITY_FIELDS)
 
 
+# Time-question pre-check zone: a calendar date has started here before anywhere else.
+_EARLIEST_ZONE = timezone(timedelta(hours=14))
+
+
 @dataclass(frozen=True)
 class ProjectSnapshot:
     """Persisted project snapshot metadata.
@@ -883,6 +890,35 @@ class ProjectRuntimeManager:
         # even on a runtime that could not have filtered by it anyway.
         coerced_types = _coerce_memory_types(memory_types)
         supported = _supported_recall_kwargs(type(plane))
+
+        # Time questions ("what changed today") read a time window; as-of queries keep their own path.
+        # Whether a query is a time question does not depend on the time zone, so the
+        # settings file is read only for time questions. The check runs in the most
+        # advanced zone (UTC+14), where "since <date>" is never still ahead.
+        now = datetime.now(timezone.utc)
+        if (
+            query_timestamp is None
+            and hasattr(plane, "recall_time_window")
+            and parse_time_intent(query, now=now, tz=_EARLIEST_ZONE) is not None
+        ):
+            settings = await asyncio.to_thread(load_project_settings, self.project_dir(project_id))
+            intent = parse_time_intent(query, now=now, tz=resolve_timezone(settings.timezone))
+            if intent is not None:
+                routed = await plane.recall_time_window(
+                    intent,
+                    limit=limit,
+                    memory_types=coerced_types,
+                    low_signal_sources=list(settings.low_signal_sources),
+                    include_low_signal=mentions_low_signal(query),
+                    query=query,
+                    profile=profile,
+                    explain=explain,
+                    time_zone=settings.timezone,
+                )
+                if routed is not None:
+                    routed["state_version"] = state_version(plane)
+                    await self._attach_provenance(plane, routed.get("results"))
+                    return routed
 
         kwargs: dict[str, Any] = {"query": query, "profile": profile, "limit": limit}
         if coerced_types is not None and "memory_types" in supported:
