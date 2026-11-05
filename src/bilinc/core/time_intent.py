@@ -227,6 +227,7 @@ _RULES: list[tuple[re.Pattern, Builder, str, bool]] = [
     (re.compile(r"\bne\s+degisti\b"), _implicit, "recent", True),
     (re.compile(r"\bson\s+(?:degisiklik|guncelleme)\w*\b"), _implicit, "recent", True),
     (re.compile(r"\bson\s+zamanlarda\b"), _implicit, "recent", True),
+    (re.compile(r"\ben\s+son\s+ne\b"), _implicit, "recent", True),
 ]
 
 
@@ -236,9 +237,10 @@ _GUARDS = re.compile(
     r"\bbugune\s+(?:kadar|dek)\b"
     r"|\bbugun\s+itibari(?:yla|yle)\b"
     r"|\b(?:as\s+of|until|till|up\s+to)\s+today\b"
-    r"|\bto\s+date\b"
-    r"|\bso\s+far\b"
 )
+# "to date" and "so far" are cumulative too, unless the query names a period
+# ("today so far", "this week to date"): they only veto an implicit match.
+_IMPLICIT_GUARDS = re.compile(r"\bto\s+date\b|\bso\s+far\b")
 
 
 def _residual(folded: str, spans: list[tuple[int, int]]) -> str:
@@ -272,6 +274,8 @@ def parse_time_intent(query: str, *, now: datetime, tz: tzinfo) -> Optional[Time
             implicit = implicit or (window, label)
         elif explicit is None:
             explicit = (window, label)
+    if explicit is None and _IMPLICIT_GUARDS.search(folded):
+        return None
     chosen = explicit or implicit
     if chosen is None:
         return None

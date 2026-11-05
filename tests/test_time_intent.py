@@ -129,6 +129,7 @@ def test_since_date(query):
     [
         "what's new", "whats new", "what`s new", "what changed", "recent changes", "latest updates",
         "yeni ne var", "ne değişti", "son değişiklikler", "son güncellemeler", "son zamanlarda",
+        "en son ne yaptık",
     ],
 )
 def test_implicit(query):
@@ -159,6 +160,11 @@ def test_implicit(query):
 )
 def test_guards_do_not_trigger(query):
     assert parse_time_intent(query, now=NOW, tz=IST) is None, query
+
+
+@pytest.mark.parametrize("query", ["what did we do today so far", "this week to date", "bugün şu ana kadar"])
+def test_period_with_so_far_still_routes(query):
+    assert parse_time_intent(query, now=NOW, tz=IST).implicit is False
 
 
 @pytest.mark.parametrize("query", ["todays special", "yesterdays news site"])
