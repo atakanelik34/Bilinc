@@ -75,7 +75,7 @@ bilinc = "bilinc.cli.main:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["bilinc", "bilinc.cli"]
+packages = ["bilinc", "bilinc.cli", "bilinc.wiki"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
