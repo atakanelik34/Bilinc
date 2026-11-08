@@ -1,7 +1,7 @@
-"""P0 2026-11-08: the Postgres audit trail must survive a server restart.
+"""The Postgres audit trail must survive a server restart.
 
-Azure Postgres restarted at 05:46:12Z. ``SyncPostgresAuditTrail`` opens one psycopg connection in
-``init()`` and never reconnects, so every audit-touching call on a cached project plane raised
+Before 2.6.3, ``SyncPostgresAuditTrail`` opened one psycopg connection in ``init()`` and never
+reconnected, so after a database restart every audit-touching call on a cached project plane raised
 ``psycopg.OperationalError: the connection is closed`` and the sidecar answered HTTP 500 (history,
 diff against current, commit, confirm), while list/recall kept working off the cached root hash.
 

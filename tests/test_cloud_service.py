@@ -245,7 +245,7 @@ def test_cloud_sidecar_rejects_an_unknown_memory_type_with_a_stable_code(client)
     assert response.json()["detail"] == "invalid_memory_type"
 
 
-# P0 2026-11-08: a lost audit store answered HTTP 500 text/plain; it is a 503 with a stable code now.
+# Before 2.6.3 a lost audit store answered HTTP 500 text/plain; it is a 503 with a stable code now.
 
 def _lost_connection_errors():
     psycopg = pytest.importorskip("psycopg")
