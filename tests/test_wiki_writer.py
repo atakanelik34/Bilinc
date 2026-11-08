@@ -467,3 +467,40 @@ def test_lone_surrogates_in_content_do_not_stop_the_write(tmp_path):
     write_tree(tmp_path, {"index.md": "bad \ud800 text\n"}, previous=None, manifest_for=manifest_for)
 
     assert (tmp_path / "index.md").read_bytes() == b"bad ? text\n"
+
+
+def test_unreadable_target_is_a_clean_error(tmp_path, monkeypatch):
+    def denied(path):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(writer.os, "listdir", denied)
+
+    with pytest.raises(WikiExportError, match="Permission denied"):
+        inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+
+def test_target_that_cannot_be_created_is_a_clean_error(tmp_path):
+    parent = tmp_path / "locked"
+    parent.mkdir()
+    os.chmod(parent, 0o500)
+    try:
+        if os.access(parent, os.W_OK):
+            pytest.skip("running with permissions that ignore the mode")
+        with pytest.raises(WikiExportError, match="Permission denied"):
+            write_tree(parent / "wiki", FILES, previous=None, manifest_for=manifest_for)
+    finally:
+        os.chmod(parent, 0o700)
+
+
+def test_final_chmod_failure_is_a_clean_error(tmp_path, monkeypatch):
+    real_chmod = os.chmod
+
+    def failing_chmod(path, mode, *args, **kwargs):
+        if Path(path) == tmp_path:
+            raise PermissionError(1, "Operation not permitted", str(path))
+        return real_chmod(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(writer.os, "chmod", failing_chmod)
+
+    with pytest.raises(WikiExportError, match="not permitted"):
+        write_tree(tmp_path, FILES, previous=None, manifest_for=manifest_for)

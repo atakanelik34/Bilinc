@@ -68,7 +68,10 @@ def inspect_target(target: Path, *, base_url: str, prefix: str | None) -> dict[s
     if not target.is_dir():
         raise WikiRefused(f"{target} is not a folder")
 
-    entries = set(os.listdir(target))
+    try:
+        entries = set(os.listdir(target))
+    except OSError as exc:
+        raise WikiExportError(f"cannot read {target}: {exc}") from exc
     if MANIFEST_NAME in entries:
         try:
             manifest = read_manifest(target)
@@ -111,7 +114,10 @@ def write_tree(
     owned = set(previous["files"]) if previous else set()
     created_target = False
     if not os.path.lexists(target):
-        os.mkdir(target, DIR_MODE)
+        try:
+            os.mkdir(target, DIR_MODE)
+        except OSError as exc:
+            raise WikiExportError(f"could not create {target}: {exc}") from exc
         created_target = True
 
     temp = target / TMP_NAME
@@ -140,10 +146,10 @@ def write_tree(
             result.written += 1
         _remove_stale(target, sorted(owned - set(wanted)), result)
         _write_manifest(target, manifest_for(True, wanted))
+        _discard_temp(temp)
+        os.chmod(target, DIR_MODE)
     except OSError as exc:
         raise WikiExportError(f"could not finish writing the wiki: {exc}") from exc
-    _discard_temp(temp)
-    os.chmod(target, DIR_MODE)
     return result
 
 
