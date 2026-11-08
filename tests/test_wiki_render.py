@@ -636,3 +636,19 @@ def test_agents_text_is_fixed_except_version_and_time() -> None:
     other = render_agents(version="9.9.9", exported_at="U")
     assert other == t.replace("2.7.0", "9.9.9").replace("at T.", "at U.")
     assert headings_outside_fences(t) == ["# AGENTS.md"]
+
+
+@pytest.mark.parametrize(
+    "raw,escaped",
+    [
+        ("https://evil.example/login", "https:\\/\\/evil.example/login"),
+        ("see WWW.evil.com now", "see WWW\\.evil.com now"),
+        ("a %%hidden%% b", "a \\%\\%hidden\\%\\% b"),
+        ("==mark== ~~gone~~", "\\=\\=mark\\=\\= \\~\\~gone\\~\\~"),
+        ("cost $5 and $x$", "cost \\$5 and \\$x\\$"),
+        ("50% off, a=b, x~y", "50% off, a=b, x~y"),
+        ("project:bilinc:release", "project:bilinc:release"),
+    ],
+)
+def test_md_inline_defuses_autolinks_and_obsidian_syntax(raw, escaped):
+    assert md_inline(raw) == escaped

@@ -39,6 +39,12 @@ _INLINE_PUNCT = re.compile(r"([\\`*_\[\]<>|#])")
 #: setext underline (``>`` and ``#`` are already escaped everywhere).
 _LEADING_MARKER = re.compile(r"^([!+\-=])")
 _LEADING_ORDERED = re.compile(r"^(\d+)([.)])")
+#: Obsidian's ``$`` math, and its ``%%`` comments, ``==`` highlights and
+#: ``~~`` strikes (only a doubled character forms those, so a lone one stays).
+_OBSIDIAN_SINGLE = re.compile(r"([$])")
+_OBSIDIAN_DOUBLED = re.compile(r"([%=~])\1+")
+#: Text GitHub and Obsidian turn into links on their own.
+_AUTOLINK = re.compile(r"(://|(?<![A-Za-z0-9])www\.)", re.IGNORECASE)
 
 
 def fence(content: str, lang: str) -> str:
@@ -61,10 +67,14 @@ def md_inline(text: str) -> str:
     """Return ``text`` as inert inline Markdown on a single line.
 
     Line breaks and control characters become spaces; punctuation that can
-    form structure is backslash-escaped. ``:`` is left alone so keys stay
-    readable.
+    form structure is backslash-escaped, as are bare URLs (``https://``,
+    ``www.``) that renderers would turn into links. ``:`` is left alone so keys
+    stay readable.
     """
     out = _INLINE_PUNCT.sub(r"\\\1", fold_lines(text))
+    out = _OBSIDIAN_SINGLE.sub(r"\\\1", out)
+    out = _OBSIDIAN_DOUBLED.sub(lambda match: "".join("\\" + char for char in match.group()), out)
+    out = _AUTOLINK.sub(lambda match: match.group().replace("/", "\\/").replace(".", "\\."), out)
     out = _LEADING_MARKER.sub(r"\\\1", out)
     return _LEADING_ORDERED.sub(r"\1\\\2", out)
 
