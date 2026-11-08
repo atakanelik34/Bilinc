@@ -488,6 +488,58 @@ def test_existing_commands_unchanged():  # build_parser() subcommand set == prev
 
 - [ ] **Step 2–5:** FAIL → implement → PASS → commit `"Add the bilinc wiki command"`.
 
+### Task 13b: Ship `bilinc.wiki` in the wheel and sdist (G2 blocking addition)
+
+**Files:**
+- Modify: `pyproject.toml` (`[tool.setuptools] packages`)
+- Modify: `tests/test_cloud_only_package.py` (declared-package assertion; wheel and sdist content checks)
+- Create: `tests/test_wiki_import_boundary.py`
+
+`setup.py`'s `CloudOnlyBuildPy` only drops `bilinc/scheduler.py`, and `MANIFEST.in` prunes neither `src/bilinc/wiki` nor anything it needs, so only `packages` changes.
+
+- [ ] **Step 1: Failing tests**
+
+```python
+# tests/test_cloud_only_package.py
+def test_declared_wheel_packages_stay_cloud_only():
+    ...
+    assert pyproject["tool"]["setuptools"]["packages"] == ["bilinc", "bilinc.cli", "bilinc.wiki"]
+    assert set(pyproject["project"]["dependencies"]) == {"certifi>=2024.2.2", "mcp>=1.10.0,<2.0"}
+
+WIKI_MODULES = sorted(p.name for p in (Path(__file__).resolve().parents[1] / "src/bilinc/wiki").glob("*.py"))
+
+# in test_built_wheel_does_not_ship_local_runtime (still skipped without BILINC_TEST_WHEEL):
+    assert "bilinc/wiki/__init__.py" in names
+    assert {f"bilinc/wiki/{m}" for m in WIKI_MODULES} <= names
+# in test_built_sdist_does_not_ship_local_runtime_sources (still skipped without BILINC_TEST_SDIST):
+    assert {f"{root}bilinc/wiki/{m}" for m in WIKI_MODULES} <= names
+```
+
+```python
+# tests/test_wiki_import_boundary.py
+FORBIDDEN = ("bilinc.cloud", "bilinc.core", "bilinc.storage", "bilinc.eval", "bilinc.observability",
+             "bilinc.integrations", "bilinc.mcp_server", "bilinc.adaptive", "bilinc.retrieval",
+             "bilinc.security", "bilinc.jobs", "bilinc.scheduler", "numpy", "networkx")
+
+def _imports(path):  # ast.walk: Import names and ImportFrom modules (relative resolved against bilinc.wiki)
+
+@pytest.mark.parametrize("path", sorted((SRC / "bilinc/wiki").glob("*.py")), ids=lambda p: p.name)
+def test_wiki_modules_import_only_public_code(path):
+    bad = [m for m in _imports(path) if m == f or m.startswith(f + ".") for f in FORBIDDEN]
+    assert bad == []
+
+def test_wiki_import_pulls_no_heavy_modules():
+    # subprocess: python -c "import sys, bilinc.cli.main, bilinc.wiki; print(sorted(m for m in sys.modules if m.split('.')[0] in {'numpy','networkx'} or m.startswith(FORBIDDEN_DOTTED)))"
+    # assert output == "[]"
+```
+
+- [ ] **Step 2:** Run → the declared-package test FAILS (list mismatch); boundary tests PASS or FAIL depending on code (they must pass once the package exists).
+- [ ] **Step 3:** Add `"bilinc.wiki"` to `packages`.
+- [ ] **Step 4:** Run `tests/test_cloud_only_package.py tests/test_wiki_import_boundary.py` → PASS (built-artifact checks skipped here; they run in S4).
+- [ ] **Step 5: Commit** `"Ship the wiki package in the public wheel and sdist"`.
+
+The new `tests/test_wiki_*.py` files run in CI's `internal_runtime` job (conftest marks every non-public file); they are not added to `PUBLIC_SOURCE_FILES`.
+
 ### Task 14: Integration through the real SDK client and fake transport
 
 **Files:** Test `tests/test_wiki_integration.py` (no source changes expected)
@@ -508,9 +560,24 @@ def test_response_too_large_shrinks_pages(tmp_path):  # page 0 at limit 100 rais
 
 **Files:** Create `scripts/wiki_smoke.py`
 
-Builds a fake client with ~30 synthetic keys (nested, `Team:x`/`team:y` case collision, `index`, `a:_index`, `b:AGENTS`, JSON object and array values, a value with seven backticks, a hostile key, one key whose history always fails), runs `export_wiki` twice into a temp folder (clock differs), adds `notes.md` between runs, and prints: page count, unavailable keys, `identical_except_exported_at: True`, `user_file_survived: True`, `refused_without_marker: True` (third run into a separate non-empty folder), `modes_ok: True` (all dirs 0700, files 0600). Exit 1 if any check is false. No network; no API key.
+Builds a fake client with ~30 synthetic keys (nested, `Team:x`/`team:y` case collision, `index`, `a:_index`, `b:AGENTS`, JSON object and array values, a value with seven backticks, a hostile key, one key whose history always fails), runs `export_wiki` twice into a temp folder (clock differs), adds `notes.md` between runs, and prints: page count, unavailable keys, `identical_except_exported_at: True`, `user_file_survived: True`, `refused_without_marker: True` (third run into a separate non-empty folder), `modes_ok: True` (all dirs 0700, files 0600). Exit 1 if any check is false. No network; no API key. Self-contained: it imports only `bilinc` (no `tests/` helpers), because S4 runs it with `python -I` against the installed wheel; it prints `bilinc.__file__` first.
 
 - [ ] Run `PYTHONPATH=src ~/work/bilinc-dev/.venv-wiki/bin/python scripts/wiki_smoke.py`; paste output into STATE.md; commit `"Add a local wiki export smoke script"`.
+
+### S4 packaging check (G2 blocking addition)
+
+Run from the worktree, recording commands and counts in STATE.md:
+
+```bash
+rm -rf ~/work/bilinc-dev/wiki-dist && ~/work/bilinc-dev/.venv-wiki/bin/python -m build --outdir ~/work/bilinc-dev/wiki-dist
+BILINC_TEST_WHEEL=$(ls ~/work/bilinc-dev/wiki-dist/*.whl) BILINC_TEST_SDIST=$(ls ~/work/bilinc-dev/wiki-dist/*.tar.gz) \
+  PYTHONPATH=src ~/work/bilinc-dev/.venv-wiki/bin/python -m pytest -q -p no:cacheprovider tests/test_cloud_only_package.py -k built
+python3 -m venv ~/work/bilinc-dev/.venv-wiki-wheel && ~/work/bilinc-dev/.venv-wiki-wheel/bin/pip install ~/work/bilinc-dev/wiki-dist/*.whl
+cd /tmp && ~/work/bilinc-dev/.venv-wiki-wheel/bin/bilinc wiki --help
+cd /tmp && ~/work/bilinc-dev/.venv-wiki-wheel/bin/python -I <worktree>/scripts/wiki_smoke.py
+```
+
+The fresh venv has no `.[internal]` extras, and the smoke must import `bilinc` from the installed wheel (checked by printing `bilinc.__file__`).
 
 ### After the plan (not tasks here)
 
