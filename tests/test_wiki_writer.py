@@ -504,3 +504,28 @@ def test_final_chmod_failure_is_a_clean_error(tmp_path, monkeypatch):
 
     with pytest.raises(WikiExportError, match="not permitted"):
         write_tree(tmp_path, FILES, previous=None, manifest_for=manifest_for)
+
+
+def test_case_only_rename_on_a_case_insensitive_folder_is_not_refused(tmp_path):
+    # A hard link stands in for a case-insensitive file system: "foo.md" and the
+    # owned "Foo.md" are the same directory entry.
+    first_run(tmp_path, {**FILES, "Foo.md": "old\n"})
+    os.link(tmp_path / "Foo.md", tmp_path / "foo.md")
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    result = write_tree(tmp_path, {**FILES, "foo.md": "new\n"}, previous=previous, manifest_for=manifest_for)
+
+    assert (tmp_path / "foo.md").read_text() == "new\n"
+    assert "Foo.md" not in result.removed and "Foo.md" not in result.skipped
+    assert read_manifest_json(tmp_path)["files"] == sorted({**FILES, "foo.md": ""})
+
+
+def test_case_twin_that_is_a_different_file_is_still_refused(tmp_path):
+    first_run(tmp_path, {**FILES, "Foo.md": "old\n"})
+    (tmp_path / "foo.md").write_text("the user's own file")
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    with pytest.raises(WikiRefused, match="foo.md"):
+        write_tree(tmp_path, {**FILES, "foo.md": "new\n"}, previous=previous, manifest_for=manifest_for)
+
+    assert (tmp_path / "foo.md").read_text() == "the user's own file"

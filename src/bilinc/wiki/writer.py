@@ -14,6 +14,7 @@ import os
 import shutil
 import stat
 import tempfile
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -123,7 +124,7 @@ def write_tree(
     temp = target / TMP_NAME
     try:
         _build_in_temp(temp, files, wanted, previous_exists=previous is not None)
-        _check_paths(target, wanted, owned)
+        renamed = _check_paths(target, wanted, owned)
     except BaseException as exc:
         _discard_temp(temp)
         if created_target:
@@ -144,7 +145,7 @@ def write_tree(
             os.chmod(source, FILE_MODE)
             os.replace(source, target / rel)
             result.written += 1
-        _remove_stale(target, sorted(owned - set(wanted)), result)
+        _remove_stale(target, sorted(owned - set(wanted) - renamed), result)
         _write_manifest(target, manifest_for(True, wanted))
         _discard_temp(temp)
         os.chmod(target, DIR_MODE)
@@ -174,22 +175,40 @@ def _build_in_temp(temp: Path, files: dict[str, str], wanted: list[str], *, prev
             handle.write(files[rel])
 
 
-def _check_paths(target: Path, wanted: list[str], owned: set[str]) -> None:
-    """Refuse before anything moves if a path this run needs is not ours to write."""
+def _check_paths(target: Path, wanted: list[str], owned: set[str]) -> set[str]:
+    """Refuse before anything moves if a path this run needs is not ours to write.
+
+    Returns the owned paths that are the same directory entry as a needed path
+    under another spelling (a case-only or NFC/NFD rename on a case-insensitive
+    file system). Writing the new path replaces them, so they must not be
+    deleted as stale afterwards.
+    """
 
     folders = sorted({parent.as_posix() for rel in wanted for parent in Path(rel).parents if parent != Path(".")})
     for folder in folders:
         info = _lstat(target / folder)
         if info is not None and not stat.S_ISDIR(info.st_mode):
             raise WikiRefused(f"{target / folder} is in the way: the export needs a real folder there")
+    by_fold: dict[str, list[str]] = {}
+    for rel in owned:
+        by_fold.setdefault(_fold(rel), []).append(rel)
+    renamed: set[str] = set()
     for rel in wanted:
         info = _lstat(target / rel)
         if info is None:
             continue
-        if rel not in owned:
-            raise WikiRefused(f"{target / rel} exists and was not written by this tool; move it away and run again")
         if stat.S_ISDIR(info.st_mode):
             raise WikiRefused(f"{target / rel} is now a folder; move it away and run again")
+        if rel in owned:
+            continue
+        twin = next(
+            (other for other in sorted(by_fold.get(_fold(rel), ())) if _same_entry(target / other, info)),
+            None,
+        )
+        if twin is None:
+            raise WikiRefused(f"{target / rel} exists and was not written by this tool; move it away and run again")
+        renamed.add(twin)
+    return renamed
 
 
 def _ensure_folders(target: Path, rel: str) -> None:
@@ -250,6 +269,15 @@ def _write_manifest(target: Path, manifest: dict[str, Any]) -> None:
 def _discard_temp(temp: Path) -> None:
     if os.path.lexists(temp) and not temp.is_symlink() and temp.is_dir():
         shutil.rmtree(temp, ignore_errors=True)
+
+
+def _fold(rel: str) -> str:
+    return unicodedata.normalize("NFC", rel).casefold()
+
+
+def _same_entry(path: Path, info: os.stat_result) -> bool:
+    other = _lstat(path)
+    return other is not None and os.path.samestat(other, info)
 
 
 def _lstat(path: Path) -> os.stat_result | None:
