@@ -259,6 +259,7 @@ def _lost_connection_errors():
         psycopg.errors.lookup("57P04")("database dropped"),
         psycopg.errors.lookup("57P05")("idle session timeout"),
         psycopg.errors.lookup("25P03")("idle-in-transaction session timeout"),  # an InternalError, not Operational
+        psycopg.errors.lookup("53300")("sorry, too many clients already"),   # common while a server restarts
     ]
 
 
@@ -275,9 +276,12 @@ def test_runtime_errors_maps_a_lost_audit_store_to_503():
         assert caught.value.__cause__ is error
 
 
-@pytest.mark.parametrize("sqlstate", ["55P03", "57014", "40P01", "53100"])
+@pytest.mark.parametrize("sqlstate", ["55P03", "57014", "40P01", "53100", "28P01", "28000"])
 def test_runtime_errors_does_not_call_an_error_in_a_live_session_unavailable(sqlstate):
-    """Lock timeout, statement cancel, deadlock, disk full: the session is fine, so no 503 and today's 500 stays."""
+    """Lock timeout, statement cancel, deadlock, disk full: the session is fine, so no 503 and today's 500 stays.
+
+    A rejected password (28P01, 28000) is a misconfiguration, not an outage, so it stays a 500 as well.
+    """
     psycopg = pytest.importorskip("psycopg")
 
     from bilinc.cloud.service import _runtime_errors
@@ -349,6 +353,23 @@ def test_runtime_errors_logs_the_first_line_of_the_reason(caplog):
         logged = "\n".join(record.getMessage() for record in caplog.records)
         assert "OperationalError" in logged and expected in logged
         assert "DETAIL" not in logged and "y" * 201 not in logged
+
+
+def test_runtime_errors_masks_url_credentials_in_its_warning(caplog):
+    import logging
+
+    psycopg = pytest.importorskip("psycopg")
+    from fastapi import HTTPException
+
+    from bilinc.cloud.service import _runtime_errors
+
+    with caplog.at_level(logging.WARNING, logger="bilinc.cloud.service"):
+        with pytest.raises(HTTPException):
+            with _runtime_errors():
+                raise psycopg.OperationalError('could not connect "postgresql://svc:Sup3rS3cret@db.example:5432/x"')
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "Sup3rS3cret" not in logged
+    assert "postgresql://svc:***@db.example:5432/x" in logged
 
 
 def test_runtime_errors_works_without_psycopg(monkeypatch):

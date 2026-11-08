@@ -438,6 +438,8 @@ async def test_a_reconnect_lands_in_the_trail_schema(trail, schema):
 @needs_postgres
 @pytest.mark.asyncio
 async def test_a_reconnect_into_another_tenant_schema_is_refused(trail, schema, monkeypatch):
+    import psycopg
+
     from bilinc.core import postgres_audit_sync
     from bilinc.core.postgres_audit_sync import SyncPostgresAuditTrail
 
@@ -449,18 +451,27 @@ async def test_a_reconnect_into_another_tenant_schema_is_refused(trail, schema, 
         other_rows = _rows(other_schema, "SELECT COUNT(*) FROM {table}")[0][0]
         trail.log(OpType.CREATE, "p0.key", None, {"n": 1})
         real_setting = postgres_audit_sync.search_path_setting
+        wrong = [True]
         monkeypatch.setattr(
-            postgres_audit_sync, "search_path_setting", lambda name: real_setting(other_schema),
+            postgres_audit_sync, "search_path_setting",
+            lambda name: real_setting(other_schema if wrong[0] else name),
         )
+        now = [1000.0]
+        monkeypatch.setattr(postgres_audit_sync, "_clock", lambda: now[0])
         _terminate_backend(trail.conn.info.backend_pid)
 
         with pytest.raises(RuntimeError, match="tenant_schema_not_active"):
             trail.log(OpType.CREATE, "p0.key", None, {"n": 2})
+        assert trail.conn.closed                    # the wrong-schema session was never kept
+        with pytest.raises(psycopg.OperationalError):
+            trail.get_history("p0.key")             # inside the cooldown that failure started
+        now[0] += 5.1
         with pytest.raises(RuntimeError, match="tenant_schema_not_active"):
-            trail.get_history("p0.key")             # the wrong-schema session was never kept
+            trail.get_history("p0.key")
         assert _rows(other_schema, "SELECT COUNT(*) FROM {table}")[0][0] == other_rows
 
-        monkeypatch.undo()
+        wrong[0] = False
+        now[0] += 5.1
         assert [entry.key for entry in trail.get_history()] == ["p0.key"]
     finally:
         await other.close()
@@ -526,6 +537,7 @@ class _Psycopg:
         import psycopg
 
         self._real = psycopg
+        self.Error = psycopg.Error
         self.OperationalError = psycopg.OperationalError
         self.down = True
         self.error = "connection refused (simulated)"
@@ -636,11 +648,16 @@ async def test_a_reconnect_passes_the_timeout_and_keepalives_to_psycopg(trail, s
     kwargs = fake.kwargs[0]
     assert {name: kwargs.get(name) for name in (
         "connect_timeout", "keepalives", "keepalives_idle", "keepalives_interval", "keepalives_count", "autocommit",
+        "application_name",
     )} == {
         "connect_timeout": 5, "keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10,
-        "keepalives_count": 3, "autocommit": True,
+        "keepalives_count": 3, "autocommit": True, "application_name": "bilinc-audit",
     }
     assert schema in kwargs["options"]
+    with _admin() as admin:                         # what an operator filters pg_stat_activity by
+        assert admin.execute(
+            "SELECT application_name FROM pg_stat_activity WHERE pid = %s", (trail.conn.info.backend_pid,),
+        ).fetchone()[0] == "bilinc-audit"
 
 
 @needs_postgres
@@ -727,3 +744,110 @@ async def test_lost_ack_retry_caches_the_true_head_when_another_writer_appended(
     assert len(landed) == 1 and (entry.id, entry.root_hash) == landed[0]   # A's own row, once
     assert trail.get_root_hash() == appended["b"] == _head(schema)          # the cache holds the true head
     assert trail.verify_integrity()["valid"] is True
+
+
+# ---- closing a lost session for real -----------------------------------------------------------
+
+def _raise_on_close(conn) -> None:
+    def close():
+        raise RuntimeError("close failed")
+
+    conn.close = close
+
+
+@needs_postgres
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_raises", [False, True])
+async def test_closing_a_trail_whose_session_was_lost_releases_the_handle(trail, close_raises):
+    trail.log(OpType.CREATE, "p0.key", None, {"n": 1})
+    _lose_session(trail)
+    lost = trail.conn
+    if close_raises:
+        _raise_on_close(lost)
+
+    await trail.close()
+
+    assert trail.conn is None
+    assert lost.pgconn.pgconn_ptr is None
+
+
+@needs_postgres
+@pytest.mark.asyncio
+async def test_a_reconnect_finishes_the_lost_handle_even_if_close_raises(trail):
+    trail.log(OpType.CREATE, "p0.key", None, {"n": 1})
+    _lose_session(trail)
+    lost = trail.conn
+    _raise_on_close(lost)
+
+    assert [entry.key for entry in trail.get_history("p0.key")] == ["p0.key"]
+
+    assert trail.conn is not lost
+    assert lost.pgconn.pgconn_ptr is None
+
+
+# ---- a reconnect that fails for any reason starts the cooldown ---------------------------------
+
+@needs_postgres
+@pytest.mark.asyncio
+async def test_a_reconnect_refused_for_the_wrong_schema_also_starts_the_cooldown(trail, monkeypatch):
+    import psycopg
+
+    from bilinc.core import postgres_audit_sync
+
+    trail.log(OpType.CREATE, "p0.key", None, {"n": 1})
+    _lose_session(trail)
+    now = [1000.0]
+    monkeypatch.setattr(postgres_audit_sync, "_clock", lambda: now[0])
+    monkeypatch.setattr(postgres_audit_sync, "search_path_setting", lambda name: "public")
+    fake = _Psycopg()
+    fake.down = False
+    monkeypatch.setattr(postgres_audit_sync, "psycopg", fake)
+
+    with pytest.raises(RuntimeError, match="tenant_schema_not_active"):
+        trail.get_history("p0.key")                 # the original error, not a cooldown error
+    assert len(fake.connects) == 1
+
+    now[0] += 4.9
+    with pytest.raises(psycopg.OperationalError):
+        trail.get_history("p0.key")
+    assert len(fake.connects) == 1                  # no connect inside the cooldown
+
+
+# ---- log lines mask credentials by pattern -----------------------------------------------------
+
+def _described(message: str, dsn=None) -> str:
+    psycopg = pytest.importorskip("psycopg")
+    from bilinc.core.postgres_audit_sync import describe_error
+
+    return describe_error(psycopg.OperationalError(message), dsn)
+
+
+def test_a_one_letter_password_does_not_garble_the_log_line():
+    reason = 'connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "u"'
+
+    assert reason in _described(reason, dsn="postgresql://u:a@127.0.0.1:5432/x")
+
+
+@pytest.mark.parametrize(
+    ("message", "secret", "masked"),
+    [
+        ('invalid URI "postgresql://u:p%40ss@h/db"', "p%40ss", 'postgresql://u:***@h/db"'),
+        ('bad URI "postgres://user:pw@host:5432/db?sslmode=require"', "pw@", "postgres://user:***@host:5432/db"),
+        ("invalid connection option: host=h password='x y' port=5432", "x y", "password=*** port=5432"),
+        ("invalid connection option: host=h password=hunter2 port=5432", "hunter2", "password=*** port=5432"),
+        ('invalid URI "postgresql://u@h/db?password=s3cret&sslmode=require"', "s3cret", "password=***&sslmode"),
+    ],
+)
+def test_credentials_are_masked_by_pattern_without_a_dsn(message, secret, masked):
+    described = _described(message)
+
+    assert secret not in described
+    assert masked in described
+
+
+def test_the_whole_dsn_is_still_masked_when_given():
+    dsn = "host=db.internal user=u password=pw dbname=x"
+
+    described = _described(f"could not parse {dsn}", dsn=dsn)
+
+    assert "db.internal" not in described and "pw" not in described

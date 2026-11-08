@@ -5,16 +5,15 @@ import contextlib
 import hashlib
 import json
 import logging
+import re
 import time
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
 
 try:
     import psycopg
-    from psycopg.conninfo import conninfo_to_dict
     from psycopg.rows import dict_row
 except ImportError:
     psycopg = None
-    conninfo_to_dict = None
     dict_row = None
 
 from bilinc.core import postgres_chain_lock
@@ -32,6 +31,8 @@ _CONNECT_KWARGS = {
     "keepalives_idle": 30,
     "keepalives_interval": 10,
     "keepalives_count": 3,
+    # Lets an operator find (or terminate) exactly the audit sessions in pg_stat_activity.
+    "application_name": "bilinc-audit",
 }
 
 #: After a failed reconnect, every trail on that DSN fails fast for this long instead of blocking the
@@ -41,8 +42,15 @@ _failed_reconnects: Dict[str, float] = {}   # dsn -> _clock() of its last failed
 _clock = time.monotonic
 
 #: Server-side SQLSTATEs that end or refuse a session: admin shutdown, crash shutdown, cannot connect now,
-#: database dropped, idle session timeout, idle-in-transaction session timeout (an InternalError).
-_SESSION_ENDING_SQLSTATES = frozenset({"57P01", "57P02", "57P03", "57P04", "57P05", "25P03"})
+#: database dropped, idle session timeout, idle-in-transaction session timeout (an InternalError), and
+#: too many connections (common while a server restarts). A rejected password (28xxx) is a
+#: misconfiguration, not an outage, and is deliberately not here.
+_LOST_CONNECTION_SQLSTATES = frozenset({"57P01", "57P02", "57P03", "57P04", "57P05", "25P03", "53300"})
+
+#: ``scheme://user:password@`` (the password is everything up to the last ``@`` of the token).
+_URL_CREDENTIALS = re.compile(r"(?P<head>\b[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@\"']*):[^\s\"']*@")
+#: ``password=value`` in a key/value DSN or a URI query, quoted or not.
+_PASSWORD_PARAM = re.compile(r"(?i)(?P<head>\bpassword\s*=\s*)(?:'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|[^\s'\"&]+)")
 
 
 def is_connection_failure(exc: BaseException) -> bool:
@@ -56,25 +64,34 @@ def is_connection_failure(exc: BaseException) -> bool:
     sqlstate = exc.sqlstate
     if sqlstate is None:
         return isinstance(exc, psycopg.OperationalError)
-    return sqlstate.startswith("08") or sqlstate in _SESSION_ENDING_SQLSTATES
+    return sqlstate.startswith("08") or sqlstate in _LOST_CONNECTION_SQLSTATES
+
+
+def _release(conn) -> None:
+    """Close ``conn`` and free its libpq handle, best effort.
+
+    psycopg's ``close()`` returns early for a connection that is already BAD (lost), so the handle is
+    finished directly too; each step on its own, so a failing ``close()`` cannot skip ``finish()``.
+    """
+    with contextlib.suppress(Exception):
+        conn.close()
+    with contextlib.suppress(Exception):
+        conn.pgconn.finish()
 
 
 def describe_error(exc: BaseException, dsn: Optional[str] = None) -> str:
     """Type, SQLSTATE and the first line of the message (at most 200 characters) for a log line.
 
-    libpq connect errors name the host, port, user and reason, never the password; should one ever echo
-    ``dsn``, the DSN and its password are masked before the line is cut.
+    libpq connect errors name the host, port, user and reason, never the password. Should a message
+    ever carry credentials, they are masked by pattern (``scheme://user:***@``, ``password=***``), and
+    ``dsn`` itself is masked whole, before the line is cut.
     """
     lines = str(exc).strip().splitlines()
     line = lines[0] if lines else ""
     if dsn:
-        password = None
-        if conninfo_to_dict is not None:
-            with contextlib.suppress(Exception):   # best effort: an unparsable DSN is still masked whole
-                password = conninfo_to_dict(dsn).get("password")
-        for secret in (dsn, password):
-            if secret:
-                line = line.replace(secret, "***")
+        line = line.replace(dsn, "***")
+    line = _URL_CREDENTIALS.sub(r"\g<head>:***@", line)
+    line = _PASSWORD_PARAM.sub(r"\g<head>***", line)
     return f"{type(exc).__name__} (sqlstate {getattr(exc, 'sqlstate', None)}): {line[:200]}"
 
 
@@ -82,8 +99,9 @@ class SyncPostgresAuditTrail:
     """Keep StatePlane's synchronous audit API over PostgreSQL.
 
     The trail holds one session. When the server ends it (a restart or failover), the call opens a new
-    one and retries once; a second failure raises. A call opens at most one session, and after a failed
-    reconnect the DSN cools down (``RECONNECT_COOLDOWN_SECONDS``). A live session that fails (a lock or
+    one and retries once; a second failure raises. Each ``_run`` opens at most one session (a public call
+    may be several: ``purge_key`` runs three), and after a failed reconnect the DSN cools down
+    (``RECONNECT_COOLDOWN_SECONDS``). A live session that fails (a lock or
     statement timeout) is not retried.
     """
 
@@ -160,7 +178,7 @@ class SyncPostgresAuditTrail:
             raise psycopg.OperationalError("audit store reconnect is cooling down after a failed attempt")
         try:
             conn = self._connect()
-        except psycopg.OperationalError as exc:
+        except Exception as exc:   # refused, timed out, or the wrong schema: all start the cooldown
             _failed_reconnects[self.dsn] = _clock()
             logger.warning("Audit trail reconnect failed: %s", describe_error(exc, self.dsn))
             raise
@@ -169,11 +187,7 @@ class SyncPostgresAuditTrail:
         # call tries again instead of reading as "not initialized".
         lost, self.conn = self.conn, conn
         if lost is not None:
-            # psycopg's close() returns early for a connection that is already BAD, so finish the
-            # libpq handle directly instead of waiting for garbage collection. Best effort.
-            with contextlib.suppress(Exception):
-                lost.close()
-                lost.pgconn.finish()
+            _release(lost)
         return conn
 
     def _run(self, operation: Callable[[Any], _T], retry: Optional[Callable[[Any], _T]] = None) -> _T:
@@ -380,5 +394,5 @@ class SyncPostgresAuditTrail:
 
     async def close(self) -> None:
         if self.conn is not None:
-            self.conn.close()
-            self.conn = None
+            conn, self.conn = self.conn, None
+            _release(conn)
