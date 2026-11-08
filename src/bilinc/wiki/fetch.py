@@ -10,6 +10,7 @@ requests finish never reaches the output.
 from __future__ import annotations
 
 import dataclasses
+import http.client
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -38,6 +39,9 @@ MAX_RETRIES = 3
 RETRY_AFTER_CAP = 60.0
 #: Waits before retries 1, 2 and 3 when the error carried no ``Retry-After``.
 BACKOFF = (1.0, 2.0, 4.0)
+#: Failures the SDK's default transport lets through unwrapped (a timeout or a
+#: dropped connection while reading the response). Retried like a connection error.
+RAW_NETWORK_ERRORS = (OSError, http.client.HTTPException)
 #: Most history requests in flight at once.
 MAX_WORKERS = 4
 
@@ -141,6 +145,10 @@ def fetch_histories(
                 else:
                     delay = BACKOFF[attempt]
                 wait(delay)
+            except RAW_NETWORK_ERRORS:
+                if attempt == MAX_RETRIES:
+                    return HISTORY_UNAVAILABLE
+                wait(BACKOFF[attempt])
             else:
                 return result if isinstance(result, dict) else HISTORY_UNAVAILABLE
         raise AssertionError("unreachable")  # pragma: no cover

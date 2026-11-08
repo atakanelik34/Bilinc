@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import http.client
 import json
 import os
 import shlex
@@ -211,6 +212,13 @@ def _run_wiki(client: CloudClient, args: argparse.Namespace) -> int:
         if counted:
             print(file=sys.stderr)
         print(f"bilinc: error: {exc}", file=sys.stderr)
+        return 1
+    except (OSError, http.client.HTTPException) as exc:
+        # The SDK's transport lets a timeout or dropped connection while reading
+        # a response through unwrapped; nothing was written at that point.
+        if counted:
+            print(file=sys.stderr)
+        print(f"bilinc: error: Bilinc Cloud request failed: {exc}", file=sys.stderr)
         return 1
     if counted:
         print(file=sys.stderr)

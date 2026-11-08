@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import time
 
@@ -126,3 +127,22 @@ def test_response_too_large_shrinks_the_list_pages(tmp_path):
 
     assert result.pages == 30
     assert {body["limit"] for body in inner.list_bodies()} == {10}
+
+
+@pytest.mark.parametrize(
+    "raw_error",
+    [TimeoutError("timed out"), ConnectionResetError(104, "reset"), http.client.RemoteDisconnected("closed")],
+    ids=["timeout", "reset", "remote-disconnected"],
+)
+def test_raw_network_errors_on_history_mark_the_key_unavailable(tmp_path, raw_error):
+    items = entries(4)
+    key = items[1]["key"]
+    transport = RoutedTransport(paged(items), {key: [raw_error]})
+    sleeps = []
+
+    result = export(tmp_path, transport, sleeps)
+
+    assert result.history_unavailable == [key]
+    assert transport.history_calls(key) == 4
+    assert sleeps == [1.0, 2.0, 4.0]
+    assert "History unavailable." in (tmp_path / "bulk" / "item001.md").read_text()

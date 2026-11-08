@@ -136,3 +136,14 @@ def test_existing_commands_are_unchanged():
     subparsers = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
 
     assert set(subparsers.choices) == EXISTING_COMMANDS | {"wiki"}
+
+
+def test_wiki_raw_network_error_on_list_is_a_clean_error(cli, tmp_path, capsys):
+    transport = transport_for()
+    transport.list_pages[0] = TimeoutError("The read operation timed out")
+    cli.state["transport"] = transport
+
+    assert cli.main(["wiki", str(tmp_path / "wiki")]) == 1
+
+    err = capsys.readouterr().err
+    assert "bilinc: error:" in err and "timed out" in err and "Traceback" not in err
