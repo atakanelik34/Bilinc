@@ -1,0 +1,463 @@
+"""The wiki writer: target guard, atomic build, owned-files-only updates, permissions."""
+
+from __future__ import annotations
+
+import json
+import os
+import stat
+from pathlib import Path
+
+import pytest
+
+from bilinc.wiki import writer
+from bilinc.wiki.manifest import MANIFEST_NAME, TMP_NAME, build_manifest, dumps_manifest
+from bilinc.wiki.writer import (
+    WikiExportError,
+    WikiRefused,
+    inspect_target,
+    write_tree,
+)
+
+BASE_URL = "https://bilinc.space"
+
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX permissions and symlinks")
+
+
+def manifest_for(complete, files):
+    return build_manifest(
+        version="2.7.0",
+        base_url=BASE_URL,
+        prefix=None,
+        history=5,
+        exported_at="2026-11-09T00:00:00Z",
+        complete=complete,
+        files=files,
+        keys={},
+    )
+
+
+def read_manifest_json(target: Path) -> dict:
+    return json.loads((target / MANIFEST_NAME).read_text(encoding="utf-8"))
+
+
+def tree(root: Path) -> dict[str, tuple[bytes | None, int]]:
+    """Every entry under root (symlinks not followed): content for files, mode bits."""
+    out: dict[str, tuple[bytes | None, int]] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in dirnames + filenames:
+            path = Path(dirpath) / name
+            info = path.lstat()
+            rel = path.relative_to(root).as_posix()
+            if stat.S_ISREG(info.st_mode):
+                out[rel] = (path.read_bytes(), stat.S_IMODE(info.st_mode))
+            elif stat.S_ISLNK(info.st_mode):
+                out[rel] = (os.readlink(path).encode(), -1)
+            else:
+                out[rel] = (None, stat.S_IMODE(info.st_mode))
+    return out
+
+
+FILES = {
+    "AGENTS.md": "agents\n",
+    "index.md": "index\n",
+    "a/_index.md": "a index\n",
+    "a/b.md": "page b\n",
+    "c.md": "page c\n",
+}
+
+
+def first_run(target: Path, files=FILES) -> None:
+    write_tree(target, files, previous=None, manifest_for=manifest_for)
+
+
+# --- inspect_target --------------------------------------------------------------
+
+
+def test_missing_dir_is_fine_when_parent_exists(tmp_path):
+    assert inspect_target(tmp_path / "new", base_url=BASE_URL, prefix=None) is None
+
+
+def test_missing_parent_is_refused(tmp_path):
+    with pytest.raises(WikiRefused, match="does not exist"):
+        inspect_target(tmp_path / "no" / "such" / "new", base_url=BASE_URL, prefix=None)
+
+
+def test_empty_dir_is_fine(tmp_path):
+    assert inspect_target(tmp_path, base_url=BASE_URL, prefix=None) is None
+
+
+def test_obsidian_only_dir_counts_as_empty(tmp_path):
+    (tmp_path / ".obsidian").mkdir()
+    (tmp_path / ".obsidian" / "app.json").write_text("{}")
+    (tmp_path / ".trash").mkdir()
+    (tmp_path / ".DS_Store").write_bytes(b"\0")
+
+    assert inspect_target(tmp_path, base_url=BASE_URL, prefix=None) is None
+
+
+def test_non_empty_without_marker_is_refused(tmp_path):
+    (tmp_path / "notes.md").write_text("mine")
+
+    with pytest.raises(WikiRefused, match="not a Bilinc wiki folder"):
+        inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+
+def test_stale_tmp_without_marker_is_refused_and_named(tmp_path):
+    (tmp_path / TMP_NAME).mkdir()
+
+    with pytest.raises(WikiRefused, match=r"\.bilinc-wiki\.tmp"):
+        inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+
+def test_target_symlink_is_refused(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+
+    with pytest.raises(WikiRefused, match="symbolic link"):
+        inspect_target(link, base_url=BASE_URL, prefix=None)
+
+
+def test_target_that_is_a_file_is_refused(tmp_path):
+    target = tmp_path / "file"
+    target.write_text("x")
+
+    with pytest.raises(WikiRefused, match="not a folder"):
+        inspect_target(target, base_url=BASE_URL, prefix=None)
+
+
+def test_valid_manifest_is_returned(tmp_path):
+    first_run(tmp_path)
+
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    assert previous is not None and previous["files"] == sorted(FILES)
+
+
+@pytest.mark.parametrize(
+    "base_url,prefix,named",
+    [("https://other.example", None, "https://other.example"), (BASE_URL, "team:", "team:")],
+)
+def test_prefix_or_base_url_change_is_refused(tmp_path, base_url, prefix, named):
+    first_run(tmp_path)
+
+    with pytest.raises(WikiRefused) as caught:
+        inspect_target(tmp_path, base_url=base_url, prefix=prefix)
+
+    assert named in str(caught.value)
+
+
+def test_corrupt_manifest_is_refused(tmp_path):
+    (tmp_path / MANIFEST_NAME).write_text("{")
+
+    with pytest.raises(WikiRefused):
+        inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+
+# --- write_tree ------------------------------------------------------------------
+
+
+def test_first_write_creates_files_manifest_and_permissions(tmp_path):
+    target = tmp_path / "wiki"
+
+    result = write_tree(target, FILES, previous=None, manifest_for=manifest_for)
+
+    assert result.written == len(FILES)
+    for rel, text in FILES.items():
+        path = target / rel
+        assert path.read_text(encoding="utf-8") == text
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(target.stat().st_mode) == 0o700
+    assert stat.S_IMODE((target / "a").stat().st_mode) == 0o700
+    manifest = read_manifest_json(target)
+    assert manifest["complete"] is True and manifest["files"] == sorted(FILES)
+    assert stat.S_IMODE((target / MANIFEST_NAME).stat().st_mode) == 0o600
+    assert not (target / TMP_NAME).exists()
+
+
+def test_rewrite_removes_stale_files_and_keeps_user_files(tmp_path):
+    first_run(tmp_path)
+    (tmp_path / "notes.md").write_text("mine")
+    (tmp_path / "a" / "mine.md").write_text("also mine")
+    (tmp_path / ".obsidian").mkdir()
+    (tmp_path / ".obsidian" / "app.json").write_text("{}")
+    user_before = {rel: v for rel, v in tree(tmp_path).items() if rel in {"notes.md", "a/mine.md", ".obsidian/app.json"}}
+    new_files = {"AGENTS.md": "agents 2\n", "index.md": "index 2\n", "d/e.md": "page e\n", "d/_index.md": "d\n"}
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    result = write_tree(tmp_path, new_files, previous=previous, manifest_for=manifest_for)
+
+    assert sorted(result.removed) == ["a/_index.md", "a/b.md", "c.md"]
+    after = tree(tmp_path)
+    for rel, value in user_before.items():
+        assert after[rel] == value
+    assert not (tmp_path / "c.md").exists()
+    assert (tmp_path / "a").is_dir()  # still holds the user's file
+    assert (tmp_path / "d" / "e.md").read_text() == "page e\n"
+    assert read_manifest_json(tmp_path)["files"] == sorted(new_files)
+
+
+def test_emptied_folders_are_removed(tmp_path):
+    first_run(tmp_path)
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    write_tree(tmp_path, {"index.md": "i\n", "AGENTS.md": "a\n"}, previous=previous, manifest_for=manifest_for)
+
+    assert not (tmp_path / "a").exists()
+
+
+def test_world_readable_files_are_tightened(tmp_path):
+    first_run(tmp_path)
+    os.chmod(tmp_path / "c.md", 0o644)
+    os.chmod(tmp_path / "a", 0o755)
+    os.chmod(tmp_path, 0o755)
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    write_tree(tmp_path, FILES, previous=previous, manifest_for=manifest_for)
+
+    assert stat.S_IMODE((tmp_path / "c.md").stat().st_mode) == 0o600
+    assert stat.S_IMODE((tmp_path / "a").stat().st_mode) == 0o700
+    assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
+
+
+@pytest.mark.parametrize("kind", ["file", "dir", "symlink"])
+def test_user_entry_at_a_needed_path_is_refused_before_moving(tmp_path, kind):
+    first_run(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.write_text("outside")
+    needed = tmp_path / "new.md"
+    if kind == "file":
+        needed.write_text("mine")
+    elif kind == "dir":
+        needed.mkdir()
+    else:
+        needed.symlink_to(outside)
+    before = tree(tmp_path)
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    with pytest.raises(WikiRefused, match="new.md"):
+        write_tree(tmp_path, {**FILES, "new.md": "page\n"}, previous=previous, manifest_for=manifest_for)
+
+    assert tree(tmp_path) == before
+    assert outside.read_text() == "outside"
+
+
+def test_owned_page_that_became_a_directory_is_refused(tmp_path):
+    first_run(tmp_path)
+    (tmp_path / "c.md").unlink()
+    (tmp_path / "c.md").mkdir()
+    before = tree(tmp_path)
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    with pytest.raises(WikiRefused, match="c.md"):
+        write_tree(tmp_path, FILES, previous=previous, manifest_for=manifest_for)
+
+    assert tree(tmp_path) == before
+
+
+@pytest.mark.parametrize("kind", ["symlink", "file"])
+def test_needed_folder_that_is_not_a_real_folder_is_refused(tmp_path, kind):
+    first_run(tmp_path)
+    elsewhere = tmp_path.parent / f"{tmp_path.name}-elsewhere"
+    elsewhere.mkdir()
+    for rel in ("a/b.md", "a/_index.md"):
+        (tmp_path / rel).unlink()
+    (tmp_path / "a").rmdir()
+    if kind == "symlink":
+        (tmp_path / "a").symlink_to(elsewhere)
+    else:
+        (tmp_path / "a").write_text("mine")
+    before = tree(tmp_path)
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    with pytest.raises(WikiRefused, match="a"):
+        write_tree(tmp_path, FILES, previous=previous, manifest_for=manifest_for)
+
+    assert tree(tmp_path) == before
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_owned_page_replaced_by_a_symlink_is_replaced_not_followed(tmp_path):
+    first_run(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.md"
+    outside.write_text("outside")
+    (tmp_path / "c.md").unlink()
+    (tmp_path / "c.md").symlink_to(outside)
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    write_tree(tmp_path, FILES, previous=previous, manifest_for=manifest_for)
+
+    assert outside.read_text() == "outside"
+    assert not (tmp_path / "c.md").is_symlink()
+    assert (tmp_path / "c.md").read_text() == "page c\n"
+
+
+def test_stale_delete_never_follows_a_symlinked_parent(tmp_path):
+    first_run(tmp_path)
+    elsewhere = tmp_path.parent / f"{tmp_path.name}-elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "b.md").write_text("not ours")
+    for rel in ("a/b.md", "a/_index.md"):
+        (tmp_path / rel).unlink()
+    (tmp_path / "a").rmdir()
+    (tmp_path / "a").symlink_to(elsewhere)
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+    new_files = {rel: text for rel, text in FILES.items() if not rel.startswith("a/")}
+
+    result = write_tree(tmp_path, new_files, previous=previous, manifest_for=manifest_for)
+
+    assert (elsewhere / "b.md").read_text() == "not ours"
+    assert sorted(result.skipped) == ["a/_index.md", "a/b.md"]
+    assert (tmp_path / "a").is_symlink()
+
+
+def test_stale_owned_entry_that_became_a_directory_is_skipped(tmp_path):
+    first_run(tmp_path)
+    (tmp_path / "c.md").unlink()
+    (tmp_path / "c.md").mkdir()
+    (tmp_path / "c.md" / "keep").write_text("mine")
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+    new_files = {rel: text for rel, text in FILES.items() if rel != "c.md"}
+
+    result = write_tree(tmp_path, new_files, previous=previous, manifest_for=manifest_for)
+
+    assert result.skipped == ["c.md"]
+    assert (tmp_path / "c.md" / "keep").read_text() == "mine"
+
+
+def test_tmp_symlink_is_refused(tmp_path):
+    first_run(tmp_path)
+    elsewhere = tmp_path.parent / f"{tmp_path.name}-elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep").write_text("keep")
+    (tmp_path / TMP_NAME).symlink_to(elsewhere)
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    with pytest.raises(WikiRefused, match=r"\.bilinc-wiki\.tmp"):
+        write_tree(tmp_path, FILES, previous=previous, manifest_for=manifest_for)
+
+    assert (elsewhere / "keep").read_text() == "keep"
+
+
+def test_stale_tmp_from_a_crashed_run_is_replaced(tmp_path):
+    first_run(tmp_path)
+    (tmp_path / TMP_NAME).mkdir()
+    (tmp_path / TMP_NAME / "junk.md").write_text("junk")
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    write_tree(tmp_path, FILES, previous=previous, manifest_for=manifest_for)
+
+    assert not (tmp_path / TMP_NAME).exists()
+
+
+def test_build_error_leaves_the_previous_wiki_intact(tmp_path, monkeypatch):
+    first_run(tmp_path)
+    before = tree(tmp_path)
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+    real_open = os.open
+    calls = {"n": 0}
+
+    def failing_open(path, flags, mode=0o777, *args, **kwargs):
+        if TMP_NAME in str(path) and flags & os.O_CREAT:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError(28, "No space left on device")
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(writer.os, "open", failing_open)
+
+    with pytest.raises(WikiExportError, match="No space left"):
+        write_tree(tmp_path, {**FILES, "c.md": "changed\n"}, previous=previous, manifest_for=manifest_for)
+
+    assert tree(tmp_path) == before
+
+
+def test_build_error_on_a_first_run_leaves_no_folder(tmp_path, monkeypatch):
+    target = tmp_path / "wiki"
+    real_open = os.open
+
+    def failing_open(path, flags, mode=0o777, *args, **kwargs):
+        if TMP_NAME in str(path) and flags & os.O_CREAT:
+            raise OSError(13, "Permission denied")
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(writer.os, "open", failing_open)
+
+    with pytest.raises(WikiExportError):
+        write_tree(target, FILES, previous=None, manifest_for=manifest_for)
+
+    assert not target.exists()
+
+
+def test_crash_mid_move_then_rerun_recovers(tmp_path, monkeypatch):
+    first_run(tmp_path)
+    (tmp_path / "notes.md").write_text("mine")
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+    new_files = {"AGENTS.md": "a2\n", "index.md": "i2\n", "x/_index.md": "x\n", "x/y.md": "y\n", "z.md": "z\n"}
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def failing_replace(src, dst, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise OSError(5, "Input/output error")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(writer.os, "replace", failing_replace)
+
+    with pytest.raises(WikiExportError):
+        write_tree(tmp_path, new_files, previous=previous, manifest_for=manifest_for)
+
+    manifest = read_manifest_json(tmp_path)
+    assert manifest["complete"] is False
+    on_disk = {
+        rel
+        for rel, (content, mode) in tree(tmp_path).items()
+        if content is not None and not rel.startswith(".") and rel != "notes.md"
+    }
+    assert on_disk <= set(manifest["files"])
+    assert (tmp_path / "notes.md").read_text() == "mine"
+
+    monkeypatch.setattr(writer.os, "replace", real_replace)
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+    write_tree(tmp_path, new_files, previous=previous, manifest_for=manifest_for)
+
+    manifest = read_manifest_json(tmp_path)
+    assert manifest["complete"] is True
+    files_now = {
+        rel for rel, (content, mode) in tree(tmp_path).items() if content is not None and not rel.startswith(".")
+    }
+    assert files_now == set(new_files) | {"notes.md"}
+
+
+def test_manifest_written_last(tmp_path, monkeypatch):
+    first_run(tmp_path)
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+    order = []
+    real_replace = os.replace
+
+    def recording_replace(src, dst, *args, **kwargs):
+        order.append(Path(dst).name)
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(writer.os, "replace", recording_replace)
+
+    write_tree(tmp_path, FILES, previous=previous, manifest_for=manifest_for)
+
+    assert order[0] == MANIFEST_NAME and order[-1] == MANIFEST_NAME
+    assert order.count(MANIFEST_NAME) == 2
+
+
+def test_rejects_unsafe_file_paths(tmp_path):
+    with pytest.raises(ValueError):
+        write_tree(tmp_path, {"../escape.md": "x"}, previous=None, manifest_for=manifest_for)
+    assert not (tmp_path.parent / "escape.md").exists()
+
+
+def test_dumps_manifest_round_trip_is_what_is_written(tmp_path):
+    first_run(tmp_path)
+
+    text = (tmp_path / MANIFEST_NAME).read_text(encoding="utf-8")
+
+    assert text == dumps_manifest(manifest_for(True, sorted(FILES)))
