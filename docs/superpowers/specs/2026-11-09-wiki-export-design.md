@@ -294,8 +294,10 @@ refusal, not a partial run.
    first, with `os.rmdir` (which never removes a non-empty folder).
 10. Write the final manifest (`complete: true`) via temp file + `os.replace`.
 11. Remove the temp folder. Tighten `<dir>` to 0700.
-12. Print a summary to stderr: pages written, files removed, keys with
-    history unavailable. Exit 0 (with a warning line when any history failed).
+12. Print a one-line summary to stdout (pages written, files removed); name
+    keys with history unavailable and skipped deletes on stderr. Exit 0 (with
+    a warning line when any history failed). Progress, when stderr is a TTY,
+    also goes to stderr, so stdout stays pipe-friendly.
 
 Files not in the previous manifest are never written, moved over or deleted;
 an entry sitting exactly at a path the export now needs is a conflict and the
