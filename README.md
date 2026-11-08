@@ -163,11 +163,9 @@ All endpoints live under `https://bilinc.space`. Memory operations need an API k
 
 Send an `Idempotency-Key` header on any write you might retry: the same key with the same payload replays the original result and is billed once; a different payload is refused with `409 idempotency_conflict`. Saves that contain a credential, such as an API key, token or private key, are refused with `secret_detected` and the value is never echoed back.
 
-## What's new in 2.6.2
+## What's new in 2.6.3
 
-- **"What changed today?"**: recall answers time questions in English and Turkish ("since Monday", "dünkü kararlar", "son 3 günde") with the memories written in that window, newest first, in the project's time zone.
-- **Less noise in time questions**: sources such as raw chat transcripts can be left out of time answers unless you ask for chats.
-- **Nothing else moves**: queries without a time phrase are answered exactly as before.
+- **Hosted service**: after the database restarts or drops a connection, history, diff against the current state, saves, edits, confirms, forgets and new checkpoints work again on the first call; before, they failed until the service was restarted. If the database stays down they fail fast with a temporary-unavailable error. The SDK and CLI are unchanged.
 
 Every release: [changelog](https://bilinc.space/changelog).
 
