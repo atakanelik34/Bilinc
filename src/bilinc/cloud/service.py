@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import hmac
+import logging
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -12,7 +13,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from bilinc.cloud.runtime import ProjectRuntimeManager
+from bilinc.core.postgres_audit_sync import describe_error, is_connection_failure
 
+logger = logging.getLogger(__name__)
 
 #: One canonical maximum shared with the public route and the SDK. The sidecar
 #: previously capped recall at 50 while the public route accepted 100, so valid
@@ -158,6 +161,7 @@ _PUBLIC_RUNTIME_ERRORS = frozenset(
         "purge_disabled",
         "purge_unsupported",
         "purge_blocked",
+        "audit_store_unavailable",
     }
 )
 
@@ -172,6 +176,7 @@ _ERROR_STATUS = {
     "purge_disabled": 403,
     "purge_unsupported": 501,
     "purge_blocked": 409,
+    "audit_store_unavailable": 503,
 }
 
 
@@ -185,7 +190,7 @@ def _snapshot_body(snapshot) -> dict:
 
 @contextmanager
 def _runtime_errors():
-    """Translate runtime ``ValueError`` codes into stable sidecar responses."""
+    """Translate runtime ``ValueError`` codes, and a lost audit store, into stable sidecar responses."""
     try:
         yield
     except HTTPException:
@@ -195,6 +200,13 @@ def _runtime_errors():
         if code not in _PUBLIC_RUNTIME_ERRORS:
             code = "invalid_request"
         raise HTTPException(status_code=_ERROR_STATUS.get(code, 400), detail=code) from exc
+    except Exception as exc:
+        # Only a lost or refused connection; any other error (a lock timeout too) escapes as before.
+        if not is_connection_failure(exc):
+            raise
+        logger.warning("Audit store connection failed: %s", describe_error(exc))
+        code = "audit_store_unavailable"
+        raise HTTPException(status_code=_ERROR_STATUS[code], detail=code) from exc
 
 
 def create_app(
