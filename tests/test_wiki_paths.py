@@ -270,3 +270,10 @@ def test_very_deep_key_does_not_recurse() -> None:
 
 def test_empty_input() -> None:
     assert build_paths([]) == {}
+
+
+def test_lone_surrogates_are_escaped_not_crashing():
+    assert escape_segment("a\ud800b") == "a%ED%A0%80b"
+    assert len(key_hash("\udfff")) == 6
+    path = build_paths(["x:\ud800"])["x:\ud800"]
+    path.encode("utf-8")  # a writable file name

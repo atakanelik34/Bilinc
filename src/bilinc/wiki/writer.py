@@ -163,7 +163,8 @@ def _build_in_temp(temp: Path, files: dict[str, str], wanted: list[str], *, prev
                 os.mkdir(folder, DIR_MODE)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(path, flags, FILE_MODE)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        # errors="replace": a lone surrogate (valid in JSON, not in UTF-8) becomes "?".
+        with os.fdopen(fd, "w", encoding="utf-8", errors="replace", newline="\n") as handle:
             handle.write(files[rel])
 
 
@@ -230,7 +231,7 @@ def _remove_stale(target: Path, stale: list[str], result: WriteResult) -> None:
 def _write_manifest(target: Path, manifest: dict[str, Any]) -> None:
     fd, temporary = tempfile.mkstemp(prefix=".bilinc-wiki-manifest-", suffix=".json", dir=target)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="replace", newline="\n") as handle:
             handle.write(dumps_manifest(manifest))
         os.chmod(temporary, FILE_MODE)
         os.replace(temporary, target / MANIFEST_NAME)

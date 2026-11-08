@@ -461,3 +461,9 @@ def test_dumps_manifest_round_trip_is_what_is_written(tmp_path):
     text = (tmp_path / MANIFEST_NAME).read_text(encoding="utf-8")
 
     assert text == dumps_manifest(manifest_for(True, sorted(FILES)))
+
+
+def test_lone_surrogates_in_content_do_not_stop_the_write(tmp_path):
+    write_tree(tmp_path, {"index.md": "bad \ud800 text\n"}, previous=None, manifest_for=manifest_for)
+
+    assert (tmp_path / "index.md").read_bytes() == b"bad ? text\n"

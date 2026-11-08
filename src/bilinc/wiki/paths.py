@@ -37,17 +37,18 @@ _TRAILING_SPACES_DOTS = re.compile(r"[ .]+\Z")
 
 def key_hash(text: str) -> str:
     """Return the first 6 hex characters of the sha256 of ``text`` (UTF-8)."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:6]
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:6]
 
 
 def _percent(char: str) -> str:
     """Return ``char`` as ``%XX`` escapes of its UTF-8 bytes (uppercase hex)."""
-    return "".join(f"%{byte:02X}" for byte in char.encode("utf-8"))
+    return "".join(f"%{byte:02X}" for byte in char.encode("utf-8", "surrogatepass"))
 
 
 def _needs_escape(char: str) -> bool:
     code = ord(char)
-    return char in _UNSAFE_CHARS or code < 0x20 or code == 0x7F
+    # A lone surrogate (possible in JSON) cannot be written as a file name.
+    return char in _UNSAFE_CHARS or code < 0x20 or code == 0x7F or 0xD800 <= code <= 0xDFFF
 
 
 def escape_segment(segment: str) -> str:
