@@ -11,9 +11,11 @@ from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
 
 try:
     import psycopg
+    from psycopg.conninfo import conninfo_to_dict
     from psycopg.rows import dict_row
 except ImportError:
     psycopg = None
+    conninfo_to_dict = None
     dict_row = None
 
 from bilinc.core import postgres_chain_lock
@@ -31,9 +33,11 @@ _CONNECT_KWARGS = {
     "keepalives_idle": 30,
     "keepalives_interval": 10,
     "keepalives_count": 3,
-    # Lets an operator find (or terminate) exactly the audit sessions in pg_stat_activity.
-    "application_name": "bilinc-audit",
 }
+
+#: Lets an operator find (or terminate) exactly the audit sessions in pg_stat_activity; a name the DSN
+#: already sets wins.
+APPLICATION_NAME = "bilinc-audit"
 
 #: After a failed reconnect, every trail on that DSN fails fast for this long instead of blocking the
 #: event loop on another connect.
@@ -47,10 +51,17 @@ _clock = time.monotonic
 #: misconfiguration, not an outage, and is deliberately not here.
 _LOST_CONNECTION_SQLSTATES = frozenset({"57P01", "57P02", "57P03", "57P04", "57P05", "25P03", "53300"})
 
-#: ``scheme://user:password@`` (the password is everything up to the last ``@`` of the token).
-_URL_CREDENTIALS = re.compile(r"(?P<head>\b[A-Za-z][A-Za-z0-9+.-]*://[^\s:/@\"']*):[^\s\"']*@")
-#: ``password=value`` in a key/value DSN or a URI query, quoted or not.
-_PASSWORD_PARAM = re.compile(r"(?i)(?P<head>\bpassword\s*=\s*)(?:'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|[^\s'\"&]+)")
+#: ``scheme://user:password@host``: only in the authority, so neither part holds ``/`` or whitespace (the
+#: password may hold quotes, and runs to the last ``@`` before the host).
+_URL_CREDENTIALS = re.compile(r"(?P<head>\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]*):[^\s/]*@")
+#: ``<anything>password=value`` (``password``, ``sslpassword``, ``PGPASSWORD``), quoted, or unquoted with
+#: backslash escapes.
+_PASSWORD_PARAM = re.compile(
+    r"(?i)(?P<head>[A-Za-z0-9_]*password\s*=\s*)"
+    r"(?:'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|(?:\\.|[^\s'\"&\\])+)"
+)
+#: A parsed password shorter than this is not masked where it appears raw: it would garble the line.
+_MIN_MASKED_PASSWORD = 6
 
 
 def is_connection_failure(exc: BaseException) -> bool:
@@ -65,6 +76,25 @@ def is_connection_failure(exc: BaseException) -> bool:
     if sqlstate is None:
         return isinstance(exc, psycopg.OperationalError)
     return sqlstate.startswith("08") or sqlstate in _LOST_CONNECTION_SQLSTATES
+
+
+def _connect_kwargs(dsn: str) -> Dict[str, Any]:
+    """``_CONNECT_KWARGS``, plus ``application_name`` unless the DSN names one (or cannot be parsed)."""
+    kwargs = dict(_CONNECT_KWARGS)
+    try:
+        named = "application_name" in conninfo_to_dict(dsn)
+    except psycopg.Error:
+        named = False
+    if not named:
+        kwargs["application_name"] = APPLICATION_NAME
+    return kwargs
+
+
+def _parsed_password(dsn: str) -> Optional[str]:
+    try:
+        return conninfo_to_dict(dsn).get("password")
+    except psycopg.Error:
+        return None
 
 
 def _release(conn) -> None:
@@ -83,13 +113,17 @@ def describe_error(exc: BaseException, dsn: Optional[str] = None) -> str:
     """Type, SQLSTATE and the first line of the message (at most 200 characters) for a log line.
 
     libpq connect errors name the host, port, user and reason, never the password. Should a message
-    ever carry credentials, they are masked by pattern (``scheme://user:***@``, ``password=***``), and
-    ``dsn`` itself is masked whole, before the line is cut.
+    ever carry credentials, they are masked by pattern (``scheme://user:***@``, ``*password=***``);
+    with ``dsn``, the DSN itself and its parsed password (if long enough) are masked too, all before
+    the line is cut.
     """
     lines = str(exc).strip().splitlines()
     line = lines[0] if lines else ""
     if dsn:
         line = line.replace(dsn, "***")
+        password = _parsed_password(dsn) if psycopg is not None else None
+        if password and len(password) >= _MIN_MASKED_PASSWORD:
+            line = line.replace(password, "***")
     line = _URL_CREDENTIALS.sub(r"\g<head>:***@", line)
     line = _PASSWORD_PARAM.sub(r"\g<head>***", line)
     return f"{type(exc).__name__} (sqlstate {getattr(exc, 'sqlstate', None)}): {line[:200]}"
@@ -116,7 +150,7 @@ class SyncPostgresAuditTrail:
         if psycopg is None:
             raise ImportError("psycopg is required for SyncPostgresAuditTrail")
         if self.schema:
-            with psycopg.connect(self.dsn, autocommit=True, **_CONNECT_KWARGS) as bootstrap:
+            with psycopg.connect(self.dsn, autocommit=True, **_connect_kwargs(self.dsn)) as bootstrap:
                 bootstrap.execute(f"CREATE SCHEMA IF NOT EXISTS {quoted(self.schema)}")
         self.conn = self._connect()
         with self.conn.cursor() as cur:
@@ -153,7 +187,9 @@ class SyncPostgresAuditTrail:
         inside one that is never committed.
         """
         options = {"options": f"-c search_path={search_path_setting(self.schema)}"} if self.schema else {}
-        conn = psycopg.connect(self.dsn, row_factory=dict_row, autocommit=True, **_CONNECT_KWARGS, **options)
+        conn = psycopg.connect(
+            self.dsn, row_factory=dict_row, autocommit=True, **_connect_kwargs(self.dsn), **options,
+        )
         try:
             if self.schema:
                 row = conn.execute("SELECT current_schema() AS schema").fetchone()
@@ -178,7 +214,10 @@ class SyncPostgresAuditTrail:
             raise psycopg.OperationalError("audit store reconnect is cooling down after a failed attempt")
         try:
             conn = self._connect()
-        except Exception as exc:   # refused, timed out, or the wrong schema: all start the cooldown
+        except psycopg.OperationalError as exc:
+            # The server is unreachable for every trail on this DSN. A tenant_schema_not_active
+            # RuntimeError is one tenant's misconfiguration (the connect itself was fast): it neither
+            # starts nor clears the DSN-wide cooldown and stays a 500.
             _failed_reconnects[self.dsn] = _clock()
             logger.warning("Audit trail reconnect failed: %s", describe_error(exc, self.dsn))
             raise
