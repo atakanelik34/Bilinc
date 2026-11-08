@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [2.6.3] — 2026-11-08
+
+### Fixed
+
+- Hosted service: after the database restarts or drops a connection, history, diff against the current state, saves, edits, confirms, forgets and new checkpoints work again on the first call; before, they failed until the service was restarted. If the database stays down they fail fast with a temporary-unavailable error. The SDK and CLI are unchanged.
+
 ## [2.6.2] — 2026-11-05
 
 ### Added
