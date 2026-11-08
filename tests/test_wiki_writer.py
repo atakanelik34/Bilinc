@@ -529,3 +529,65 @@ def test_case_twin_that_is_a_different_file_is_still_refused(tmp_path):
         write_tree(tmp_path, {**FILES, "foo.md": "new\n"}, previous=previous, manifest_for=manifest_for)
 
     assert (tmp_path / "foo.md").read_text() == "the user's own file"
+
+
+@pytest.fixture()
+def case_insensitive(monkeypatch):
+    """Make the writer see the folder like macOS/Windows: names match case-insensitively."""
+    real_lstat, real_unlink, real_replace = os.lstat, os.unlink, os.replace
+
+    def existing(path):
+        path = Path(path)
+        if path.parent.is_dir():
+            for name in os.listdir(path.parent):
+                if name.casefold() == path.name.casefold():
+                    return path.parent / name
+        return path
+
+    class CaseInsensitiveOs:
+        def __getattr__(self, name):
+            return getattr(os, name)
+
+        def lstat(self, path, *args, **kwargs):
+            return real_lstat(existing(path), *args, **kwargs)
+
+        def unlink(self, path, *args, **kwargs):
+            return real_unlink(existing(path), *args, **kwargs)
+
+        def replace(self, src, dst, *args, **kwargs):
+            return real_replace(src, existing(dst), *args, **kwargs)
+
+    monkeypatch.setattr(writer, "os", CaseInsensitiveOs())
+
+
+def test_rerun_after_an_interrupted_case_rename_keeps_the_new_page(tmp_path, case_insensitive):
+    (tmp_path / "Foo.md").write_text("old\n")
+    # The interim manifest of a run interrupted mid-rename owns both spellings.
+    interrupted = manifest_for(False, ["Foo.md", "foo.md"])
+
+    result = write_tree(tmp_path, {"foo.md": "new\n"}, previous=interrupted, manifest_for=manifest_for)
+
+    pages = [name for name in os.listdir(tmp_path) if name.endswith(".md")]
+    assert len(pages) == 1 and (tmp_path / pages[0]).read_text() == "new\n"
+    assert result.removed == []
+
+
+def test_case_rename_on_a_case_insensitive_folder_keeps_the_new_page(tmp_path, case_insensitive):
+    first_run(tmp_path, {"Foo.md": "old\n"})
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    result = write_tree(tmp_path, {"foo.md": "new\n"}, previous=previous, manifest_for=manifest_for)
+
+    pages = [name for name in os.listdir(tmp_path) if name.endswith(".md")]
+    assert len(pages) == 1 and (tmp_path / pages[0]).read_text() == "new\n"
+    assert result.removed == []
+
+
+def test_case_rename_on_a_case_sensitive_folder_removes_the_old_spelling(tmp_path):
+    first_run(tmp_path, {"Foo.md": "old\n"})
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    result = write_tree(tmp_path, {"foo.md": "new\n"}, previous=previous, manifest_for=manifest_for)
+
+    assert result.removed == ["Foo.md"]
+    assert sorted(name for name in os.listdir(tmp_path) if name.endswith(".md")) == ["foo.md"]

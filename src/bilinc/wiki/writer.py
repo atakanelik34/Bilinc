@@ -145,7 +145,7 @@ def write_tree(
             os.chmod(source, FILE_MODE)
             os.replace(source, target / rel)
             result.written += 1
-        _remove_stale(target, sorted(owned - set(wanted) - renamed), result)
+        _remove_stale(target, sorted(owned - set(wanted) - renamed), wanted, result)
         _write_manifest(target, manifest_for(True, wanted))
         _discard_temp(temp)
         os.chmod(target, DIR_MODE)
@@ -220,7 +220,10 @@ def _ensure_folders(target: Path, rel: str) -> None:
         os.chmod(current, DIR_MODE)
 
 
-def _remove_stale(target: Path, stale: list[str], result: WriteResult) -> None:
+def _remove_stale(target: Path, stale: list[str], wanted: list[str], result: WriteResult) -> None:
+    wanted_by_fold: dict[str, list[str]] = {}
+    for rel in wanted:
+        wanted_by_fold.setdefault(_fold(rel), []).append(rel)
     emptied: set[Path] = set()
     for rel in stale:
         validate_rel_path(rel)
@@ -244,6 +247,10 @@ def _remove_stale(target: Path, stale: list[str], result: WriteResult) -> None:
             result.skipped.append(rel)
             continue
         if info is None:
+            continue
+        # On a case-insensitive folder an old spelling can name the page this
+        # run just wrote (e.g. after an interrupted rename); never delete that.
+        if any(_same_entry(target / other, info) for other in wanted_by_fold.get(_fold(rel), ())):
             continue
         os.unlink(path)
         result.removed.append(rel)
