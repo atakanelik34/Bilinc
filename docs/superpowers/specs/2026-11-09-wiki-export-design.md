@@ -99,6 +99,13 @@ Deterministic, pure function of the full key set.
    `agents` gets the suffix at any level. A root folder can never be named
    `.bilinc-wiki.json` or `.bilinc-wiki.tmp` because leading dots are escaped.
 
+Order of application: escape (2), reserved-name suffix (5), byte cap (3),
+then the collision pass (4) on these final names. A collision suffix is
+added to the escaped name and the cap is re-applied with the suffix kept, so
+a key whose segment literally ends in `~hhhhhh`, or two keys sharing a
+truncated prefix, still collide visibly and get suffixed; a collision left
+after that pass raises.
+
 Examples: `project:bilinc:release` → `project/bilinc/release.md`;
 `a/b` → `a%2Fb.md`; `.env` → `%2Eenv.md`; `index` → `index~<6hex>.md`.
 
@@ -128,9 +135,12 @@ exported_at: "2026-11-09T01:00:00Z"
 ...
 ```
 
-- Frontmatter scalars are written with `json.dumps(..., ensure_ascii=False)`;
-  a JSON string is a valid YAML double-quoted scalar, so no value can break
-  out of the frontmatter. Missing values are `null`.
+- Frontmatter scalars are written with `json.dumps(..., ensure_ascii=False)`,
+  then U+0085, U+2028 and U+2029 are replaced with their `\uXXXX` escapes
+  (JSON leaves them raw, but YAML parsers and `str.splitlines()` treat them
+  as line breaks). A JSON string is a valid YAML double-quoted scalar, so no
+  value can break out of the frontmatter. Missing values are `null`. The
+  same three characters are folded to spaces in index table cells.
 - Title: the full key. Line breaks (`\r`, `\n`, U+0085, U+2028, U+2029) and
   other control characters become spaces; only punctuation that can form
   Markdown structure inline is backslash-escaped: `\ ` * _ [ ] < > | #` and
@@ -223,8 +233,11 @@ by" is the inverse relation. Only the current export's keys count.
 identified by `base_url`: the SDK has no verified workspace-id field on list
 responses, and an extra `status()` call only to name the workspace is not
 worth it. Paths in `files` are validated on read: relative, `/`-separated, no
-`..`, no empty or absolute parts; an invalid manifest is a refusal, not a
-partial run.
+`..`, no empty or absolute parts, no backslash or drive prefix, and no
+component starting with `.` (generated paths never do, since leading dots are
+escaped), so a corrupt manifest can never make the run delete
+`.obsidian/…`, the manifest or the temp folder. An invalid manifest is a
+refusal, not a partial run.
 
 ## Run sequence and safety
 
@@ -261,9 +274,14 @@ partial run.
    (dirs 0700, files created 0600). A stale `.bilinc-wiki.tmp/` is removed
    first only when `<dir>` has a valid manifest; it is never followed if it
    is a symlink (refuse).
-6. Before moving: every existing path component the run will write through
-   inside `<dir>` must be a real directory, not a symlink; otherwise refuse
-   and remove the temp folder.
+6. Before moving, checked with `lstat`, refuse (and remove the temp folder)
+   when:
+   - an existing component of a folder the run needs is not a real directory
+     (a file or a symlink);
+   - an entry exists at a page path the run needs and that path is not in the
+     previous manifest (a user file, folder or symlink);
+   - a path in the previous manifest that the run needs is now a directory.
+   All of this happens before step 7, so a refusal changes nothing.
 7. Write an interim manifest (`complete: false`) listing the union of the old
    and new files, so a crash during the move leaves every file this tool
    wrote still owned by the manifest.
@@ -279,9 +297,16 @@ partial run.
 12. Print a summary to stderr: pages written, files removed, keys with
     history unavailable. Exit 0 (with a warning line when any history failed).
 
-Files not in the previous manifest are never written, moved over or deleted,
-except that a user file sitting exactly at a path the export now needs is a
-conflict: the run refuses before moving anything (exit 1, names the path).
+Files not in the previous manifest are never written, moved over or deleted;
+an entry sitting exactly at a path the export now needs is a conflict and the
+run refuses before moving anything (exit 1, names the path).
+
+Interrupts: Ctrl-C during the history phase cancels pending work
+(`shutdown(wait=False, cancel_futures=True)`), wakes the injected sleep (it
+waits on a `threading.Event`), and exits 130; nothing is on disk yet. A hard
+kill during step 5 of a first run leaves `.bilinc-wiki.tmp/` with no
+manifest; the next run refuses, and its message names the temp folder as the
+thing to remove.
 
 Any `OSError` (disk full, permission denied) during steps 5–6 removes the temp
 folder and leaves the previous wiki as it was; exit 1.
@@ -294,8 +319,13 @@ Windows `chmod` is best effort.
 - `BilincCloudError.retry_after: float | None` (default `None`), filled by
   the default transport from a `Retry-After` header holding a finite,
   non-negative number of seconds. HTTP dates, negatives and `nan` give `None`.
-- `CloudClient.read_retry_attempts: int` (default `READ_RETRY_ATTEMPTS`, 3),
-  used by `_with_read_retries`. Existing callers see no change.
+- `CloudClient.read_retry_attempts: int` (default `READ_RETRY_ATTEMPTS`, 3,
+  validated `>= 1`). `_with_read_retries` becomes an instance method reading
+  it. The wiki builds its history client with
+  `dataclasses.replace(client, read_retry_attempts=1)`. Existing callers see
+  no change.
+- `_default_transport` passes `exc.headers.get("Retry-After")` to
+  `error_for_response`, which gains an optional `retry_after` argument.
 
 ## Errors
 
