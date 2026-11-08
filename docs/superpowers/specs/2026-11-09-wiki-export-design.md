@@ -113,7 +113,7 @@ updated_at: "2026-11-08T12:00:00Z"
 exported_at: "2026-11-09T01:00:00Z"
 ---
 
-# project\:bilinc\:release
+# project:bilinc:release
 
 ## Value
 
@@ -131,8 +131,11 @@ exported_at: "2026-11-09T01:00:00Z"
 - Frontmatter scalars are written with `json.dumps(..., ensure_ascii=False)`;
   a JSON string is a valid YAML double-quoted scalar, so no value can break
   out of the frontmatter. Missing values are `null`.
-- Title: the full key, with Markdown punctuation backslash-escaped and line
-  breaks replaced by spaces.
+- Title: the full key. Line breaks (`\r`, `\n`, U+0085, U+2028, U+2029) and
+  other control characters become spaces; only punctuation that can form
+  Markdown structure inline is backslash-escaped: `\ ` * _ [ ] < > | #` and
+  a leading `!`, `+`, `-`, `=` or digit-dot. `:` is not escaped, so titles
+  read cleanly in Obsidian's source mode.
 - Value:
   - string → one ```` ```text ```` block holding the string as is;
   - object → a ```` ```text ```` block listing top-level fields as
@@ -204,7 +207,7 @@ by" is the inverse relation. Only the current export's keys count.
 {
   "format": 1,
   "tool": "bilinc wiki",
-  "tool_version": "2.6.3",
+  "tool_version": "2.7.0",
   "base_url": "https://bilinc.space",
   "prefix": null,
   "history": 5,
@@ -229,20 +232,31 @@ partial run.
 2. Inspect `<dir>` without changing it:
    - missing → will be created (its parent must exist);
    - exists and is not a directory, or is a symlink → refuse;
-   - empty → fine;
+   - empty → fine. A folder whose only entries are `.obsidian/`, `.trash/`
+     and `.DS_Store` counts as empty, so opening a new Obsidian vault first
+     does not block the first export. Those entries are never touched;
    - non-empty without a valid manifest → refuse ("not a Bilinc wiki
      folder"), exit 1;
    - manifest present but not a regular file, unparsable, or with invalid
-     paths → refuse.
+     paths → refuse;
+   - manifest `base_url` or `prefix` differs from this run → refuse, naming
+     both values. A different workspace or prefix would otherwise silently
+     delete the previous run's pages. Use another folder (or remove this one)
+     to change either.
 3. Fetch every memory (`iter_memories`). Any error stops the run before the
    disk is touched (auth, entitlement, payment, mid-list failure). Exit 1.
-4. Fetch history (when N > 0) with a pool of at most 4 workers. Per key:
-   on `BilincRateLimitError`, wait `retry_after` when the error carries one
-   (capped at 60 s), else 1 s, 2 s, 4 s; at most 3 retries. Auth,
+4. Fetch history (when N > 0) with a pool of at most 4 workers. History
+   calls go through a copy of the client with `read_retry_attempts=1`, so the
+   wiki is the single retry layer (no SDK retries stacked under it, no real
+   `time.sleep` outside the injected sleep). Per key: on a retryable error
+   (`BilincRateLimitError`, runtime unavailable, connection), wait
+   `retry_after` when the error carries one (capped at 60 s), else 1 s, 2 s,
+   4 s; at most 3 retries, so at most 4 requests per key. Auth,
    entitlement and payment errors stop the whole run (exit 1, nothing
    written). Any other error after retries marks that key "History
    unavailable". Results are keyed by key, so the order of completion never
-   reaches the output.
+   reaches the output. When stderr is a terminal, a one-line counter
+   (`history 120/3000`) is updated in place.
 5. Render everything in memory, then write it to `<dir>/.bilinc-wiki.tmp/`
    (dirs 0700, files created 0600). A stale `.bilinc-wiki.tmp/` is removed
    first only when `<dir>` has a valid manifest; it is never followed if it
@@ -256,7 +270,9 @@ partial run.
 8. Move each new file into place with `os.replace` (replaces a symlink at the
    destination rather than following it). Create folders 0700.
 9. Delete files listed in the previous manifest that are no longer produced
-   (`os.unlink`; never recursive). Remove folders left empty by that, deepest
+   (`os.unlink`; never recursive). Before each delete, every parent folder
+   between `<dir>` and the file is checked with `lstat` to be a real folder;
+   a symlinked parent means the file is skipped and reported, never followed. Remove folders left empty by that, deepest
    first, with `os.rmdir` (which never removes a non-empty folder).
 10. Write the final manifest (`complete: true`) via temp file + `os.replace`.
 11. Remove the temp folder. Tighten `<dir>` to 0700.
@@ -273,13 +289,13 @@ folder and leaves the previous wiki as it was; exit 1.
 Permissions follow the JSON export: folders 0700, files 0600 on POSIX. On
 Windows `chmod` is best effort.
 
-### Retry-After
+### SDK additions (additive; defaults unchanged)
 
-The SDK's default transport drops HTTP headers today. 2.7.0 adds, without
-changing any existing behaviour, an optional `retry_after: float | None`
-attribute on `BilincCloudError` (default `None`), filled by the default
-transport from a numeric `Retry-After` header. The SDK's own read retries are
-unchanged; the wiki retry wraps them.
+- `BilincCloudError.retry_after: float | None` (default `None`), filled by
+  the default transport from a `Retry-After` header holding a finite,
+  non-negative number of seconds. HTTP dates, negatives and `nan` give `None`.
+- `CloudClient.read_retry_attempts: int` (default `READ_RETRY_ATTEMPTS`, 3),
+  used by `_with_read_retries`. Existing callers see no change.
 
 ## Errors
 
@@ -320,13 +336,56 @@ Unit (`tests/test_wiki_paths.py`, `test_wiki_render.py`, `test_wiki_links.py`,
   path refused; symlinked subfolder refused; stale files from the previous
   manifest removed; permissions 0700/0600 including tightening a 0644 file;
 - determinism: two runs, byte-identical except `exported_at`;
-- list-field pinning: a list entry in the site's shape renders the expected
-  frontmatter.
+- list-field pinning: a list entry in the public route's shape (a fixture
+  mirroring `publicList` field by field, since no network is allowed) renders
+  the expected frontmatter and manifest entry;
+- hostile key and value (`\r`, `\n`, U+0085, `---`, seven backticks,
+  `](javascript:x)`, `|`): frontmatter lines parse back with `json.loads` to
+  the input, exactly one H1, headings outside fences are only
+  `Value`/`History`/`Links`, every link target is a relative `.md` path;
+- `.obsidian/`-only folder accepted and left untouched; prefix or base_url
+  change refused;
+- manifest escape paths refused (`../x`, `/etc/x`, `a//b`, `a\\..\\b`,
+  `C:x`, `.`) with the tree unchanged; `.bilinc-wiki.tmp` symlinked outside
+  refused; an owned page replaced by a symlink is replaced, its target
+  untouched; a stale file under a symlinked parent is not deleted;
+- crash mid-move: `os.replace` patched to fail on the 3rd call → exit 1,
+  manifest `complete: false`, every export file on disk is in `files`, user
+  file byte-identical; a rerun completes and leaves no orphan;
+- disk error while building the temp folder → temp removed, previous wiki
+  byte-identical;
+- determinism across processes: two subprocess runs with different
+  `PYTHONHASHSEED` and `TZ`, shuffled list input, and history completing in
+  reverse order → byte-identical after normalising `exported_at`.
 
-Integration (fake transport, `RecordingTransport` pattern): list paging over
-3 pages with `nextCursor`; a 429 with `Retry-After` then success (sleep
-recorded, not real); a key whose history keeps failing (page written, exit 0,
-warning names the key); an auth error on list (nothing written); a failure on
-the second list page (previous wiki intact).
+Integration (fake transport in the `RecordingTransport` style, but thread
+safe and routed by URL and request body, so 4 workers cannot receive each
+other's responses): list paging over 3 pages with `nextCursor`; 429s on
+history with `time.sleep` patched to raise, asserting exactly 4 requests
+for the key and sleeps `[2, 2, 2]` for `retry_after=2`, and `60` for
+`retry_after=600`; a key whose history keeps failing (page written, exit 0,
+warning names the key); an auth error on history aborts with nothing written
+(or the previous wiki byte-identical); an auth error on list; a failure on
+the second list page with a previous wiki present (byte-identical after).
 
-CLI: `bilinc wiki --help` renders; argument validation for `--history`.
+Retry-After parsing: `urllib.request.urlopen` patched to raise
+`HTTPError(429, headers={"Retry-After": "7"})` → `exc.retry_after == 7.0`;
+`"-1"`, `"nan"` and an HTTP date → `None`.
+
+CLI through `main()`: `bilinc wiki --help` renders; `--history 101` and `-1`
+rejected; exit 1 on refusal, exit 0 with the key named on stderr when a
+history failed, exit 1 on a list failure.
+
+## Manual acceptance (owner, after merge, before release)
+
+Export a real workspace into a scratch folder (not a notes vault) and open it
+in Obsidian: check `index.md`, three random pages, history blocks and
+"Mentioned by"; time the first and second runs.
+
+## Release-chain impact
+
+SDK and CLI only (`src/bilinc/client.py`, `src/bilinc/cli/main.py`,
+`src/bilinc/wiki/`). No hosted runtime, site API, database or migration
+change. The 2.7.0 release still needs the version bump, PyPI, the changelog,
+a `/docs/wiki` page on the site, and the usual synchronized chain; the MCP
+registry entry is unchanged until the 2.7.1 `export_wiki` tool.
