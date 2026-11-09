@@ -853,7 +853,9 @@ class CloudClient:
         number = 0
         while queue:
             if number >= DREAM_MAX_PAGES:
-                raise _invalid("actions", "the service kept deferring actions; call dream_apply again later")
+                error = _invalid("actions", "the service kept deferring actions; call dream_apply again later")
+                error.partial = {"results": list(results), "pages_done": number}
+                raise error
             page, queue = queue[:DREAM_PAGE_SIZE], queue[DREAM_PAGE_SIZE:]
             final = not queue
             payload: dict[str, Any] = {"dreamId": dream, "actions": page, "final": final}
@@ -884,7 +886,9 @@ class CloudClient:
         value, type, importance and source; other metadata such as TTL or
         canonical flags is not restored (``metadata_restored: false``). A long
         undo pauses at the service's time budget (``status: "undoing"``); this
-        method calls again until it finishes and merges the results.
+        method calls again until it finishes and merges the results; after 20
+        calls it returns what it has, still with ``status: "undoing"``, and a
+        later call continues.
         """
 
         payload = {"dreamId": _require_dream_id(dream_id)}

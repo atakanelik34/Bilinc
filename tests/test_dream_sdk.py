@@ -352,3 +352,18 @@ def test_dream_undo_continues_while_the_service_says_undoing():
     assert len(transport.calls) == 2
     assert result["status"] == "undone"
     assert [r["key"] for r in result["restored"]] == ["b", "a"]
+
+
+def test_dream_apply_gives_up_after_the_page_limit_and_keeps_partial_results():
+    from bilinc import BilincCloudError
+
+    action = _action(1)
+    deferred = _page_response([action], status="applying")
+    deferred["results"][0].update(result="skipped", error="deadline")
+    transport = RecordingTransport(deferred)
+
+    with pytest.raises(BilincCloudError) as raised:
+        _client(transport).dream_apply("drm_1", [action])
+
+    assert raised.value.partial == {"results": [], "pages_done": 20}
+    assert len(transport.calls) == 20
