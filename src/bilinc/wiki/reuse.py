@@ -82,7 +82,14 @@ def read_previous_body(target: Path, rel: str) -> str | None:
                 return None
         except OSError:
             return None
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        # Checked before opening too: opening a FIFO for reading would block.
+        if not stat.S_ISREG(os.lstat(Path(target) / rel).st_mode):
+            return None
+    except OSError:
+        return None
+    # O_NONBLOCK: a FIFO swapped in after the check still cannot hang the run.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         fd = os.open(Path(target) / rel, flags)
     except OSError:

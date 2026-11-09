@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
+import threading
 
 import pytest
 
@@ -248,3 +250,18 @@ def test_entry_off_rules(entry) -> None:
 def test_empty_strings_on_both_sides_are_not_reusable() -> None:
     previous = mutated(("keys", "k", "entry_version"), "")
     assert reuse([{**ENTRY, "entryVersion": ""}], previous) == set()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFOs")
+def test_read_previous_body_never_blocks_on_a_fifo(tmp_path):
+    os.mkfifo(tmp_path / "k.md")
+    result = {}
+    worker = threading.Thread(target=lambda: result.setdefault("body", read_previous_body(tmp_path, "k.md")))
+    worker.start()
+    worker.join(5)
+    alive = worker.is_alive()
+    if alive:  # unblock the stuck reader so the test run can finish
+        with open(tmp_path / "k.md", "wb"):
+            pass
+        worker.join(5)
+    assert not alive and result["body"] is None
