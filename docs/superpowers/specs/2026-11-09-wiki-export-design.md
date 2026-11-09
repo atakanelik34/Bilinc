@@ -627,7 +627,7 @@ is pinned as:
      /System /Library /Applications /cores`, and on Windows the Windows
      folder and the Program Files folders;
    - `/Volumes` and `/mnt` themselves (a drive under them is allowed);
-   - carve-out: the system temp folder (`realpath(tempfile.gettempdir())`)
+   - carve-out, evaluated before the system-folder rule: the system temp folder (`realpath(tempfile.gettempdir())`)
      and `/private/tmp` are allowed even though they sit under `/private`
      or `/var` on macOS;
    - hidden folders in home and everything inside them (`~/.ssh`,
@@ -712,7 +712,7 @@ tests.
   exists, the writer looks up the on-disk spelling of the last component
   (one `listdir` per folder, cached). If it differs from the wanted name
   after NFC normalisation (so HFS+'s NFD names do not churn), the existing
-  entry is first renamed to `.bilinc-wiki.tmp/old/<n>` (a numbered name in
+  entry is first renamed to `.bilinc-wiki.tmp/.old/<n>` (a leading-dot folder, which no key can map to) (a numbered name in
   its own subfolder, never at the page's relative path, which on a
   case-insensitive file system would be the freshly built page itself) and
   then the new file is moved in; the temp folder is removed at the end as before. A crash in
