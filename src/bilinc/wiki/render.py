@@ -39,12 +39,16 @@ _INLINE_PUNCT = re.compile(r"([\\`*_\[\]<>|#])")
 #: setext underline (``>`` and ``#`` are already escaped everywhere).
 _LEADING_MARKER = re.compile(r"^([!+\-=])")
 _LEADING_ORDERED = re.compile(r"^(\d+)([.)])")
-#: Obsidian's ``$`` math, and its ``%%`` comments, ``==`` highlights and
-#: ``~~`` strikes (only a doubled character forms those, so a lone one stays).
-_OBSIDIAN_SINGLE = re.compile(r"([$])")
-_OBSIDIAN_DOUBLED = re.compile(r"([%=~])\1+")
+#: Obsidian's ``$`` math and GFM's ``~x~`` strike (one tilde is enough there),
+#: and Obsidian's ``%%`` comments and ``==`` highlights (only a doubled
+#: character forms those, so a lone one stays).
+_OBSIDIAN_SINGLE = re.compile(r"([$~])")
+_OBSIDIAN_DOUBLED = re.compile(r"([%=])\1+")
 #: Text GitHub and Obsidian turn into links on their own.
 _AUTOLINK = re.compile(r"(://|(?<![A-Za-z0-9])www\.)", re.IGNORECASE)
+#: An e-mail address GFM turns into a mailto: link, matched after the other
+#: escapes ran (so ``_`` and ``%`` in it may already carry a backslash).
+_EMAIL = re.compile(r"(?:[A-Za-z0-9.+\-]|\\[_%])+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+")
 
 
 def fence(content: str, lang: str) -> str:
@@ -68,15 +72,21 @@ def md_inline(text: str) -> str:
 
     Line breaks and control characters become spaces; punctuation that can
     form structure is backslash-escaped, as are bare URLs (``https://``,
-    ``www.``) that renderers would turn into links. ``:`` is left alone so keys
+    ``www.``) and e-mail addresses that renderers would turn into links. ``:`` is left alone so keys
     stay readable.
     """
     out = _INLINE_PUNCT.sub(r"\\\1", fold_lines(text))
     out = _OBSIDIAN_SINGLE.sub(r"\\\1", out)
     out = _OBSIDIAN_DOUBLED.sub(lambda match: "".join("\\" + char for char in match.group()), out)
     out = _AUTOLINK.sub(lambda match: match.group().replace("/", "\\/").replace(".", "\\."), out)
+    out = _EMAIL.sub(lambda match: _inert_email(match.group()), out)
     out = _LEADING_MARKER.sub(r"\\\1", out)
     return _LEADING_ORDERED.sub(r"\1\\\2", out)
+
+
+def _inert_email(text: str) -> str:
+    local, _, domain = text.partition("@")
+    return local + "\\@" + domain.replace(".", "\\.")
 
 
 def yaml_scalar(value: Any) -> str:

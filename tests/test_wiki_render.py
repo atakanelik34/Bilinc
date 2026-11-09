@@ -647,9 +647,45 @@ def test_agents_text_is_fixed_except_version_and_time() -> None:
         ("a %%hidden%% b", "a \\%\\%hidden\\%\\% b"),
         ("==mark== ~~gone~~", "\\=\\=mark\\=\\= \\~\\~gone\\~\\~"),
         ("cost $5 and $x$", "cost \\$5 and \\$x\\$"),
-        ("50% off, a=b, x~y", "50% off, a=b, x~y"),
+        ("50% off, a=b", "50% off, a=b"),
+        ("x~y", "x\\~y"),
         ("project:bilinc:release", "project:bilinc:release"),
     ],
 )
 def test_md_inline_defuses_autolinks_and_obsidian_syntax(raw, escaped):
     assert md_inline(raw) == escaped
+
+
+def test_md_inline_escapes_every_tilde() -> None:
+    assert md_inline("a ~x~ b") == "a \\~x\\~ b"
+    assert md_inline("~~gone~~") == "\\~\\~gone\\~\\~"
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("mail jin@example.com now", "mail jin\\@example\\.com now"),
+        ("a.b+c@sub.example.org", "a.b+c\\@sub\\.example\\.org"),
+        ("first_last@example.com", "first\\_last\\@example\\.com"),
+        ("user@localhost", "user@localhost"),
+        ("@handle", "@handle"),
+    ],
+)
+def test_md_inline_keeps_email_like_text_inert(raw: str, expected: str) -> None:
+    assert md_inline(raw) == expected
+
+
+def test_tildes_and_addresses_inside_a_value_fence_stay_byte_exact() -> None:
+    value = "~/notes and ~x~ to jin@example.com"
+    assert value_block(value) == "```text\n" + value + "\n```\n"
+    page = render_page(
+        {"key": "a~b", "value": value},
+        path="a~b.md",
+        paths={"a~b": "a~b.md"},
+        outgoing=[],
+        incoming=[],
+        history=None,
+        exported_at="t",
+    )
+    assert "\n" + value + "\n" in page
+    assert "# a\\~b\n" in page
