@@ -479,19 +479,30 @@ cached by the serving process and is not guaranteed fresh.
      whose whole run falls inside a long rollback could read a restored key
      with its old version while neither marker has changed yet. Fix: the
      runtime writes a value-free `rollback` entry under `__system` (metadata
-     `phase: "start"`, the snapshot id and reason) **before** the first key
-     is restored; the existing end entry stays. Then any rollback that has
+     `phase: "start"`, `rollback: true`, the snapshot id and reason)
+     **before** the first key is restored; the existing end entry gains
+     `rollback: true` and stays. With `rollback: true` the history record
+     carries `rollbackSnapshotId`, so the marker holds the snapshot id, not
+     only a timestamp. Then any rollback that has
      restored anything has already changed the marker. Until the runtime with
      this entry is deployed, that overlap remains a stated risk. A failure to fetch it
    (other than auth / entitlement / payment, which abort as before) sets the
    marker to `null`: no reuse in this run, one stderr line
    `note: history reuse is off for this run (…)`, and the next run cannot
    reuse either.
-2. *Manifest additions* (format stays 1; the 2.7.0 manifest has not shipped):
+2. *Manifest additions* (format stays 1; the 2.7.0 manifest has not
+   shipped). `read_manifest` validates them when present (`history_marker`
+   null or a 64-hex string, `history_format` an int, `history_sha256` a
+   64-hex string); a malformed value only disables reuse, it is not a
+   refusal, and older manifests without them simply never reuse:
    - top level `history_marker`: the marker read at the start of the run
      that wrote the manifest, or `null`;
    - per key `history_sha256`: sha256 of that page's history section body
-     (the text after `## History\n\n` up to the end of the section), present
+     as written to disk (encoded with `errors="replace"`, like the page
+     file, so a lone surrogate hashes as the `?` on disk); the body is the
+     text after `## History\n\n` up to the next top-level heading or EOF,
+     with trailing newlines stripped, so the same block hashes the same with
+     or without a Links section after it. Present
      only when the block came from a successful fetch or a verified reuse;
      never for "History unavailable".
 3. *A key's block is reused only when all hold:*
@@ -527,6 +538,13 @@ finished, is still running, or crashed. Without it (older runtime), a
 rollback still running when the end marker is read, or one that crashed
 before its end entry, can leave a restored key's pre-rollback block in the
 export until the key changes or `--refresh-history` is used.
+
+Known limit (as in the base design, the folder is tied to `base_url`, not
+a workspace id): exporting a different workspace on the same `base_url`
+into the same folder would reuse a block only for an entry whose stored
+state, `updated_at` included, is byte-identical in both workspaces and when
+both markers match. That needs an entry copied verbatim with its
+timestamps; use separate folders per workspace.
 
 The manifest also gains `history_format` (an integer, 1), bumped whenever
 the history block's rendering changes; reuse requires it to match, so a
@@ -594,7 +612,14 @@ is pinned as:
    never follows a symlink inside the folder, so no write lands outside it.
    A second "root" argument was considered and rejected: the same caller
    would choose both values, so it adds no protection.
-4. Refused locations, checked on `resolved` and on the normalised given path:
+4. Refused locations, checked on `resolved` and on the normalised given
+   path. Comparison is by identity, not spelling: each ancestor of
+   `resolved` is `os.stat`ed and its `(st_dev, st_ino)` compared with home
+   and the refused roots, because macOS and Windows folders are
+   case-insensitive (`/USERS/x/.ssh` must not pass); on Windows, where inode
+   numbers may be missing, casefolded strings are compared. `\\?\` prefixes
+   are stripped first and UNC paths (`\\server\share`) are refused. The
+   refused roots and home are parameters, so tests can inject them.
    - `/`, a drive root, the home folder itself, and any ancestor of home
      (`/home`, `/Users`);
    - system folders and everything inside them: `/bin /boot /dev /etc /lib
@@ -602,6 +627,9 @@ is pinned as:
      /System /Library /Applications /cores`, and on Windows the Windows
      folder and the Program Files folders;
    - `/Volumes` and `/mnt` themselves (a drive under them is allowed);
+   - carve-out: the system temp folder (`realpath(tempfile.gettempdir())`)
+     and `/private/tmp` are allowed even though they sit under `/private`
+     or `/var` on macOS;
    - hidden folders in home and everything inside them (`~/.ssh`,
      `~/.config`, …): any component under home starting with `.`;
    - `~/Library` and everything inside it, except `~/Library/Mobile
@@ -624,7 +652,10 @@ truth and the hosted server check it). A new `LOCAL_MCP_TOOLS =
 `tests/test_cloud_memory_review_sdk.py` (registered tools ==
 `CLOUD_MCP_TOOLS + LOCAL_MCP_TOOLS`), `docs/public/product-truth.json`
 (`cloud_mcp.local_tools`), `scripts/validate_public_truth.py`,
-`scripts/generate_public_truth_doc.py` and the generated doc, and
+`scripts/generate_public_truth_doc.py` and the generated doc (the
+validator's AST scan of every `@mcp.tool` function in `cloud_mcp.py` must
+compare against `tools + local_tools`, or it fails as soon as
+`export_wiki` exists), and
 `scripts/verify_cloud_lifecycle_smoke.py`. The registry entry
 (`server.json`) needs no change: it names the stdio package, not tools.
 
@@ -651,7 +682,11 @@ becomes `[[TARGET|ALIAS]]`:
   requires inside tables.
 
 The manifest does not record the link style; switching it rewrites pages
-normally.
+normally. `../` relative wikilinks are documented Obsidian behaviour; `./`
+is expected to work but is not documented, so the owner's manual acceptance
+adds: "with `--wikilinks`, links resolve in Obsidian, also when the export
+is a subfolder of a vault". `\|` in table cells is Obsidian's convention;
+the flag is opt-in.
 
 ### A4. Cloud-synced folder warning
 
@@ -677,12 +712,16 @@ tests.
   exists, the writer looks up the on-disk spelling of the last component
   (one `listdir` per folder, cached). If it differs from the wanted name
   after NFC normalisation (so HFS+'s NFD names do not churn), the existing
-  entry is first renamed into `.bilinc-wiki.tmp/` and then the new file is
-  moved in; the temp folder is removed at the end as before. A crash in
+  entry is first renamed to `.bilinc-wiki.tmp/old/<n>` (a numbered name in
+  its own subfolder, never at the page's relative path, which on a
+  case-insensitive file system would be the freshly built page itself) and
+  then the new file is moved in; the temp folder is removed at the end as before. A crash in
   between leaves the old copy only inside the temp folder (cleared on the
-  next run) and the page path owned by the interim manifest. This applies
-  whether or not the old spelling is in the previous manifest (the 2.7.0
-  state already on disks has the manifest saying `foo.md` over `Foo.md`).
+  next run) and the page path owned by the interim manifest. The rename
+  happens only for entries `_check_paths` already accepted as ours: the
+  wanted path is in the previous manifest (the 2.7.0 state on disks has the
+  manifest saying `foo.md` over an on-disk `Foo.md`), or it is the same
+  entry as an owned twin. A user's `Foo.md` is still refused as today.
   Folder spellings are not changed: renaming a folder would also move files
   the user added inside it. Tested with the case-insensitive emulation
   fixture in `tests/test_wiki_writer.py`.
