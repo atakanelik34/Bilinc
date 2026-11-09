@@ -97,9 +97,14 @@ def validate_product_truth(path: Path = MANIFEST) -> list[str]:
     if exports != actual_exports:
         errors.append("public exports do not match bilinc.__all__")
 
-    tools = payload["cloud_mcp"].get("tools", []) if isinstance(payload["cloud_mcp"], dict) else []
-    if tools != _cloud_mcp_tool_names(ROOT / "src" / "bilinc" / "cloud_mcp.py"):
-        errors.append("Cloud MCP tools do not match cloud_mcp.py")
+    cloud_mcp = payload["cloud_mcp"] if isinstance(payload["cloud_mcp"], dict) else {}
+    tools = cloud_mcp.get("tools", [])
+    # Tools the stdio adapter has on top of the hosted list (they act on the user's disk).
+    local_tools = cloud_mcp.get("local_tools", [])
+    if set(tools) & set(local_tools):
+        errors.append("Cloud MCP tools and local_tools overlap")
+    if tools + local_tools != _cloud_mcp_tool_names(ROOT / "src" / "bilinc" / "cloud_mcp.py"):
+        errors.append("Cloud MCP tools and local_tools do not match cloud_mcp.py")
     benchmark = payload["benchmark_claims"]
     required_benchmark_fields = {"state", "public_approved", "label", "scope", "metrics", "qualification", "rule"}
     errors.extend(

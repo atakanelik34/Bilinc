@@ -191,11 +191,14 @@ def run_cli(base_url: str) -> None:
 
 
 def run_mcp() -> None:
-    from bilinc.cloud_mcp import CLOUD_MCP_TOOLS, build_server
+    from bilinc.cloud_mcp import CLOUD_MCP_TOOLS, LOCAL_MCP_TOOLS, build_server
 
     print("MCP adapter")
     tools = {tool.name: tool for tool in asyncio.run(build_server().list_tools())}
-    check("exactly eight tools", sorted(tools) == sorted(CLOUD_MCP_TOOLS))
+    check(
+        "exactly the hosted tools plus the local ones",
+        sorted(tools) == sorted(CLOUD_MCP_TOOLS + LOCAL_MCP_TOOLS),
+    )
     check("forget declares its risk", "destructive" in (tools["forget"].description or "").lower())
     check("rollback declares its risk", "destructive" in (tools["rollback"].description or "").lower())
     check("forget requires key and reason", set(tools["forget"].inputSchema["required"]) == {"key", "reason"})

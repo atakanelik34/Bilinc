@@ -44,6 +44,9 @@
       "list_memories",
       "history",
       "confirm"
+    ],
+    "local_tools": [
+      "export_wiki"
     ]
   },
   "public_urls": {
