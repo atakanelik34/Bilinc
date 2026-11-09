@@ -48,3 +48,10 @@ Status: design, 2026-11-09. The dream pass lets the user's own agent tidy its Bi
 ## Out of scope
 
 Release and version bump, the Claude Code plugin, scheduling (a nightly run is a recipe, not a feature), metadata restore and canonical marking (later version).
+
+## After code review round 1
+
+- `dream_apply` resends actions the service skipped for lack of time (`result: skipped`, `error: deadline`) in a later page, and stops after 20 requests.
+- `dream_undo` calls again while the service answers `status: "undoing"` (a long undo pauses at the service's time budget) and merges the restored, conflict and kept lists.
+- A revise action with `new_value: None` is refused before any request, like the service does.
+- Keys starting `bilinc:dream:`, and reasons and `Idempotency-Key` values starting `dream:`, are reserved for the dream pass (CHANGELOG).
