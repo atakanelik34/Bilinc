@@ -4,7 +4,8 @@ This file is the single source of truth for what the public SDK and the Cloud
 MCP adapter promise to agent developers. The surface is the eight lifecycle
 capabilities (commit_mem, recall, revise, forget, status, snapshot, diff,
 rollback) plus three review tools added in 2.3.8 (list_memories, history,
-confirm). Operator/debug tooling stays local-only.
+confirm) and the three dream pass tools added in 2.7.0 (dream_start,
+dream_apply, dream_undo). Operator/debug tooling stays local-only.
 """
 
 from __future__ import annotations
@@ -27,6 +28,9 @@ CLOUD_MCP_TOOL_NAMES = (
     "list_memories",
     "history",
     "confirm",
+    "dream_start",
+    "dream_apply",
+    "dream_undo",
 )
 
 # Local-only tools that must never leak into the Cloud MCP adapter.

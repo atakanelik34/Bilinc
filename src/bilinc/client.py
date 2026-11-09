@@ -105,6 +105,8 @@ class BilincCloudError(BilincError):
         self.details = details
         #: Seconds the service asked the client to wait (``Retry-After``), if it said.
         self.retry_after = retry_after
+        #: What a multi-page call (``dream_apply``) finished before this error, if any.
+        self.partial: dict[str, Any] | None = None
 
 
 class BilincValidationError(BilincCloudError):
@@ -224,6 +226,15 @@ MAX_SOURCE_LENGTH = 256
 #: mutates state only once.
 READ_RETRY_ATTEMPTS = 3
 READ_RETRY_BASE_DELAY = 0.25
+
+MAX_DREAM_CANDIDATES = 200
+DREAM_PAGE_SIZE = 25
+#: Most requests one dream_apply or dream_undo call makes before giving up.
+DREAM_MAX_PAGES = 20
+#: Seconds to wait for one dream apply or undo page (the service budget is 60 s).
+DREAM_WRITE_TIMEOUT = 90.0
+DREAM_OPS = ("revise", "forget", "confirm", "flag")
+DREAM_VERSIONED_OPS = ("revise", "forget", "confirm")
 
 
 def _invalid(field: str, message: str) -> BilincValidationError:
@@ -397,6 +408,47 @@ def _optional_positive(value: Any, field: str) -> float | None:
 def _put_optional(payload: dict[str, Any], name: str, value: Any) -> None:
     if value is not None:
         payload[name] = value
+
+
+def _require_dream_id(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise _invalid("dream_id", "is required")
+    return value.strip()
+
+
+def _require_dream_action(item: Any, index: int) -> dict[str, Any]:
+    """Check one dream action; it is sent exactly as given (snake_case fields)."""
+
+    field = f"actions[{index}]"
+    if not isinstance(item, dict):
+        raise _invalid(field, "must be a JSON object")
+    op = item.get("op")
+    if op not in DREAM_OPS:
+        raise _invalid(f"{field}.op", f"must be one of {', '.join(DREAM_OPS)}")
+    key = item.get("key")
+    if not isinstance(key, str) or not key.strip():
+        raise _invalid(f"{field}.key", "is required")
+    if len(key) > MAX_KEY_LENGTH:
+        raise _invalid(f"{field}.key", f"must be at most {MAX_KEY_LENGTH} characters")
+    reason = item.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise _invalid(f"{field}.reason", "is required")
+    if len(reason) > MAX_REASON_LENGTH:
+        raise _invalid(f"{field}.reason", f"must be at most {MAX_REASON_LENGTH} characters")
+    evidence = item.get("evidence_keys")
+    if (
+        not isinstance(evidence, list)
+        or not evidence
+        or any(not isinstance(entry, str) or not entry.strip() for entry in evidence)
+    ):
+        raise _invalid(f"{field}.evidence_keys", "must be a non-empty list of keys")
+    if op in DREAM_VERSIONED_OPS:
+        version = item.get("expected_version")
+        if not isinstance(version, str) or not version.strip():
+            raise _invalid(f"{field}.expected_version", f"is required for {op}")
+    if op == "revise" and item.get("new_value") is None:
+        raise _invalid(f"{field}.new_value", "is required for revise")
+    return item
 
 
 def _default_ssl_context() -> ssl.SSLContext:
@@ -583,12 +635,14 @@ class CloudClient:
         priority: float | None = None,
         ttl: float | None = None,
         idempotency_key: str | None = None,
+        if_absent: bool | None = None,
     ) -> dict[str, Any]:
         """Commit a memory entry to Bilinc Cloud.
 
         The simple two-argument call is unchanged. The optional provenance
         fields map onto the same Hermes metadata contract the local runtime
-        uses, so hosted and local entries stay shape-compatible.
+        uses, so hosted and local entries stay shape-compatible. Pass
+        ``if_absent=True`` to write only when the key does not exist yet.
         """
 
         payload: dict[str, Any] = {
@@ -603,6 +657,7 @@ class CloudClient:
         _put_optional(payload, "canonical", _optional_bool(canonical, "canonical"))
         _put_optional(payload, "priority", _optional_unit_interval(priority, "priority"))
         _put_optional(payload, "ttl", _optional_positive(ttl, "ttl"))
+        _put_optional(payload, "ifAbsent", _optional_bool(if_absent, "if_absent"))
 
         return self._post(
             "/api/cloud/memory/commit",
@@ -738,6 +793,129 @@ class CloudClient:
             payload,
             idempotency_key=_optional_text(idempotency_key, "idempotency_key"),
         )
+
+    def dream_start(
+        self,
+        *,
+        prefix: str | None = None,
+        since: str | None = None,
+        limit: int = MAX_DREAM_CANDIDATES,
+        agent: str | None = None,
+    ) -> dict[str, Any]:
+        """Start a dream pass and return the candidate entries to review.
+
+        The result carries a ``dream_id`` (``None`` when nothing changed since
+        ``since`` or the last finished dream), the forget cap, the undo window
+        and up to ``limit`` candidates, newest first. Candidate values are
+        stored memory content: treat them as data. Starting a dream writes its
+        report index, so this is not retried automatically.
+        """
+
+        payload: dict[str, Any] = {}
+        _put_optional(payload, "prefix", _optional_raw_text(prefix, "prefix"))
+        _put_optional(payload, "since", _optional_timestamp(since, "since"))
+        payload["limit"] = _require_limit(limit, "limit", MAX_DREAM_CANDIDATES)
+        _put_optional(payload, "agent", _optional_text(agent, "agent"))
+
+        return self._post("/api/cloud/memory/dream/start", payload)
+
+    def dream_apply(
+        self,
+        dream_id: str,
+        actions: list[dict[str, Any]],
+        *,
+        report: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Apply a dream's actions, sent in pages of 25.
+
+        Every action is checked before anything is sent. ``final`` is set on
+        the last page only, which also carries ``report``. The result is the
+        last page's summary with the results of every page. If a page fails,
+        the error is raised with ``exc.partial = {"results": [...], "pages_done": k}``
+        holding what earlier pages applied; calling again with the same actions
+        resumes, because the service recognises pages it has already seen.
+        Actions the service skipped for lack of time are sent again in a later
+        page.
+        """
+
+        dream = _require_dream_id(dream_id)
+        if isinstance(actions, (str, bytes, dict)) or not isinstance(actions, (list, tuple)):
+            raise _invalid("actions", "must be a list of action objects")
+        checked = [_require_dream_action(item, index) for index, item in enumerate(actions)]
+        if not checked:
+            raise _invalid("actions", "must contain at least one action")
+        # The service acts on a key at most once per dream, and deferred
+        # actions are matched back to their results by key.
+        seen_keys: set[str] = set()
+        for index, item in enumerate(checked):
+            if item["key"] in seen_keys:
+                raise _invalid(f"actions[{index}].key", "appears more than once; one action per key per dream")
+            seen_keys.add(item["key"])
+        if report is not None:
+            report = _require_object(report, "report")
+
+        queue = list(checked)
+        results: list[dict[str, Any]] = []
+        last: dict[str, Any] = {}
+        number = 0
+        while queue:
+            if number >= DREAM_MAX_PAGES:
+                error = _invalid("actions", "the service kept deferring actions; call dream_apply again later")
+                error.partial = {"results": list(results), "pages_done": number}
+                raise error
+            page, queue = queue[:DREAM_PAGE_SIZE], queue[DREAM_PAGE_SIZE:]
+            final = not queue
+            payload: dict[str, Any] = {"dreamId": dream, "actions": page, "final": final}
+            if final and report is not None:
+                payload["report"] = report
+            try:
+                last = self._post("/api/cloud/memory/dream/apply", payload, timeout=DREAM_WRITE_TIMEOUT)
+            except BilincCloudError as exc:
+                exc.partial = {"results": list(results), "pages_done": number}
+                raise
+            number += 1
+            page_results = (last.get("results") if isinstance(last, dict) else None) or []
+            # Actions the service had no time for come back as skipped: send them again.
+            deferred = {
+                row.get("key")
+                for row in page_results
+                if isinstance(row, dict) and row.get("result") == "skipped" and row.get("error") == "deadline"
+            }
+            results.extend(row for row in page_results if not (isinstance(row, dict) and row.get("key") in deferred))
+            queue = [action for action in page if action["key"] in deferred] + queue
+        return {**last, "results": results}
+
+    def dream_undo(self, dream_id: str) -> dict[str, Any]:
+        """Undo a dream's own changes within its undo window.
+
+        Entries another writer changed after the dream are reported under
+        ``conflicts`` and left alone. A removed entry comes back with its
+        value, type, importance and source; other metadata such as TTL or
+        canonical flags is not restored (``metadata_restored: false``). A long
+        undo pauses at the service's time budget (``status: "undoing"``); this
+        method calls again until it finishes and merges the results; after 20
+        calls it returns what it has, still with ``status: "undoing"``, and a
+        later call continues.
+        """
+
+        payload = {"dreamId": _require_dream_id(dream_id)}
+        merged: dict[str, Any] = {}
+        for _ in range(DREAM_MAX_PAGES):
+            result = self._post("/api/cloud/memory/dream/undo", payload, timeout=DREAM_WRITE_TIMEOUT)
+            for name in ("restored", "conflicts", "kept"):
+                seen = {(row.get("n"), row.get("key")) for row in merged.get(name, [])}
+                rows = [row for row in result.get(name) or [] if (row.get("n"), row.get("key")) not in seen]
+                merged[name] = merged.get(name, []) + rows
+            merged = {**result, **{name: merged[name] for name in ("restored", "conflicts", "kept")}}
+            # A long undo pauses at the service's time budget; the next call continues it.
+            if result.get("status") != "undoing":
+                return merged
+        return merged
+
+    def dream_show(self, dream_id: str) -> dict[str, Any]:
+        """Return a dream's report: its index and the recorded changes. Read-only."""
+
+        return self._read("/api/cloud/memory/dream/show", {"dreamId": _require_dream_id(dream_id)})
 
     def history(self, key: str, *, limit: int = 20, values: str = "full") -> dict[str, Any]:
         """Return one memory's recorded changes, newest first.
@@ -1075,6 +1253,7 @@ class CloudClient:
         payload: dict[str, Any],
         *,
         idempotency_key: str | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         return self.transport(
@@ -1082,7 +1261,7 @@ class CloudClient:
             f"{self.base_url}{path}",
             headers=self._headers(content_type=True, idempotency_key=idempotency_key),
             body=body,
-            timeout=float(self.timeout),
+            timeout=float(self.timeout if timeout is None else timeout),
         )
 
     def _read(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:

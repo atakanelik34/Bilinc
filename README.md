@@ -137,6 +137,9 @@ The config carries no key; the adapter reads the one `bilinc login` saved. On a 
 | `list_memories` | Browse what is stored. Free. |
 | `history` | One memory's changes, newest first. Free. |
 | `confirm` | Record that a memory is still accurate. One write. |
+| `dream_start` | Start a dream pass: the entries changed since the last one, for your agent to review. Stdio adapter; coming to the hosted connector. |
+| `dream_apply` | Apply the dream's merges, retirements, confirmations and flags. **Destructive**; undo with `dream_undo`. Stdio adapter; coming to the hosted connector. |
+| `dream_undo` | Undo a dream in one step, for 7 days. Stdio adapter; coming to the hosted connector. |
 
 The remote connector at `https://mcp.bilinc.space/mcp` has ten tools; a read-only connection lists only the four read tools. Client guides: [Claude Code](https://bilinc.space/docs/claude-code) · [Codex](https://bilinc.space/docs/codex) · [Cursor](https://bilinc.space/docs/cursor) · [any MCP client](https://bilinc.space/for/mcp).
 

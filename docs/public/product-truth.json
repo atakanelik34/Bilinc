@@ -43,10 +43,18 @@
       "rollback",
       "list_memories",
       "history",
-      "confirm"
+      "confirm",
+      "dream_start",
+      "dream_apply",
+      "dream_undo"
     ],
     "local_tools": [
       "export_wiki"
+    ],
+    "hosted_connector_pending": [
+      "dream_start",
+      "dream_apply",
+      "dream_undo"
     ]
   },
   "public_urls": {
