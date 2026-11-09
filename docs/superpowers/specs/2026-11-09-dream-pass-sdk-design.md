@@ -5,10 +5,11 @@ Status: design, 2026-11-09. The dream pass lets the user's own agent tidy its Bi
 ## Behaviour (hosted service, as seen by a client)
 
 - `dream_start` returns a dream id and up to 200 candidate entries changed since the last finished dream (first run: the last 7 days), newest first, each with value, type, importance, source, update time and version. Dream report entries (`bilinc:dream:*`) are never candidates.
-- `dream_apply` takes up to 25 actions per call: `{op: revise | forget | confirm | flag, key, expected_version, new_value?, merged_from?, reason, evidence_keys}` and returns a result per action: `applied`, `conflict` (the entry changed since it was read) or `error`. Before any change it records each action's prior state in a report: an index entry `bilinc:dream:<id>` plus one entry per change, `bilinc:dream:<id>:<n>`.
+- `dream_apply` takes up to 25 actions per call: `{op: revise | forget | confirm | flag, key, expected_version, new_value?, merged_from?, reason, evidence_keys}` and returns a result per action: `applied`, `conflict` (the entry changed since it was read) or `error`. Before any change it records each action's prior state in a report: an index entry `bilinc:dream:<id>` plus one write-once entry per change, `bilinc:dream:<id>:<n>`. Each key can be acted on once per dream.
 - Forget cap: at most 30% of the candidates and at most 20 per dream; a page that would exceed it is refused before any write (`forget_cap`).
 - `dream_undo` reverses the dream's own changes only. An entry another writer changed after the dream is reported as a conflict and left alone. Undoing a removed entry restores its value, type, importance and source; other metadata such as TTL or canonical flags is not restored, so an entry that had a TTL comes back without one (`metadata_restored: false`).
-- Undo window: 7 days. After that, the prior states are removed from the report and the dream can no longer be undone (`undo_window_expired`).
+- Undo window: 7 days. After that the dream can no longer be undone (`undo_window_expired`), and the next `dream_start` removes the stored prior states from the report (purged from history and checkpoints where the service supports purge; otherwise removed from reads and kept in the audit trail).
+- Report entries (`bilinc:dream:*`) can only be written by the dream pass itself; ordinary commit and revise calls refuse them, and reasons starting `dream:` are reserved.
 - Every applied action, report write and undo write is a normal metered write.
 - Local-only (`bilinc.db`) memory has no dream pass in this version.
 
@@ -16,7 +17,7 @@ Status: design, 2026-11-09. The dream pass lets the user's own agent tidy its Bi
 
 - `CloudClient.commit(..., if_absent: bool | None = None)`: sends `ifAbsent: true` only when set; the existing call shape is unchanged.
 - `CloudClient.dream_start(*, prefix=None, since=None, limit=200, agent=None)` → `POST /api/cloud/memory/dream/start`.
-- `CloudClient.dream_apply(dream_id, actions, *, report=None)` → `POST /api/cloud/memory/dream/apply`, split into pages of 25 with `final: true` on the last page only. It stops at the first page that fails and raises that error with the results gathered so far attached (`exc.partial`). Each page carries a stable idempotency key derived from the dream id and page number, so a retried call replays instead of writing twice.
+- `CloudClient.dream_apply(dream_id, actions, *, report=None)` → `POST /api/cloud/memory/dream/apply`, split into pages of 25 with `final: true` on the last page only. It stops at the first page that fails and raises that error with the results gathered so far attached (`exc.partial`). Retrying the same call is safe: the service recognises a page it has already seen (same actions) and resumes it instead of writing twice. Dream routes take no client idempotency key.
 - `CloudClient.dream_undo(dream_id)` → `POST /api/cloud/memory/dream/undo`.
 - `CloudClient.dream_show(dream_id)` → `POST /api/cloud/memory/dream/show` (free read).
 - Validation mirrors the server limits (key length, ≤25 is handled by splitting, op names, required `expected_version`, `reason`, `evidence_keys`), raising `BilincValidationError` before any request.
@@ -39,7 +40,7 @@ Status: design, 2026-11-09. The dream pass lets the user's own agent tidy its Bi
 
 - `commit(if_absent=True)` sends `ifAbsent`; default payload unchanged.
 - Each dream method hits its route with the documented payload.
-- 60 actions → pages of 25/25/10, `final` only on the last, stable per-page idempotency keys; a failing second page stops and exposes the first page's results.
+- 60 actions → pages of 25/25/10, `final` only on the last; a failing second page stops and exposes the first page's results.
 - CLI: start/apply (file and stdin)/undo/show output and exit codes; `metadata not restored` shown for restored forgets.
 - MCP: registered tools equal `CLOUD_MCP_TOOLS | LOCAL_MCP_TOOLS`; dream tool annotations and schemas.
 - Truth contract: `product-truth.json` tool list equals `CLOUD_MCP_TOOLS`.
