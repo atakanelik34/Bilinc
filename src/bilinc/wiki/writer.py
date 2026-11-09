@@ -122,11 +122,17 @@ def write_tree(
         created_target = True
 
     temp = target / TMP_NAME
+    made_temp = False
     try:
-        _build_in_temp(temp, files, wanted, previous_exists=previous is not None)
+        _clear_old_temp(temp, previous_exists=previous is not None)
+        os.mkdir(temp, DIR_MODE)
+        made_temp = True
+        _fill_temp(temp, files, wanted)
         renamed = _check_paths(target, wanted, owned)
     except BaseException as exc:
-        _discard_temp(temp)
+        # Only remove a temp folder this run created; a refused one stays for the user.
+        if made_temp:
+            _discard_temp(temp)
         if created_target:
             with contextlib.suppress(OSError):
                 target.rmdir()
@@ -154,14 +160,16 @@ def write_tree(
     return result
 
 
-def _build_in_temp(temp: Path, files: dict[str, str], wanted: list[str], *, previous_exists: bool) -> None:
+def _clear_old_temp(temp: Path, *, previous_exists: bool) -> None:
     if os.path.lexists(temp):
         if temp.is_symlink() or not temp.is_dir():
             raise WikiRefused(f"{temp} is not a folder this tool made; remove it and run again")
         if not previous_exists:
             raise WikiRefused(f"{temp} was left by an interrupted export; remove it and run again")
         shutil.rmtree(temp)
-    os.mkdir(temp, DIR_MODE)
+
+
+def _fill_temp(temp: Path, files: dict[str, str], wanted: list[str]) -> None:
     for rel in wanted:
         path = temp / rel
         for parent in reversed(path.relative_to(temp).parents[:-1]):

@@ -23,6 +23,22 @@ BASE_URL = "https://bilinc.space"
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX permissions and symlinks")
 
 
+def _case_insensitive_fs(path: Path) -> bool:
+    probe = path / "CaseProbe"
+    probe.write_text("")
+    try:
+        return (path / "caseprobe").exists()
+    finally:
+        probe.unlink()
+
+
+@pytest.fixture()
+def case_sensitive_fs(tmp_path):
+    """These tests build case twins on disk, which only a case-sensitive folder can hold."""
+    if _case_insensitive_fs(tmp_path):
+        pytest.skip("needs a case-sensitive file system (CI runs on Linux)")
+
+
 def manifest_for(complete, files):
     return build_manifest(
         version="2.7.0",
@@ -506,7 +522,7 @@ def test_final_chmod_failure_is_a_clean_error(tmp_path, monkeypatch):
         write_tree(tmp_path, FILES, previous=None, manifest_for=manifest_for)
 
 
-def test_case_only_rename_on_a_case_insensitive_folder_is_not_refused(tmp_path):
+def test_case_only_rename_on_a_case_insensitive_folder_is_not_refused(tmp_path, case_sensitive_fs):
     # A hard link stands in for a case-insensitive file system: "foo.md" and the
     # owned "Foo.md" are the same directory entry.
     first_run(tmp_path, {**FILES, "Foo.md": "old\n"})
@@ -520,7 +536,7 @@ def test_case_only_rename_on_a_case_insensitive_folder_is_not_refused(tmp_path):
     assert read_manifest_json(tmp_path)["files"] == sorted({**FILES, "foo.md": ""})
 
 
-def test_case_twin_that_is_a_different_file_is_still_refused(tmp_path):
+def test_case_twin_that_is_a_different_file_is_still_refused(tmp_path, case_sensitive_fs):
     first_run(tmp_path, {**FILES, "Foo.md": "old\n"})
     (tmp_path / "foo.md").write_text("the user's own file")
     previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
@@ -583,7 +599,7 @@ def test_case_rename_on_a_case_insensitive_folder_keeps_the_new_page(tmp_path, c
     assert result.removed == []
 
 
-def test_case_rename_on_a_case_sensitive_folder_removes_the_old_spelling(tmp_path):
+def test_case_rename_on_a_case_sensitive_folder_removes_the_old_spelling(tmp_path, case_sensitive_fs):
     first_run(tmp_path, {"Foo.md": "old\n"})
     previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
 
@@ -591,3 +607,20 @@ def test_case_rename_on_a_case_sensitive_folder_removes_the_old_spelling(tmp_pat
 
     assert result.removed == ["Foo.md"]
     assert sorted(name for name in os.listdir(tmp_path) if name.endswith(".md")) == ["foo.md"]
+
+
+def test_refused_leftover_temp_folder_is_left_in_place(tmp_path):
+    # A temp folder that appears after inspect_target (or that a previous,
+    # interrupted run left behind) is refused, and the refusal must not delete it.
+    target = tmp_path / "wiki"
+    target.mkdir()
+    leftover = target / TMP_NAME
+    leftover.mkdir()
+    (leftover / "keep.md").write_text("not ours to delete")
+
+    with pytest.raises(WikiRefused, match=r"interrupted export"):
+        write_tree(target, {"a.md": "page a\n"}, previous=None, manifest_for=manifest_for)
+
+    assert (leftover / "keep.md").read_text() == "not ours to delete"
+    assert not (target / "a.md").exists()
+    assert not (target / MANIFEST_NAME).exists()
