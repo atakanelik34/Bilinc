@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import stat
 import sys
 import tempfile
@@ -24,6 +25,9 @@ from urllib.parse import urlsplit
 import bilinc
 from bilinc.client import CloudClient, error_for_response
 from bilinc.wiki import WikiRefused, export_wiki
+
+# A throwaway key per run, as in verify_cloud_lifecycle_smoke.py; the fake transport never checks it.
+API_KEY = f"bil_live_{secrets.token_hex(8)}"
 
 FIRST = datetime(2026, 11, 9, 1, 0, 0, tzinfo=timezone.utc)
 SECOND = datetime(2026, 11, 9, 2, 30, 0, tzinfo=timezone.utc)
@@ -116,7 +120,7 @@ class FakeCloud:
 
 
 def run(target: Path, clock: datetime):
-    client = CloudClient(api_key="bil_live_example", transport=FakeCloud(synthetic_entries()))
+    client = CloudClient(api_key=API_KEY, transport=FakeCloud(synthetic_entries()))
     return export_wiki(client, target, clock=lambda: clock, sleep=lambda seconds: None)
 
 
