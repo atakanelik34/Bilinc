@@ -116,7 +116,7 @@ class FakeCloud:
 
 
 def run(target: Path, clock: datetime):
-    client = CloudClient(api_key="bil_live_smoke", transport=FakeCloud(synthetic_entries()))
+    client = CloudClient(api_key="bil_live_example", transport=FakeCloud(synthetic_entries()))
     return export_wiki(client, target, clock=lambda: clock, sleep=lambda seconds: None)
 
 

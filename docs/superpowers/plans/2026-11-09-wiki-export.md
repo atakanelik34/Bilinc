@@ -88,7 +88,7 @@ def test_read_retry_attempts_one_makes_a_single_call(monkeypatch):
     # dataclasses.replace(client, read_retry_attempts=1).history("k") → 1 transport call, no sleep
 
 def test_read_retry_attempts_must_be_positive():
-    # CloudClient(api_key="bil_live_x", read_retry_attempts=0) raises BilincValidationError
+    # CloudClient(api_key="bil_live_example", read_retry_attempts=0) raises BilincValidationError
 
 def test_error_for_response_keeps_positional_signature():
     # error_for_response(429, {"error": "rate_limited"}).retry_after is None
