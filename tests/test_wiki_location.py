@@ -325,3 +325,58 @@ def test_windows_roots_include_app_data(monkeypatch):
     roots = location.WINDOWS_ROOTS()
     assert r"C:\Users\u\AppData\Roaming" in roots and r"C:\Users\u\AppData\Local" in roots
     assert r"C:\ProgramData" in roots
+
+
+# --- review round 2 ------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX ownership")
+def test_mcp_refuses_an_existing_folder_under_an_ancestor_others_can_write(env):
+    open_parent = env.home / "Documents" / "ww"
+    (open_parent / "existing").mkdir(parents=True)
+    os.chmod(open_parent, 0o777)
+    assert "others can write" in env.refused(open_parent / "existing")
+    assert "others can write" in env.refused(open_parent / "existing" / "deeper")
+    os.chmod(open_parent, 0o1777)
+    assert env.check(open_parent / "existing") == (open_parent / "existing").resolve()
+
+
+@pytest.mark.parametrize("temp", ["/usr/share/x", "/srv/app", "/opt/tmp", "/home/someone/tmp"])
+def test_temp_carve_out_is_limited_to_real_temp_locations(env, temp):
+    assert location._narrow_temps((temp,), home=env.home, roots=("/usr", "/srv", "/opt")) == ()
+
+
+@pytest.mark.parametrize("temp", ["/tmp", "/private/tmp", "/var/folders/ab/cd/T", "/private/var/folders/ab/cd/T"])
+def test_temp_carve_out_keeps_the_usual_temp_locations(temp):
+    # A home outside /tmp, as on a real machine (the test home lives under tmp_path).
+    assert location._narrow_temps((temp,), home=Path("/home/nobody-wiki-test"), roots=("/usr",)) == (temp,)
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX groups")
+def test_mcp_refuses_group_write_when_the_group_is_shared(env, monkeypatch):
+    target = env.home / "Documents" / "grouped"
+    target.mkdir()
+    os.chmod(target, 0o770)
+    monkeypatch.setattr(location, "_private_group", lambda gid: False)
+    assert "group others share" in env.refused(target)
+    monkeypatch.setattr(location, "_private_group", lambda gid: True)
+    assert env.check(target) == target.resolve()
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX groups")
+def test_private_group_means_our_group_with_no_other_members(monkeypatch):
+    import grp
+    import pwd
+    from types import SimpleNamespace
+
+    me = pwd.getpwuid(os.geteuid()).pw_name
+    gid = os.getegid()
+    monkeypatch.setattr(grp, "getgrgid", lambda g: SimpleNamespace(gr_mem=[me]))
+    monkeypatch.setattr(pwd, "getpwall", lambda: [SimpleNamespace(pw_name=me, pw_gid=gid)])
+    assert location._private_group(gid) is True
+    assert location._private_group(gid + 1) is False
+    monkeypatch.setattr(grp, "getgrgid", lambda g: SimpleNamespace(gr_mem=[me, "other"]))
+    assert location._private_group(gid) is False
+    monkeypatch.setattr(grp, "getgrgid", lambda g: SimpleNamespace(gr_mem=[]))
+    monkeypatch.setattr(pwd, "getpwall", lambda: [SimpleNamespace(pw_name="other", pw_gid=gid)])
+    assert location._private_group(gid) is False

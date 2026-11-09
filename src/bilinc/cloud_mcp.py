@@ -438,6 +438,7 @@ def build_server():
                 prefix=prefix,
                 wikilinks=wikilinks,
                 refresh_history=refresh_history,
+                require_owned=True,
             )
         )
         return {

@@ -112,11 +112,12 @@ def check_mcp_target(
 def _ownership_refusal(resolved: Path) -> str | None:
     """Refuse a folder another local user could swap out from under the export (POSIX).
 
-    An existing target must be ours and not world-writable. A new one is
-    created in its parent, which must not be world-writable unless it has the
-    sticky bit (as ``/tmp`` does), where nobody else can rename our folder.
-    Group write is left alone: with a umask of 002 and a group per user it is
-    the normal state of a user's own folders.
+    Every existing folder from the target up to the root must not be
+    world-writable unless it has the sticky bit (as ``/tmp`` does), where
+    nobody else can rename what is inside. An existing target must be ours,
+    not world-writable, and group-writable only for a group nobody else is in
+    (with a umask of 002 and a group per user that is the normal state of a
+    user's own folders).
     """
 
     if not hasattr(os, "geteuid"):
@@ -124,37 +125,67 @@ def _ownership_refusal(resolved: Path) -> str | None:
     try:
         info = os.stat(resolved)
     except FileNotFoundError:
-        try:
-            parent = os.stat(resolved.parent)
-        except OSError:
-            return None  # the writer refuses a missing parent
-        if parent.st_mode & 0o002 and not parent.st_mode & stat.S_ISVTX:
-            return "would be created in a folder others can write; choose a folder of your own"
-        return None
+        info = None
     except OSError:
+        return None
+    for ancestor in _chain(resolved.parent):
+        try:
+            mode = os.stat(ancestor).st_mode
+        except OSError:
+            continue
+        if mode & 0o002 and not mode & stat.S_ISVTX:
+            return f"sits in {ancestor}, a folder others can write; choose a folder of your own"
+    if info is None:
         return None
     if info.st_uid != os.geteuid():
         return "belongs to another user; choose a folder of your own"
     if info.st_mode & 0o002:
         return "is a folder others can write; choose a folder of your own"
+    if info.st_mode & 0o020 and not _private_group(info.st_gid):
+        return "is writable by a group others share; choose a folder of your own"
     return None
 
 
-def _narrow_temps(temps: tuple[str, ...], *, home: Path, roots: tuple[str, ...]) -> tuple[str, ...]:
-    """Drop temp folders too broad to lift the system-folder rule.
+def _private_group(gid: int) -> bool:
+    """True when ``gid`` is our group and no other account belongs to it."""
 
-    ``tempfile.gettempdir()`` follows ``TMPDIR``, which could name ``/`` or a
-    system folder. A temp folder is kept when it is ``/tmp`` or
-    ``/private/tmp``, or sits at least two levels below its drive root, and in
-    either case is neither home, an ancestor of home, nor a refused root or one
-    of its ancestors.
+    import grp
+    import pwd
+
+    if gid != os.getegid():
+        return False
+    me = pwd.getpwuid(os.geteuid()).pw_name
+    try:
+        members = set(grp.getgrgid(gid).gr_mem)
+    except KeyError:
+        return False
+    if members - {me}:
+        return False
+    return all(entry.pw_name == me for entry in pwd.getpwall() if entry.pw_gid == gid)
+
+
+#: Where a system temp folder may live for the carve-out to apply.
+TEMP_BASES = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
+
+
+def _narrow_temps(temps: tuple[str, ...], *, home: Path, roots: tuple[str, ...]) -> tuple[str, ...]:
+    """Keep only temp folders that are real temp locations.
+
+    ``tempfile.gettempdir()`` follows ``TMPDIR``, which could name ``/``, a
+    system folder or a folder inside one. A temp folder is kept when it sits
+    in ``/tmp``, ``/private/tmp``, macOS's ``/var/folders`` (or, on Windows,
+    ``%LOCALAPPDATA%\\Temp``), and is neither home, an ancestor of home, nor a
+    refused root or one of its ancestors.
     """
 
+    bases = [Path(base) for base in TEMP_BASES]
+    if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        bases.append(Path(os.environ["LOCALAPPDATA"]) / "Temp")
     kept = []
     for temp in temps:
         path = Path(os.path.realpath(temp))
-        literal = os.path.normpath(temp) in ("/tmp", "/private/tmp")
-        if not literal and len(path.parts) < 3:
+        literal = Path(os.path.normpath(temp))
+        if not any(candidate == base or base in candidate.parents for base in bases for candidate in (path, literal)):
             continue
         if _under(home, path) is not None:
             continue

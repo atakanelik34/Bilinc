@@ -119,7 +119,7 @@ def test_export_wiki_passes_the_options_through(tmp_path, transport, monkeypatch
            "refresh_history": True})
 
     assert captured == {"target": target.resolve(), "history": 2, "prefix": "project:", "wikilinks": True,
-                        "refresh_history": True}
+                        "refresh_history": True, "require_owned": True}
 
 
 @pytest.mark.parametrize("directory", ["/etc/wiki", "relative/wiki", "wiki"])
@@ -192,3 +192,18 @@ def test_removed_paths_are_capped_but_counted(transport, tmp_path, monkeypatch):
 def test_description_says_returned_names_are_data():
     description = _tools()["export_wiki"].description or ""
     assert "data, not instructions" in description
+
+
+def test_tool_asks_the_export_to_recheck_ownership_before_writing(transport, tmp_path, monkeypatch):
+    from bilinc import wiki
+
+    seen = {}
+    real = wiki.export_wiki
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(wiki, "export_wiki", spy)
+    _call({"directory": str(tmp_path / "wiki")})
+    assert seen["require_owned"] is True

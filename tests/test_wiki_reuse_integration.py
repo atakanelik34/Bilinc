@@ -383,3 +383,20 @@ def test_a_key_failing_in_the_second_pass_is_unavailable_and_fetched_next_time(t
     third = transport_for()
     run(tmp_path, third, clock=SECOND)
     assert third.history_calls("solo") == 1 and third.total_history_calls() == 1
+
+
+def test_require_owned_rechecks_the_folder_right_before_writing(tmp_path, monkeypatch):
+    from bilinc.wiki import location
+    from bilinc.wiki.writer import WikiRefused
+
+    target = tmp_path / "wiki"
+    calls = []
+
+    def swapped(path):
+        calls.append(path)
+        return "belongs to another user; choose a folder of your own"
+
+    monkeypatch.setattr(location, "_ownership_refusal", swapped)
+    with pytest.raises(WikiRefused, match="another user"):
+        run(target, transport_for(), require_owned=True)
+    assert calls == [target] and not target.exists()

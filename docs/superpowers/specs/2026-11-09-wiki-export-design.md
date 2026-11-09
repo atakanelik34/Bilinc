@@ -641,15 +641,18 @@ is pinned as:
    - `~/Library` and everything inside it, except `~/Library/Mobile
      Documents` and `~/Library/CloudStorage` (user document locations; the
      cloud warning applies).
-5. Ownership (POSIX, review round 1): an existing target must belong to the
-   current user and not be world-writable; a new target's parent must not be
-   world-writable unless it has the sticky bit (as `/tmp` does). Otherwise
-   another local user could pre-create the folder, or swap a subfolder for a
-   symlink between the checks and the writes. Group write is allowed: with
-   umask 002 and a group per user it is the normal state of a user's own
-   folders. Path-based writes are not yet done through directory file
-   descriptors; with these ownership rules no other user can change the
-   folder under the export.
+5. Ownership (POSIX, review rounds 1 and 2): every existing folder from the
+   target up to the root must not be world-writable unless it has the sticky
+   bit (as `/tmp` does); an existing target must belong to the current user,
+   not be world-writable, and be group-writable only for a group no other
+   account is in (umask 002 with a group per user is normal). Otherwise
+   another local user could pre-create the folder or swap it for a symlink
+   between the checks and the writes. The MCP tool runs the export with
+   `require_owned=True`, which repeats this check right before the first
+   write, since the history phase can take minutes. The temp carve-out only
+   applies to a temp folder in `/tmp`, `/private/tmp`, `/var/folders` (or
+   `%LOCALAPPDATA%\Temp` on Windows). Writes are not yet done through
+   directory file descriptors; that stays on the backlog.
 6. Then the normal export runs with its own guards (non-empty folder without
    a manifest is refused, and so on), so the MCP path never writes anywhere
    the CLI would not.

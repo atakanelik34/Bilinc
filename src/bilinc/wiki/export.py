@@ -14,6 +14,7 @@ from bilinc import __version__
 from bilinc.client import MAX_HISTORY_LIMIT, CloudClient
 from bilinc.wiki.fetch import HistoryAbort, fetch_entries, fetch_histories, fetch_marker
 from bilinc.wiki.links import find_links
+from bilinc.wiki import location
 from bilinc.wiki.location import cloud_sync_warning
 from bilinc.wiki.manifest import HISTORY_FORMAT, build_manifest
 from bilinc.wiki.paths import build_paths
@@ -26,7 +27,7 @@ from bilinc.wiki.render import (
     render_page,
 )
 from bilinc.wiki.reuse import history_body, history_digest, read_previous_body, reusable_keys
-from bilinc.wiki.writer import inspect_target, write_tree
+from bilinc.wiki.writer import WikiRefused, inspect_target, write_tree
 
 DEFAULT_HISTORY = 5
 MARKER_UNREADABLE = "note: history reuse is off for this run (the rollback marker could not be read)"
@@ -101,6 +102,7 @@ def export_wiki(
     prefix: str | None = None,
     wikilinks: bool = False,
     refresh_history: bool = False,
+    require_owned: bool = False,
     home: Path | None = None,
     clock: Callable[[], datetime] | None = None,
     sleep: Callable[[float], None] | None = None,
@@ -112,7 +114,9 @@ def export_wiki(
     each key's last ``history`` changes) has been read. A key's history block
     is taken from the previous export instead of fetched when the key and the
     rollback marker are unchanged (see :mod:`bilinc.wiki.reuse`), unless
-    ``refresh_history`` is set. ``sleep`` replaces the retry wait in tests;
+    ``refresh_history`` is set. ``require_owned`` (the MCP tool) checks again,
+    right before writing, that no other local user owns or can swap the
+    folder, since minutes may pass after the first check. ``sleep`` replaces the retry wait in tests;
     without it, waits can be cut short by Ctrl-C.
     """
 
@@ -204,6 +208,10 @@ def export_wiki(
             history_marker=start,
         )
 
+    if require_owned:
+        reason = location._ownership_refusal(target)
+        if reason:
+            raise WikiRefused(f"{target} {reason}")
     written = write_tree(target, files, previous=previous, manifest_for=manifest_for)
     unavailable = sorted(key for key, value in (histories or {}).items() if value is HISTORY_UNAVAILABLE)
     return ExportResult(
