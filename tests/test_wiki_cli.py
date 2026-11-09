@@ -42,6 +42,7 @@ def test_wiki_help_renders(capsys):
     out = capsys.readouterr().out
     assert caught.value.code == 0
     assert "--history" in out and "--prefix" in out and "Obsidian-compatible" in out
+    assert "--wikilinks" in out and "--refresh-history" in out
 
 
 @pytest.mark.parametrize("bad", ["101", "-1", "x", "1.5"])
@@ -61,7 +62,9 @@ def test_wiki_success_prints_one_summary_line_on_stdout(cli, tmp_path, capsys):
     assert cli.main(["wiki", str(target)]) == 0
 
     captured = capsys.readouterr()
-    assert captured.out == f"Wrote {len(ENTRIES)} pages to {target} (removed 0 stale files)\n"
+    assert captured.out == (
+        f"Wrote {len(ENTRIES)} pages to {target} (removed 0 stale files; history: {len(ENTRIES)} fetched, 0 reused)\n"
+    )
     assert captured.err == ""
     assert (target / "index.md").is_file()
 
@@ -147,3 +150,46 @@ def test_wiki_raw_network_error_on_list_is_a_clean_error(cli, tmp_path, capsys):
 
     err = capsys.readouterr().err
     assert "bilinc: error:" in err and "timed out" in err and "Traceback" not in err
+
+
+def test_wiki_rerun_reports_reused_history(cli, tmp_path, capsys):
+    target = tmp_path / "wiki"
+    assert cli.main(["wiki", str(target)]) == 0
+    cli.state["transport"] = transport_for()
+    capsys.readouterr()
+
+    assert cli.main(["wiki", str(target)]) == 0
+
+    out = capsys.readouterr().out
+    assert out.endswith(f"history: 0 fetched, {len(ENTRIES)} reused)\n")
+    assert cli.state["transport"].total_history_calls() == 0
+
+
+def test_wiki_refresh_history_fetches_again(cli, tmp_path, capsys):
+    target = tmp_path / "wiki"
+    assert cli.main(["wiki", str(target)]) == 0
+    cli.state["transport"] = transport_for()
+
+    assert cli.main(["wiki", str(target), "--refresh-history"]) == 0
+
+    assert cli.state["transport"].total_history_calls() == len(ENTRIES)
+    assert cli.state["transport"].marker_calls() == 0
+
+
+def test_wiki_wikilinks_flag_writes_wikilinks(cli, tmp_path):
+    target = tmp_path / "wiki"
+    assert cli.main(["wiki", str(target), "--wikilinks"]) == 0
+    assert "[[./plan.md|project:bilinc:plan]]" in (target / "project" / "bilinc" / "release.md").read_text()
+
+
+def test_wiki_warnings_go_to_stderr_and_stdout_keeps_one_line(cli, tmp_path, capsys, monkeypatch):
+    home = tmp_path / "home"
+    target = home / "Dropbox" / "wiki"
+    target.parent.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    assert cli.main(["wiki", str(target)]) == 0
+
+    captured = capsys.readouterr()
+    assert "cloud-synced folder (Dropbox)" in captured.err
+    assert captured.out.count("\n") == 1 and captured.out.startswith("Wrote ")

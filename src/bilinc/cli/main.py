@@ -34,7 +34,7 @@ from bilinc.client import (
     save_config_api_key,
 )
 from bilinc.cli.login import LoginError, device_login, is_headless, loopback_login
-from bilinc.wiki import WikiExportError, export_wiki
+from bilinc.wiki import WikiExportError, export_wiki, summary_line
 
 
 def _parse_value(value: str) -> Any:
@@ -201,6 +201,8 @@ def _run_wiki(client: CloudClient, args: argparse.Namespace) -> int:
             args.dir,
             history=args.history,
             prefix=args.prefix,
+            wikilinks=args.wikilinks,
+            refresh_history=args.refresh_history,
             progress=progress if sys.stderr.isatty() else None,
         )
     except KeyboardInterrupt:
@@ -222,6 +224,8 @@ def _run_wiki(client: CloudClient, args: argparse.Namespace) -> int:
         return 1
     if counted:
         print(file=sys.stderr)
+    for line in result.warnings:
+        print(line, file=sys.stderr)
     if result.history_unavailable:
         count = len(result.history_unavailable)
         print(
@@ -235,7 +239,7 @@ def _run_wiki(client: CloudClient, args: argparse.Namespace) -> int:
             f"is no longer a real folder: {_name_some(result.skipped)}",
             file=sys.stderr,
         )
-    print(f"Wrote {result.pages} pages to {args.dir} (removed {len(result.removed)} stale files)")
+    print(summary_line(result, args.dir))
     return 0
 
 
@@ -416,6 +420,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Recorded changes per page, newest first (0-{MAX_HISTORY_LIMIT}, default 5; 0 skips history)",
     )
     wiki.add_argument("--prefix", help="Only keys starting with this text")
+    wiki.add_argument(
+        "--wikilinks",
+        action="store_true",
+        help="Write [[...]] links (Obsidian style) instead of standard Markdown links",
+    )
+    wiki.add_argument(
+        "--refresh-history",
+        action="store_true",
+        help="Fetch every page's history again; by default history is reused only when "
+        "nothing changed since the last export",
+    )
 
     snapshot = sub.add_parser("snapshot", help="Create or list project checkpoints")
     snapshot.add_argument("action", choices=["create", "list"], nargs="?", default="create")
