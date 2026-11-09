@@ -145,10 +145,13 @@ def write_tree(
         # Own every path this run may leave behind before the first move, so a
         # crash halfway never strands files the next run would treat as the user's.
         _write_manifest(target, manifest_for(False, sorted(owned | set(wanted))))
+        listings: dict[Path, list[str]] = {}
+        parked: list[int] = []
         for rel in wanted:
             _ensure_folders(target, rel)
             source = temp / rel
             os.chmod(source, FILE_MODE)
+            _fix_spelling(target, temp, rel, listings, parked)
             os.replace(source, target / rel)
             result.written += 1
         _remove_stale(target, sorted(owned - set(wanted) - renamed), wanted, result)
@@ -226,6 +229,41 @@ def _ensure_folders(target: Path, rel: str) -> None:
         if _lstat(current) is None:
             os.mkdir(current, DIR_MODE)
         os.chmod(current, DIR_MODE)
+
+
+def _fix_spelling(target: Path, temp: Path, rel: str, listings: dict[Path, list[str]], parked: list[int]) -> None:
+    """On a case-insensitive folder, move an owned entry with another spelling out of the way first.
+
+    ``os.replace`` onto such an entry keeps its old spelling. ``_check_paths``
+    has already refused any entry at ``rel`` that is not ours, so whatever sits
+    there now is a page this tool wrote. It is parked under
+    ``.bilinc-wiki.tmp/.old/`` (no key maps to a leading-dot folder) and removed
+    with the temp folder; the interim manifest already owns ``rel``, so a crash
+    here only costs that page until the next run. Folder spellings are left alone.
+    """
+
+    path = target / rel
+    info = _lstat(path)
+    if info is None:
+        return
+    parent, name = path.parent, path.name
+    if parent not in listings:
+        listings[parent] = os.listdir(parent)
+    listing = listings[parent]
+    if name in listing:
+        return
+    on_disk = next((entry for entry in listing if _fold(entry) == _fold(name)), None)
+    # NFC-equal names are the same spelling (HFS+ stores NFD); renaming them would only churn.
+    if on_disk is None or unicodedata.normalize("NFC", on_disk) == unicodedata.normalize("NFC", name):
+        return
+    if not _same_entry(parent / on_disk, info):
+        return
+    old = temp / ".old"
+    if not parked:
+        os.mkdir(old, DIR_MODE)
+    parked.append(len(parked))
+    os.rename(parent / on_disk, old / str(parked[-1]))
+    listing.remove(on_disk)
 
 
 def _remove_stale(target: Path, stale: list[str], wanted: list[str], result: WriteResult) -> None:
