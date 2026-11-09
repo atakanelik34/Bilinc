@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 import time
 
@@ -22,8 +24,10 @@ from bilinc.wiki.fetch import (
     RETRY_AFTER_CAP,
     HistoryAbort,
     HistoryCancelled,
+    MARKER_KEY,
     fetch_entries,
     fetch_histories,
+    fetch_marker,
 )
 from bilinc.wiki.render import HISTORY_UNAVAILABLE
 from tests.wiki_fakes import (
@@ -356,3 +360,85 @@ def test_stop_wait_used_instead_of_sleep():
     out = fetch_histories(make_client(transport), ["k"], limit=5, sleep=no_sleep, stop=stop)
     assert waits == [1.0]
     assert out["k"] == ok("k")
+
+
+# --- rollback marker --------------------------------------------------------------
+
+
+def _no_sleep(seconds):
+    raise AssertionError(f"unexpected wait of {seconds}s")
+
+
+def _hash(entries, truncated):
+    text = json.dumps({"entries": entries, "truncated": truncated}, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+ROWS = [{"op": "rollback", "at": 1762600000.5, "reason": "undo", "source": None}]
+
+
+def test_marker_hashes_entries_and_truncated_and_ignores_exists():
+    a = fetch_marker(
+        make_client(RoutedTransport(marker=[{"exists": False, "entries": ROWS, "truncated": True}])), sleep=_no_sleep
+    )
+    b = fetch_marker(
+        make_client(RoutedTransport(marker=[{"exists": True, "entries": ROWS, "truncated": True}])), sleep=_no_sleep
+    )
+    assert a == b == _hash(ROWS, True)
+
+
+def test_marker_changes_with_a_new_rollback_entry():
+    before = fetch_marker(make_client(RoutedTransport()), sleep=_no_sleep)
+    after = fetch_marker(
+        make_client(RoutedTransport(marker=[{"entries": ROWS, "truncated": False}])), sleep=_no_sleep
+    )
+    assert before == _hash([], False) and after == _hash(ROWS, False) and before != after
+
+
+def test_marker_request_shape_and_counting():
+    transport = RoutedTransport()
+    fetch_marker(make_client(transport), sleep=_no_sleep)
+    assert MARKER_KEY == "__system"
+    assert transport.history_bodies() == [{"key": "__system", "limit": 1, "values": "none"}]
+    assert transport.marker_calls() == 1 and transport.total_history_calls() == 0
+    assert transport.order == [("history", "__system", "none")]
+
+
+def test_marker_retries_then_gives_none():
+    sleeps = []
+    transport = RoutedTransport(marker=[unavailable()])
+    assert fetch_marker(make_client(transport), sleep=sleeps.append) is None
+    assert transport.marker_calls() == MAX_RETRIES + 1
+    assert sleeps == list(BACKOFF)
+
+
+def test_marker_honours_retry_after_then_succeeds():
+    sleeps = []
+    transport = RoutedTransport(marker=[rate_limited(retry_after=2), {"entries": ROWS, "truncated": False}])
+    assert fetch_marker(make_client(transport), sleep=sleeps.append) == _hash(ROWS, False)
+    assert sleeps == [2.0]
+
+
+@pytest.mark.parametrize("error", [auth_error, entitlement_error, payment_required])
+def test_marker_fatal_error_aborts(error):
+    with pytest.raises(HistoryAbort):
+        fetch_marker(make_client(RoutedTransport(marker=[error()])), sleep=_no_sleep)
+
+
+@pytest.mark.parametrize("answer", [{"entries": "x"}, {"truncated": False}, ["not", "a", "dict"]])
+def test_marker_with_an_unusable_answer_gives_none(answer):
+    assert fetch_marker(make_client(RoutedTransport(marker=[answer])), sleep=_no_sleep) is None
+
+
+def test_marker_wait_is_cut_short_by_stop():
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(HistoryCancelled):
+        fetch_marker(make_client(RoutedTransport(marker=[unavailable()])), sleep=_no_sleep, stop=stop)
+
+
+def test_a_user_key_named_system_is_a_normal_history_call():
+    transport = RoutedTransport(history={"__system": [{"key": "__system", "entries": []}]})
+    result = fetch_histories(make_client(transport), ["__system"], limit=5, sleep=_no_sleep)
+    assert result["__system"] == {"key": "__system", "entries": []}
+    assert transport.history_calls("__system") == 1 and transport.marker_calls() == 0

@@ -9,6 +9,7 @@ import pytest
 
 from bilinc.wiki.manifest import (
     FORMAT,
+    HISTORY_FORMAT,
     MANIFEST_NAME,
     TMP_NAME,
     TOOL,
@@ -69,6 +70,8 @@ def test_build_matches_the_design_shape():
         "complete": True,
         "files": sorted(FILES),
         "keys": KEYS,
+        "history_format": 1,
+        "history_marker": None,
     }
 
 
@@ -218,3 +221,65 @@ def test_dumps_is_deterministic():
 def test_dumps_keeps_non_ascii():
     text = dumps_manifest(_build(prefix="proje:ş"))
     assert '"proje:ş"' in text
+
+
+# --- history reuse fields ---------------------------------------------------------
+
+MARKER = "a" * 64
+DIGEST = "b" * 64
+
+
+def _reuse_manifest(**overrides):
+    keys = {"k": {"path": "k.md", "entry_version": "v", "updated_at": "u", "history_sha256": DIGEST}}
+    return _build(files=["k.md"], keys=keys, history_marker=MARKER, **overrides)
+
+
+def test_manifest_round_trips_reuse_fields(tmp_path):
+    _write(tmp_path, dumps_manifest(_reuse_manifest()))
+    read = read_manifest(tmp_path)
+    assert HISTORY_FORMAT == 1
+    assert read["history_marker"] == MARKER and read["history_format"] == HISTORY_FORMAT
+    assert read["keys"]["k"]["history_sha256"] == DIGEST
+
+
+@pytest.mark.parametrize(
+    "field, bad",
+    [
+        ("history_marker", 5),
+        ("history_marker", "zz"),
+        ("history_marker", "A" * 64),
+        ("history_format", "1"),
+        ("history_format", True),
+        ("history_format", 1.0),
+    ],
+)
+def test_malformed_reuse_fields_disable_reuse_without_refusing(tmp_path, field, bad):
+    manifest = _reuse_manifest()
+    manifest[field] = bad
+    _write(tmp_path, json.dumps(manifest))
+    read = read_manifest(tmp_path)
+    assert read[field] is None
+    assert read["files"] == ["k.md"]
+
+
+@pytest.mark.parametrize("bad", ["x", 5, None, "B" * 64, "b" * 63])
+def test_malformed_key_digest_is_dropped_and_the_key_kept(tmp_path, bad):
+    manifest = _reuse_manifest()
+    manifest["keys"]["k"]["history_sha256"] = bad
+    _write(tmp_path, json.dumps(manifest))
+    read = read_manifest(tmp_path)
+    assert "history_sha256" not in read["keys"]["k"]
+    assert read["keys"]["k"]["path"] == "k.md"
+
+
+def test_build_drops_a_malformed_key_digest():
+    keys = {"k": {"path": "k.md", "entry_version": "v", "updated_at": "u", "history_sha256": "nope"}}
+    assert "history_sha256" not in _build(files=["k.md"], keys=keys)["keys"]["k"]
+
+
+def test_old_manifest_without_reuse_fields_still_reads(tmp_path):
+    manifest = _build()
+    del manifest["history_marker"], manifest["history_format"]
+    _write(tmp_path, json.dumps(manifest))
+    read = read_manifest(tmp_path)
+    assert read["history_marker"] is None and read["history_format"] is None

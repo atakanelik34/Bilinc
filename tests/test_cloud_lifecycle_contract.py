@@ -51,6 +51,10 @@ LOCAL_ONLY_TOOL_NAMES = (
     "bilinc_query_analysis",
 )
 
+# Tools the stdio adapter adds on top of the hosted contract: they act on the
+# user's own disk, so the hosted server never offers them.
+LOCAL_STDIO_TOOL_NAMES = ("export_wiki",)
+
 
 class RecordingTransport:
     """Capture outbound SDK calls and replay canned responses."""
@@ -93,7 +97,7 @@ def _tools():
 
 
 def test_cloud_mcp_exposes_exactly_the_lifecycle_and_review_tools():
-    assert tuple(sorted(_tools())) == tuple(sorted(CLOUD_MCP_TOOL_NAMES))
+    assert tuple(sorted(_tools())) == tuple(sorted(CLOUD_MCP_TOOL_NAMES + LOCAL_STDIO_TOOL_NAMES))
 
 
 def test_cloud_mcp_does_not_expose_local_only_tools():
@@ -105,7 +109,7 @@ def test_cloud_mcp_import_and_build_do_not_require_an_api_key(monkeypatch):
     monkeypatch.delenv("BILINC_API_KEY", raising=False)
     monkeypatch.setenv("BILINC_CONFIG_DIR", "/nonexistent-bilinc-config")
 
-    assert set(_tools()) == set(CLOUD_MCP_TOOL_NAMES)
+    assert set(_tools()) == set(CLOUD_MCP_TOOL_NAMES + LOCAL_STDIO_TOOL_NAMES)
 
 
 @pytest.mark.parametrize("name", ["forget", "rollback"])

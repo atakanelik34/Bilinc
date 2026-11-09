@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -549,14 +550,22 @@ def test_case_twin_that_is_a_different_file_is_still_refused(tmp_path, case_sens
 
 @pytest.fixture()
 def case_insensitive(monkeypatch):
-    """Make the writer see the folder like macOS/Windows: names match case-insensitively."""
-    real_lstat, real_unlink, real_replace = os.lstat, os.unlink, os.replace
+    """Make the writer see the folder like macOS/Windows: names match case-insensitively.
+
+    Like APFS and HFS+, names also match across NFC/NFD, and replacing or
+    renaming onto an existing entry keeps that entry's spelling. ``listdir``
+    is the real one, so it shows the spelling on disk.
+    """
+    real_lstat, real_unlink, real_replace, real_rename = os.lstat, os.unlink, os.replace, os.rename
+
+    def fold(name):
+        return unicodedata.normalize("NFC", name).casefold()
 
     def existing(path):
         path = Path(path)
         if path.parent.is_dir():
             for name in os.listdir(path.parent):
-                if name.casefold() == path.name.casefold():
+                if fold(name) == fold(path.name):
                     return path.parent / name
         return path
 
@@ -572,6 +581,9 @@ def case_insensitive(monkeypatch):
 
         def replace(self, src, dst, *args, **kwargs):
             return real_replace(src, existing(dst), *args, **kwargs)
+
+        def rename(self, src, dst, *args, **kwargs):
+            return real_rename(existing(src), existing(dst), *args, **kwargs)
 
     monkeypatch.setattr(writer, "os", CaseInsensitiveOs())
 
@@ -597,6 +609,103 @@ def test_case_rename_on_a_case_insensitive_folder_keeps_the_new_page(tmp_path, c
     pages = [name for name in os.listdir(tmp_path) if name.endswith(".md")]
     assert len(pages) == 1 and (tmp_path / pages[0]).read_text() == "new\n"
     assert result.removed == []
+
+
+def test_case_rename_leaves_the_manifest_spelling_on_disk(tmp_path, case_insensitive):
+    first_run(tmp_path, {"Foo.md": "old\n"})
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    write_tree(tmp_path, {"foo.md": "new\n"}, previous=previous, manifest_for=manifest_for)
+
+    assert [n for n in os.listdir(tmp_path) if n.endswith(".md")] == ["foo.md"]
+    assert (tmp_path / "foo.md").read_text() == "new\n"
+    assert not (tmp_path / TMP_NAME).exists()
+
+
+def test_existing_2_7_0_state_is_repaired(tmp_path, case_insensitive):
+    # The 2.7.0 writer left "Foo.md" on disk while its manifest says "foo.md".
+    (tmp_path / "Foo.md").write_text("stale\n")
+    owned = manifest_for(True, ["foo.md"])
+
+    write_tree(tmp_path, {"foo.md": "new\n"}, previous=owned, manifest_for=manifest_for)
+
+    assert [n for n in os.listdir(tmp_path) if n.endswith(".md")] == ["foo.md"]
+    assert (tmp_path / "foo.md").read_text() == "new\n"
+
+
+def test_a_users_case_twin_is_still_refused(tmp_path, case_insensitive):
+    first_run(tmp_path, {"bar.md": "x\n"})
+    (tmp_path / "Foo.md").write_text("the user's file")
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    with pytest.raises(WikiRefused):
+        write_tree(tmp_path, {"bar.md": "x\n", "foo.md": "new\n"}, previous=previous, manifest_for=manifest_for)
+
+    assert (tmp_path / "Foo.md").read_text() == "the user's file"
+    assert sorted(n for n in os.listdir(tmp_path) if n.endswith(".md")) == ["Foo.md", "bar.md"]
+
+
+def test_parked_copy_never_lands_on_a_page_path(tmp_path, case_insensitive):
+    first_run(tmp_path, {"Foo.md": "old\n", "old/1.md": "page\n"})
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+
+    write_tree(tmp_path, {"foo.md": "new\n", "old/1.md": "page\n"}, previous=previous, manifest_for=manifest_for)
+
+    assert (tmp_path / "old" / "1.md").read_text() == "page\n" and (tmp_path / "foo.md").read_text() == "new\n"
+    assert os.listdir(tmp_path / "old") == ["1.md"]
+
+
+def test_crash_after_parking_keeps_the_old_copy_inside_the_temp_folder(tmp_path, case_insensitive, monkeypatch):
+    first_run(tmp_path, {"Foo.md": "old\n", "bar.md": "bar\n"})
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+    new_files = {"foo.md": "new\n", "bar.md": "bar\n"}
+    emulated_replace = writer.os.replace
+    failed = []
+
+    def failing_replace(src, dst, *args, **kwargs):
+        if Path(dst).name == "foo.md" and not failed:
+            failed.append(dst)
+            raise OSError(5, "Input/output error")
+        return emulated_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(writer.os, "replace", failing_replace)
+
+    with pytest.raises(WikiExportError):
+        write_tree(tmp_path, new_files, previous=previous, manifest_for=manifest_for)
+
+    assert failed
+    old_copies = [rel for rel, (content, _) in tree(tmp_path).items() if content == b"old\n"]
+    assert old_copies and all(rel.startswith(f"{TMP_NAME}/.old/") for rel in old_copies)
+    assert not any(n.casefold() == "foo.md" for n in os.listdir(tmp_path))
+    manifest = read_manifest_json(tmp_path)
+    assert manifest["complete"] is False and "foo.md" in manifest["files"]
+
+    # The next run clears the leftover temp folder and regenerates the page.
+    monkeypatch.setattr(writer.os, "replace", emulated_replace)
+    previous = inspect_target(tmp_path, base_url=BASE_URL, prefix=None)
+    write_tree(tmp_path, new_files, previous=previous, manifest_for=manifest_for)
+
+    assert sorted(n for n in os.listdir(tmp_path) if n.endswith(".md")) == ["bar.md", "foo.md"]
+    assert (tmp_path / "foo.md").read_text() == "new\n"
+    assert not (tmp_path / TMP_NAME).exists()
+    manifest = read_manifest_json(tmp_path)
+    assert manifest["complete"] is True and manifest["files"] == ["bar.md", "foo.md"]
+
+
+def test_nfd_spelling_is_not_churned(tmp_path, case_insensitive, monkeypatch):
+    # HFS+ stores names in NFD; the manifest key is NFC. Same name, no rename.
+    nfc = unicodedata.normalize("NFC", "caf\u00e9.md")
+    nfd = unicodedata.normalize("NFD", nfc)
+    assert nfc != nfd
+    (tmp_path / nfd).write_text("old\n")
+    renames = []
+    monkeypatch.setattr(writer.os, "rename", lambda *args, **kwargs: renames.append(args))
+
+    write_tree(tmp_path, {nfc: "new\n"}, previous=manifest_for(True, [nfc]), manifest_for=manifest_for)
+
+    assert renames == []
+    assert [n for n in os.listdir(tmp_path) if n.endswith(".md")] == [nfd]
+    assert (tmp_path / nfd).read_text() == "new\n"
 
 
 def test_case_rename_on_a_case_sensitive_folder_removes_the_old_spelling(tmp_path, case_sensitive_fs):

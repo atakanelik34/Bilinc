@@ -10,7 +10,9 @@ requests finish never reaches the output.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import http.client
+import json
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -44,6 +46,9 @@ BACKOFF = (1.0, 2.0, 4.0)
 RAW_NETWORK_ERRORS = (OSError, http.client.HTTPException)
 #: Most history requests in flight at once.
 MAX_WORKERS = 4
+#: The key every rollback writes a history entry under; its newest entry is the
+#: run marker that tells history reuse a rollback happened (see ``reuse.py``).
+MARKER_KEY = "__system"
 
 
 class HistoryAbort(Exception):
@@ -127,31 +132,12 @@ def fetch_histories(
             raise HistoryCancelled()
 
     def fetch_one(key: str) -> Any:
-        for attempt in range(MAX_RETRIES + 1):
-            if stopped():
-                raise HistoryCancelled()
-            try:
-                result = history_client.history(key, limit=limit, values="full")
-            except FATAL_ERRORS as exc:
-                abort = HistoryAbort(exc)
-                fatal.append(abort)
-                halt.set()
-                raise abort from exc
-            except BilincCloudError as exc:
-                if not exc.retryable or attempt == MAX_RETRIES:
-                    return HISTORY_UNAVAILABLE
-                if exc.retry_after is not None:
-                    delay = min(exc.retry_after, RETRY_AFTER_CAP)
-                else:
-                    delay = BACKOFF[attempt]
-                wait(delay)
-            except RAW_NETWORK_ERRORS:
-                if attempt == MAX_RETRIES:
-                    return HISTORY_UNAVAILABLE
-                wait(BACKOFF[attempt])
-            else:
-                return result if isinstance(result, dict) else HISTORY_UNAVAILABLE
-        raise AssertionError("unreachable")  # pragma: no cover
+        try:
+            return _with_retries(lambda: history_client.history(key, limit=limit, values="full"), wait, stopped)
+        except HistoryAbort as abort:
+            fatal.append(abort)
+            halt.set()
+            raise
 
     results: dict[str, Any] = {}
     executor = ThreadPoolExecutor(
@@ -180,3 +166,75 @@ def fetch_histories(
         raise
     executor.shutdown(wait=True)
     return {key: results[key] for key in keys}
+
+
+def _with_retries(call: Callable[[], Any], wait: Callable[[float], None], stopped: Callable[[], bool]) -> Any:
+    """Run one read with the wiki's retry rules.
+
+    Returns the payload when it is a dict, else :data:`HISTORY_UNAVAILABLE`
+    (a non-retryable error, or retries running out). A fatal error raises
+    :class:`HistoryAbort`; a set stop raises :class:`HistoryCancelled`.
+    """
+
+    for attempt in range(MAX_RETRIES + 1):
+        if stopped():
+            raise HistoryCancelled()
+        try:
+            result = call()
+        except FATAL_ERRORS as exc:
+            raise HistoryAbort(exc) from exc
+        except BilincCloudError as exc:
+            if not exc.retryable or attempt == MAX_RETRIES:
+                return HISTORY_UNAVAILABLE
+            if exc.retry_after is not None:
+                delay = min(exc.retry_after, RETRY_AFTER_CAP)
+            else:
+                delay = BACKOFF[attempt]
+            wait(delay)
+        except RAW_NETWORK_ERRORS:
+            if attempt == MAX_RETRIES:
+                return HISTORY_UNAVAILABLE
+            wait(BACKOFF[attempt])
+        else:
+            return result if isinstance(result, dict) else HISTORY_UNAVAILABLE
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def fetch_marker(
+    client: CloudClient,
+    *,
+    sleep: Callable[[float], None],
+    stop: threading.Event | None = None,
+) -> str | None:
+    """sha256 of the newest ``__system`` history entry, or None when it cannot be read.
+
+    Every rollback writes an entry there, so a changed marker means a key may
+    have been restored to an earlier version with new history. The answer's
+    ``exists`` is ignored: the service reports it false for ``__system`` while
+    still returning entries. Fatal errors raise :class:`HistoryAbort`.
+    """
+
+    marker_client = dataclasses.replace(client, read_retry_attempts=1)
+
+    def wait(delay: float) -> None:
+        if stop is not None:
+            if stop.wait(delay):
+                raise HistoryCancelled()
+        else:
+            sleep(delay)
+
+    result = _with_retries(
+        lambda: marker_client.history(MARKER_KEY, limit=1, values="none"),
+        wait,
+        lambda: stop is not None and stop.is_set(),
+    )
+    if not isinstance(result, dict) or not isinstance(result.get("entries"), list):
+        return None
+    # default=str: an unexpected value type still hashes the same way on every run.
+    canonical = json.dumps(
+        {"entries": result["entries"], "truncated": result.get("truncated")},
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8", errors="replace")).hexdigest()

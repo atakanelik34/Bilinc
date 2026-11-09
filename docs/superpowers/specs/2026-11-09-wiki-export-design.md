@@ -14,16 +14,16 @@ regenerated on every run.
 In 2.7.0:
 
 ```
-bilinc wiki <dir> [--history N] [--prefix P]
+bilinc wiki <dir> [--history N] [--prefix P] [--wikilinks] [--refresh-history]
 ```
 
-Moved to 2.7.1 (not built now):
+plus the `export_wiki` tool in the local stdio MCP adapter, history reuse
+from the previous run, the warning for cloud-synced folders, and two small
+fixes. These were first planned for 2.7.1 and are designed in the addendum
+"Finishing the export" at the end of this document.
 
-- the `export_wiki` tool in the local stdio MCP adapter;
-- `--wikilinks` (2.7.0 writes standard relative Markdown links only);
-- reusing history blocks from the previous manifest (2.7.0 still records each
-  key's `entry_version` and `updated_at` in the manifest so 2.7.1 can reuse);
-- the warning for cloud-synced folders (iCloud Drive, Dropbox, OneDrive).
+Still out of scope: very long total paths (the 120-byte cap is per segment),
+and `casefold()` not folding `ı`/`ſ` the way macOS or NTFS compare names.
 
 Non-goals: two-way sync, git-backed output, live mirroring, LLM summaries,
 lint or consistency checks, a dashboard button, local (SQLite) Bilinc as a
@@ -421,3 +421,339 @@ SDK and CLI only (`src/bilinc/client.py`, `src/bilinc/cli/main.py`,
 change. The 2.7.0 release still needs the version bump, PyPI, the changelog,
 a `/docs/wiki` page on the site, and the usual synchronized chain; the MCP
 registry entry is unchanged until the 2.7.1 `export_wiki` tool.
+
+## Addendum: finishing the export (2026-11-09)
+
+This addendum adds the four items first planned for 2.7.1 and two small
+fixes. Everything above still holds unless a subsection here says otherwise.
+
+### A1. History reuse
+
+Goal: a rerun with no changes makes no per-key history calls. Hard rule:
+reuse never shows a history block that the service would now show
+differently.
+
+**What can add a history entry without changing a key's version.** The
+list's `entryVersion` is a hash of the whole stored entry, `updated_at`
+included (`entry_version()` in `src/bilinc/cloud/runtime.py`). Checked per
+operation in that file and in `src/bilinc/core/stateplane.py`:
+
+| Operation | History | `entryVersion` / `updatedAt` |
+|---|---|---|
+| commit, revise | entry added | both change (`updated_at` is set to now) |
+| revise that changes nothing | no entry (logged only when the state differs) | unchanged |
+| confirm | `confirm` entry | both change (only `updated_at` moves, which changes the hash) |
+| forget, forget with purge | entries added / values emptied | the key leaves the list, so no page is reused; a later write is a new version |
+| create snapshot | no entry for any key | unchanged |
+| **rollback to a snapshot** | `update`/`create` entry per restored key | **restored exactly as stored in the snapshot**: both can equal an earlier export's values |
+
+So rollback is the one case: export with K at state A, revise K to B, roll
+back to a snapshot holding A, and the next run sees K's old version and old
+`updatedAt` while its history gained two entries. Per-key version checks
+cannot see this.
+
+Every rollback also writes a `rollback` entry under the reserved key
+`__system` (in `rollback_execute()` and in the plane's timestamp rollback).
+The list's top-level `stateVersion` is not used: it is the audit head as
+cached by the serving process and is not guaranteed fresh.
+
+**Design.**
+
+1. *Run marker.* On every run with `--history N` > 0 and no
+   `--refresh-history` (a first run included, so the next run has a marker
+   to compare with), the run fetches `history("__system", limit=1, values="none")` through the same
+   retry layer as other history calls, **before** the list (the start
+   marker), and again **after** the per-key history phase (the end marker)
+   when at least one block was reused (with nothing reused there is nothing
+   to re-check, so a first run reads one marker).
+   The marker is `sha256` of the canonical JSON (`sort_keys`,
+   `ensure_ascii=False`) of that response's `entries` and `truncated`.
+   `values="none"` keeps a large value out of the call if a user owns a key
+   named `__system` (the name is not reserved; such a key only makes reuse
+   rarer, never wrong). Any rollback after the start marker is read changes
+   the marker seen by the next run.
+   - When the end marker differs from the start marker, every block this run
+     chose to reuse is fetched after all (a second history pass for exactly
+     those keys) and the manifest records the **start** marker, so the next
+     run refetches everything once more.
+   - *No runtime change (decided at G1).* Reads do not take the project's
+     mutation lock, and `rollback_execute()` restores keys one by one and
+     writes its `__system` entry only at the end. An export that overlaps a
+     rollback still restoring keys, and whose end-marker read happens before
+     that entry is written, can reuse a restored key's pre-rollback block.
+     This is accepted as a stated residual (below): it is narrow, and it
+     heals on the next run, because the manifest keeps the start marker,
+     which then differs from the new `__system` head and forces a refetch.
+     A runtime "rollback started" entry can be proposed separately.
+   - The `__system` history answers `exists: false` while still returning
+     entries (verified against the live service, read-only); the marker
+     hashes `entries` and `truncated` and ignores `exists`.
+2. *Manifest additions* (format stays 1; the 2.7.0 manifest has not
+   shipped). `read_manifest` validates them when present (`history_marker`
+   null or a 64-hex string, `history_format` an int, `history_sha256` a
+   64-hex string); a malformed value only disables reuse, it is not a
+   refusal, and older manifests without them simply never reuse:
+   - top level `history_marker`: the marker read at the start of the run
+     that wrote the manifest, or `null`;
+   - per key `history_sha256`: sha256 of that page's history section body
+     as written to disk (encoded with `errors="replace"`, like the page
+     file, so a lone surrogate hashes as the `?` on disk); the body is the
+     text after `## History\n\n` up to the next top-level heading or EOF,
+     with trailing newlines stripped, so the same block hashes the same with
+     or without a Links section after it. Present
+     only when the block came from a successful fetch or a verified reuse;
+     never for "History unavailable".
+3. *A key's block is reused only when all hold:*
+   1. `--history N` > 0 and `--refresh-history` is not given;
+   2. the previous manifest exists and has `complete: true`;
+   3. its `tool_version` equals this tool's version and its
+      `history_format` equals this tool's (the renderer may differ);
+   4. its `history` equals N;
+   5. this run's marker is not `null` and equals the manifest's
+      `history_marker`;
+   6. the key is in the previous manifest with string `entry_version` and
+      `updated_at` both equal to this run's `entryVersion` / `updatedAt`, and
+      it has `history_sha256`;
+   7. the previous page file is ours and readable: its path is in the
+      previous `files`; every folder on the way is a real folder and the file
+      is a regular file (`lstat`, opened with `O_NOFOLLOW`); at most 8 MiB;
+      valid UTF-8; the history section is found by a fence-aware scan of our
+      own page format (top-level `## ` headings outside fences); and its
+      sha256 equals `history_sha256`.
+
+   Anything else fetches the key's history as before. The sha check is what
+   makes "not ours" safe: an edited or foreign page never matches.
+4. *Rendering.* A reused block is inserted byte for byte; the rest of the
+   page is rendered fresh (value, links, `exported_at`). History blocks hold
+   no links, so `--wikilinks` does not affect reuse.
+5. *Output.* `ExportResult` gains `history_fetched` and `history_reused`
+   counts. The CLI summary line becomes
+   `Wrote N pages to DIR (removed M stale files; history: F fetched, R reused)`.
+
+**Residual risk, stated.** A rollback still restoring keys when the end
+marker is read, or one that crashed before writing its `__system` entry,
+can leave a restored key's pre-rollback history block in that export. The
+next run refetches every key (the start marker it compares against has
+changed), or sooner with `--refresh-history`. User-facing text says history
+is reused only when nothing changed; it does not claim more.
+
+Known limit (as in the base design, the folder is tied to `base_url`, not
+a workspace id): exporting a different workspace on the same `base_url`
+into the same folder would reuse a block only for an entry whose stored
+state, `updated_at` included, is byte-identical in both workspaces and when
+both markers match. That needs an entry copied verbatim with its
+timestamps; use separate folders per workspace.
+
+The manifest also gains `history_format` (an integer, 1), bumped whenever
+the history block's rendering changes; reuse requires it to match, so a
+development build with an unchanged version string cannot reuse a block
+rendered differently.
+
+**Proof (tests).**
+- Counting fake transport (the routed integration transport, extended to
+  record every call in one ordered log and to count marker calls, i.e.
+  `__system` with `values="none"`, separately): first run makes 1 marker
+  call + one history call per key; the second run on the same data makes
+  the same list calls, exactly 2 marker calls and 0 per-key history calls,
+  and writes byte-identical pages apart from `exported_at`.
+- Order: the first call of a run is the start marker, before any list call;
+  the end marker comes after the last per-key history call.
+- Rollback during the run: the `__system` answer changes between the start
+  and end marker → the reused keys are fetched in the same run, the pages
+  show the new blocks, the manifest holds the start marker, and the next run
+  refetches every key.
+- A user key named `__system`: exported as a page, its own history fetched
+  with full values, and marker counting unaffected.
+- Changed key: one key's `entryVersion` changes between runs → exactly that
+  key is fetched and its page shows the new block; a variant where only
+  `updatedAt` changes does the same.
+- Rollback: same `entryVersion`/`updatedAt`, new history, changed marker →
+  every key is fetched; the page shows the new block. Kept as a permanent
+  test; the mutation check (deleting the marker comparison makes it fail) is
+  recorded once in the state log.
+- A marker answer with `exists: false` and entries is used (not treated as
+  "no marker").
+- Each other off-rule has a test: `--refresh-history`, different N,
+  `complete: false`, other `tool_version`, marker fetch failure, missing page,
+  page replaced by a symlink, page edited inside the history block, page
+  over the size cap, missing `history_sha256`, a "History unavailable" block
+  (refetched next run).
+
+### A2. MCP `export_wiki` (local stdio adapter only)
+
+Added to `src/bilinc/cloud_mcp.py`, which runs on the user's machine. The
+hosted MCP is a separate server and does not get it.
+
+```
+export_wiki(directory: str, history: int = 5, prefix: str | None = None,
+            wikilinks: bool = False, refresh_history: bool = False) -> dict
+```
+
+Annotations, in the file's existing style: `title="Export memory as a
+Markdown wiki"`, `readOnlyHint=False`, `destructiveHint=True` (it replaces
+and removes files it wrote earlier), `idempotentHint=False`,
+`openWorldHint=False`.
+
+**Path containment.** The 11-02 rule is "resolve the target with symlinks
+followed; it must sit inside the directory given in the call; refuse `/`,
+the home root and system folders". The tool takes one directory, so the rule
+is pinned as:
+
+1. `directory` must be absolute after `~` expansion. Relative paths are
+   refused: a stdio server's working folder is whatever the client chose.
+2. `resolved = realpath(directory)` (every symlink on the way followed).
+3. *Inside the given directory:* the export writes only at or below
+   `resolved`, and `resolved` must equal `realpath(parent) / name`, i.e. the
+   last component is not a symlink (the writer already refuses a symlinked
+   target; this refuses it up front with a containment message). The writer
+   never follows a symlink inside the folder, so no write lands outside it.
+   A second "root" argument was considered and rejected: the same caller
+   would choose both values, so it adds no protection.
+4. Refused locations, checked on `resolved` and on the normalised given
+   path. Comparison is by identity, not spelling: each ancestor of
+   `resolved` is `os.stat`ed and its `(st_dev, st_ino)` compared with home
+   and the refused roots, because macOS and Windows folders are
+   case-insensitive (`/USERS/x/.ssh` must not pass); on Windows, where inode
+   numbers may be missing, casefolded strings are compared. `\\?\` prefixes
+   are stripped first and UNC paths (`\\server\share`) are refused. The
+   refused roots and home are parameters, so tests can inject them.
+   - `/`, a drive root, the home folder itself, and any ancestor of home
+     (`/home`, `/Users`);
+   - system folders and everything inside them: `/bin /boot /dev /etc /lib
+     /lib32 /lib64 /opt /proc /root /run /sbin /srv /sys /usr /var /private
+     /System /Library /Applications /cores`, and on Windows the Windows
+     folder, the Program Files folders, `%ProgramData%`, `%APPDATA%` and
+     `%LOCALAPPDATA%`;
+   - `/Volumes` and `/mnt` themselves (a drive under them is allowed);
+   - the Bilinc config folder (`BILINC_CONFIG_DIR`, else
+     `$XDG_CONFIG_HOME/bilinc`, else `~/.config/bilinc`): the target may not
+     equal it, sit inside it, or contain it, so an export can never replace
+     the saved key file;
+   - carve-out, evaluated before the system-folder rule: the system temp
+     folder (`realpath(tempfile.gettempdir())`), `/tmp` and `/private/tmp`
+     are allowed even though they sit under `/private` or `/var` on macOS.
+     Because `gettempdir()` follows `TMPDIR`, a temp folder is ignored when
+     it is fewer than two levels below its drive root (other than `/tmp` and
+     `/private/tmp`), or is home, an ancestor of home, or a refused root or
+     an ancestor of one;
+   - hidden folders in home and everything inside them (`~/.ssh`,
+     `~/.config`, …): any component under home starting with `.`;
+   - `~/Library` and everything inside it, except `~/Library/Mobile
+     Documents` and `~/Library/CloudStorage` (user document locations; the
+     cloud warning applies).
+5. Ownership (POSIX, review rounds 1 and 2): every existing folder from the
+   target up to the root must not be world-writable unless it has the sticky
+   bit (as `/tmp` does); an existing target must belong to the current user,
+   not be world-writable, and be group-writable only for a group no other
+   account is in (umask 002 with a group per user is normal). Otherwise
+   another local user could pre-create the folder or swap it for a symlink
+   between the checks and the writes. The MCP tool runs the export with
+   `require_owned=True`, which repeats this check right before the first
+   write, since the history phase can take minutes. The temp carve-out only
+   applies to a temp folder in `/tmp`, `/private/tmp`, `/var/folders` (or
+   `%LOCALAPPDATA%\Temp` on Windows). Writes are not yet done through
+   directory file descriptors; that stays on the backlog.
+6. Then the normal export runs with its own guards (non-empty folder without
+   a manifest is refused, and so on), so the MCP path never writes anywhere
+   the CLI would not.
+
+**Result.** The same facts the CLI prints, as data: `directory` (resolved),
+`pages`, `written`, `removed` (count) and `removed_paths`, `skipped`,
+`history_unavailable`, `history_fetched`, `history_reused`, `warnings`
+(the cloud-folder warning and the history-reuse note), and `summary` (the
+CLI's stdout line). Errors (refusals, Cloud errors) raise, so the client
+sees a tool error with the message the CLI would print.
+
+**Tool lists.** `CLOUD_MCP_TOOLS` stays the hosted-parity list (docs, site
+truth and the hosted server check it). A new `LOCAL_MCP_TOOLS =
+("export_wiki",)` names what only the stdio adapter has. Updated:
+`tests/test_cloud_memory_review_sdk.py` (registered tools ==
+`CLOUD_MCP_TOOLS + LOCAL_MCP_TOOLS`), `docs/public/product-truth.json`
+(`cloud_mcp.local_tools`), `scripts/validate_public_truth.py`,
+`scripts/generate_public_truth_doc.py` and the generated doc (the
+validator's AST scan of every `@mcp.tool` function in `cloud_mcp.py` must
+compare against `tools + local_tools`, or it fails as soon as
+`export_wiki` exists), and
+`scripts/verify_cloud_lifecycle_smoke.py`. The registry entry
+(`server.json`) needs no change: it names the stdio package, not tools.
+
+A first export of a large workspace can take minutes (the owner's 2212 keys
+took about 260 s with history); some MCP clients time out sooner. The tool
+description says so and suggests the CLI or `history=0` for a first run;
+reruns are fast with reuse.
+
+### A3. `--wikilinks`
+
+Default unchanged. With `--wikilinks` (MCP: `wikilinks=true`), every link the
+export writes (page "Links to" / "Mentioned by", `index.md`, `_index.md`)
+becomes `[[TARGET|ALIAS]]`:
+
+- `TARGET` is the same relative path as the Markdown link, not
+  percent-encoded, with `.md` kept (so `readme.md.md` stays unambiguous),
+  and with `./` in front when it does not start with `../`, so Obsidian
+  resolves it relative to the page, not the vault root;
+- `ALIAS` is the key (or folder/page display name) with line breaks folded;
+- if `TARGET` or `ALIAS` contains any of `[ ] | # ^ \` or a backtick, that
+  one link is written as the standard Markdown link instead (these cannot be
+  written safely inside a wikilink);
+- in `index.md` table cells the separator is written `\|`, as Obsidian
+  requires inside tables.
+
+The manifest does not record the link style; switching it rewrites pages
+normally. `../` relative wikilinks are documented Obsidian behaviour; `./`
+is expected to work but is not documented, so the owner's manual acceptance
+adds: "with `--wikilinks`, links resolve in Obsidian, also when the export
+is a subfolder of a vault". `\|` in table cells is Obsidian's convention;
+the flag is opt-in.
+
+### A4. Cloud-synced folder warning
+
+Before anything is fetched, when `realpath(target)` (or the normalised given
+path) is inside one of these, one line goes to stderr, and into the MCP
+result's `warnings`:
+
+- `~/Library/Mobile Documents` (iCloud Drive);
+- `~/Library/CloudStorage/<anything>` (Dropbox, OneDrive, Google Drive on
+  macOS);
+- `~/Dropbox`, and any `~/OneDrive*` folder.
+
+Text: `warning: <dir> is inside a cloud-synced folder (<name>); the sync
+client may upload this export, which can hold private data, or keep
+conflicting copies`. Warning only, never a refusal. Home is injectable for
+tests.
+
+### A5. Small fixes
+
+- **Case-only rename on a case-insensitive file system.** Today
+  `os.replace(tmp/foo.md, target/foo.md)` over an existing `Foo.md` keeps the
+  old spelling on disk. During the move, for each page whose entry already
+  exists, the writer looks up the on-disk spelling of the last component
+  (one `listdir` per folder, cached). If it differs from the wanted name
+  after NFC normalisation (so HFS+'s NFD names do not churn), the existing
+  entry is first renamed to `.bilinc-wiki.tmp/.old/<n>` (a leading-dot folder, which no key can map to) (a numbered name in
+  its own subfolder, never at the page's relative path, which on a
+  case-insensitive file system would be the freshly built page itself) and
+  then the new file is moved in; the temp folder is removed at the end as before. A crash in
+  between leaves the old copy only inside the temp folder (cleared on the
+  next run) and the page path owned by the interim manifest. The rename
+  happens only for entries `_check_paths` already accepted as ours: the
+  wanted path is in the previous manifest (the 2.7.0 state on disks has the
+  manifest saying `foo.md` over an on-disk `Foo.md`), or it is the same
+  entry as an owned twin. A user's `Foo.md` is still refused as today.
+  Folder spellings are not changed: renaming a folder would also move files
+  the user added inside it. As before, if the user deletes our `foo.md` and
+  creates their own `Foo.md` on a case-insensitive disk, the path still
+  counts as ours (the same outcome `os.replace` had on main). Tested with the case-insensitive emulation
+  fixture in `tests/test_wiki_writer.py`.
+- **`md_inline` escaping.** Every `~` is backslash-escaped (GFM renders a
+  single `~x~` as strikethrough; the doubled form was already escaped). An
+  e-mail-like run (`[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+`) gets
+  its `@` and the following dots escaped, the way bare URLs already are, so
+  no renderer turns it into a `mailto:` link.
+
+### A6. Release-chain impact (replaces the paragraph above for these items)
+
+SDK, CLI and the local MCP adapter only. No hosted runtime, site API or
+database change. The public product truth gains `cloud_mcp.local_tools`;
+the site's `/docs/wiki` page should mention `--wikilinks`,
+`--refresh-history` and the MCP tool when 2.7.0 ships.

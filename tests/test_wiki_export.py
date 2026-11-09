@@ -24,6 +24,7 @@ from tests.wiki_fakes import (
 from bilinc.client import error_for_response
 from bilinc.wiki.export import ExportResult, export_wiki
 from bilinc.wiki.manifest import MANIFEST_NAME
+from bilinc.wiki.reuse import history_body, history_digest
 from bilinc.wiki.writer import WikiRefused
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -111,10 +112,12 @@ def test_list_fields_from_the_public_route_shape(tmp_path):
     }
     assert frontmatter((tmp_path / "solo.md").read_text(encoding="utf-8"))["source"] is None
     manifest = json.loads((tmp_path / MANIFEST_NAME).read_text(encoding="utf-8"))
+    page_text = (tmp_path / "project" / "bilinc" / "release.md").read_text(encoding="utf-8")
     assert manifest["keys"]["project:bilinc:release"] == {
         "path": "project/bilinc/release.md",
         "entry_version": "v-project:bilinc:release",
         "updated_at": "2026-11-08T12:05:00.000Z",
+        "history_sha256": history_digest(history_body(page_text)),
     }
     assert manifest["history"] == 5 and manifest["prefix"] is None
     assert manifest["base_url"] == "https://bilinc.space"
@@ -164,7 +167,7 @@ def test_history_auth_error_leaves_the_previous_wiki_identical(tmp_path):
     before = snapshot(tmp_path)
 
     with pytest.raises(Exception, match="(?i)auth|key|invalid"):
-        run(tmp_path, transport_for(history={"solo": [auth_error()]}), clock=SECOND)
+        run(tmp_path, transport_for(history={"solo": [auth_error()]}), clock=SECOND, refresh_history=True)
 
     assert snapshot(tmp_path) == before
 
@@ -193,8 +196,9 @@ def test_history_limit_is_sent(tmp_path):
 
     run(tmp_path, transport, history=7)
 
-    assert {body["limit"] for body in transport.history_bodies()} == {7}
-    assert {body["values"] for body in transport.history_bodies()} == {"full"}
+    per_key = [body for body in transport.history_bodies() if body["key"] != "__system"]
+    assert {body["limit"] for body in per_key} == {7}
+    assert {body["values"] for body in per_key} == {"full"}
 
 
 @pytest.mark.parametrize("bad", [-1, 101])

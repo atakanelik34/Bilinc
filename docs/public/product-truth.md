@@ -13,6 +13,7 @@
 - SDK exports: `Bilinc`, `BilincApiKeyRequired`, `BilincAuthError`, `BilincCloudError`, `BilincConfirmationExpiredError`, `BilincConflictError`, `BilincConnectionError`, `BilincEntitlementError`, `BilincError`, `BilincNotFoundError`, `BilincPaymentRequiredError`, `BilincRateLimitError`, `BilincRuntimeUnavailableError`, `BilincValidationError`, `API_VERSION`, `CANONICAL_ERROR_CODES`, `CloudClient`, `RETRYABLE_ERROR_CODES`
 - Cloud MCP transport: `stdio`
 - Cloud MCP tools: `commit_mem`, `recall`, `revise`, `forget`, `status`, `snapshot`, `diff`, `rollback`, `list_memories`, `history`, `confirm`
+- Local tools in the stdio adapter (they write to this machine): `export_wiki`
 - Documentation: https://bilinc.space/docs
 - Signup: https://bilinc.space/signup
 

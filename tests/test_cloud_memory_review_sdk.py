@@ -439,9 +439,10 @@ def test_review_tool_descriptions_state_facts_not_instructions(name):
 
 
 def test_cloud_mcp_tool_constant_matches_the_registered_tools():
-    from bilinc.cloud_mcp import CLOUD_MCP_TOOLS
+    from bilinc.cloud_mcp import CLOUD_MCP_TOOLS, LOCAL_MCP_TOOLS
 
-    assert set(CLOUD_MCP_TOOLS) == set(_tools())
+    assert set(CLOUD_MCP_TOOLS) | set(LOCAL_MCP_TOOLS) == set(_tools())
+    assert set(CLOUD_MCP_TOOLS).isdisjoint(LOCAL_MCP_TOOLS)
 
 
 def test_cli_list_hint_quotes_filter_values(cli, capsys):
