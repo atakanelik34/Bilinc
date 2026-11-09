@@ -463,7 +463,9 @@ cached by the serving process and is not guaranteed fresh.
    `--refresh-history` (a first run included, so the next run has a marker
    to compare with), the run fetches `history("__system", limit=1, values="none")` through the same
    retry layer as other history calls, **before** the list (the start
-   marker), and again **after** the per-key history phase (the end marker).
+   marker), and again **after** the per-key history phase (the end marker)
+   when at least one block was reused (with nothing reused there is nothing
+   to re-check, so a first run reads one marker).
    The marker is `sha256` of the canonical JSON (`sort_keys`,
    `ensure_ascii=False`) of that response's `entries` and `truncated`.
    `values="none"` keeps a large value out of the call if a user owns a key
@@ -550,8 +552,8 @@ rendered differently.
 **Proof (tests).**
 - Counting fake transport (the routed integration transport, extended to
   record every call in one ordered log and to count marker calls, i.e.
-  `__system` with `values="none"`, separately): first run makes 2 marker
-  calls + one history call per key; the second run on the same data makes
+  `__system` with `values="none"`, separately): first run makes 1 marker
+  call + one history call per key; the second run on the same data makes
   the same list calls, exactly 2 marker calls and 0 per-key history calls,
   and writes byte-identical pages apart from `exported_at`.
 - Order: the first call of a run is the start marker, before any list call;
@@ -620,21 +622,35 @@ is pinned as:
    - system folders and everything inside them: `/bin /boot /dev /etc /lib
      /lib32 /lib64 /opt /proc /root /run /sbin /srv /sys /usr /var /private
      /System /Library /Applications /cores`, and on Windows the Windows
-     folder and the Program Files folders;
+     folder, the Program Files folders, `%ProgramData%`, `%APPDATA%` and
+     `%LOCALAPPDATA%`;
    - `/Volumes` and `/mnt` themselves (a drive under them is allowed);
    - the Bilinc config folder (`BILINC_CONFIG_DIR`, else
      `$XDG_CONFIG_HOME/bilinc`, else `~/.config/bilinc`): the target may not
      equal it, sit inside it, or contain it, so an export can never replace
      the saved key file;
-   - carve-out, evaluated before the system-folder rule: the system temp folder (`realpath(tempfile.gettempdir())`)
-     and `/private/tmp` are allowed even though they sit under `/private`
-     or `/var` on macOS;
+   - carve-out, evaluated before the system-folder rule: the system temp
+     folder (`realpath(tempfile.gettempdir())`), `/tmp` and `/private/tmp`
+     are allowed even though they sit under `/private` or `/var` on macOS.
+     Because `gettempdir()` follows `TMPDIR`, a temp folder is ignored when
+     it is fewer than two levels below its drive root (other than `/tmp` and
+     `/private/tmp`), or is home, an ancestor of home, or a refused root or
+     an ancestor of one;
    - hidden folders in home and everything inside them (`~/.ssh`,
      `~/.config`, …): any component under home starting with `.`;
    - `~/Library` and everything inside it, except `~/Library/Mobile
      Documents` and `~/Library/CloudStorage` (user document locations; the
      cloud warning applies).
-5. Then the normal export runs with its own guards (non-empty folder without
+5. Ownership (POSIX, review round 1): an existing target must belong to the
+   current user and not be world-writable; a new target's parent must not be
+   world-writable unless it has the sticky bit (as `/tmp` does). Otherwise
+   another local user could pre-create the folder, or swap a subfolder for a
+   symlink between the checks and the writes. Group write is allowed: with
+   umask 002 and a group per user it is the normal state of a user's own
+   folders. Path-based writes are not yet done through directory file
+   descriptors; with these ownership rules no other user can change the
+   folder under the export.
+6. Then the normal export runs with its own guards (non-empty folder without
    a manifest is refused, and so on), so the MCP path never writes anywhere
    the CLI would not.
 
@@ -722,7 +738,9 @@ tests.
   manifest saying `foo.md` over an on-disk `Foo.md`), or it is the same
   entry as an owned twin. A user's `Foo.md` is still refused as today.
   Folder spellings are not changed: renaming a folder would also move files
-  the user added inside it. Tested with the case-insensitive emulation
+  the user added inside it. As before, if the user deletes our `foo.md` and
+  creates their own `Foo.md` on a case-insensitive disk, the path still
+  counts as ours (the same outcome `os.replace` had on main). Tested with the case-insensitive emulation
   fixture in `tests/test_wiki_writer.py`.
 - **`md_inline` escaping.** Every `~` is backslash-escaped (GFM renders a
   single `~x~` as strikethrough; the doubled form was already escaped). An
