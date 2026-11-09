@@ -459,8 +459,9 @@ cached by the serving process and is not guaranteed fresh.
 
 **Design.**
 
-1. *Run marker.* When reuse is possible (rules 1–4 below), the run
-   fetches `history("__system", limit=1, values="none")` through the same
+1. *Run marker.* On every run with `--history N` > 0 and no
+   `--refresh-history` (a first run included, so the next run has a marker
+   to compare with), the run fetches `history("__system", limit=1, values="none")` through the same
    retry layer as other history calls, **before** the list (the start
    marker), and again **after** the per-key history phase (the end marker).
    The marker is `sha256` of the canonical JSON (`sort_keys`,
