@@ -10,11 +10,13 @@ every path it will write through has been checked.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import os
 import shutil
 import stat
 import tempfile
 import unicodedata
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -146,7 +148,7 @@ def write_tree(
         # crash halfway never strands files the next run would treat as the user's.
         _write_manifest(target, manifest_for(False, sorted(owned | set(wanted))))
         listings: dict[Path, list[str]] = {}
-        parked: list[int] = []
+        parked = itertools.count()
         for rel in wanted:
             _ensure_folders(target, rel)
             source = temp / rel
@@ -231,7 +233,9 @@ def _ensure_folders(target: Path, rel: str) -> None:
         os.chmod(current, DIR_MODE)
 
 
-def _fix_spelling(target: Path, temp: Path, rel: str, listings: dict[Path, list[str]], parked: list[int]) -> None:
+def _fix_spelling(
+    target: Path, temp: Path, rel: str, listings: dict[Path, list[str]], parked: Iterator[int]
+) -> None:
     """On a case-insensitive folder, move an owned entry with another spelling out of the way first.
 
     ``os.replace`` onto such an entry keeps its old spelling. ``_check_paths``
@@ -259,10 +263,10 @@ def _fix_spelling(target: Path, temp: Path, rel: str, listings: dict[Path, list[
     if not _same_entry(parent / on_disk, info):
         return
     old = temp / ".old"
-    if not parked:
+    number = next(parked)
+    if number == 0:
         os.mkdir(old, DIR_MODE)
-    parked.append(len(parked))
-    os.rename(parent / on_disk, old / str(parked[-1]))
+    os.rename(parent / on_disk, old / str(number))
     listing.remove(on_disk)
 
 

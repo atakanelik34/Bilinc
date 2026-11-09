@@ -80,8 +80,9 @@ def md_inline(text: str) -> str:
     out = _INLINE_PUNCT.sub(r"\\\1", fold_lines(text))
     out = _OBSIDIAN_SINGLE.sub(r"\\\1", out)
     out = _OBSIDIAN_DOUBLED.sub(lambda match: "".join("\\" + char for char in match.group()), out)
-    out = _AUTOLINK.sub(lambda match: match.group().replace("/", "\\/").replace(".", "\\."), out)
+    # Addresses first: once a "www." in the domain is escaped they no longer match.
     out = _EMAIL.sub(lambda match: _inert_email(match.group()), out)
+    out = _AUTOLINK.sub(lambda match: match.group().replace("/", "\\/").replace(".", "\\."), out)
     out = _LEADING_MARKER.sub(r"\\\1", out)
     return _LEADING_ORDERED.sub(r"\1\\\2", out)
 

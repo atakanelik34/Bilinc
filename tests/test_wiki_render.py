@@ -771,3 +771,7 @@ def test_reused_history_matches_a_fresh_render() -> None:
         {"key": "k", "value": "v"}, history=ReusedHistory(history_section(history).rstrip("\n")), **args
     )
     assert reused == fresh
+
+
+def test_md_inline_escapes_an_address_on_a_www_domain() -> None:
+    assert md_inline("a@www.x.com") == "a\\@www\\.x\\.com"

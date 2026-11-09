@@ -230,6 +230,7 @@ def fetch_marker(
     )
     if not isinstance(result, dict) or not isinstance(result.get("entries"), list):
         return None
+    # default=str: an unexpected value type still hashes the same way on every run.
     canonical = json.dumps(
         {"entries": result["entries"], "truncated": result.get("truncated")},
         sort_keys=True,

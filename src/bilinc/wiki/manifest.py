@@ -19,7 +19,8 @@ MANIFEST_NAME = ".bilinc-wiki.json"
 TMP_NAME = ".bilinc-wiki.tmp"
 FORMAT = 1
 TOOL = "bilinc wiki"
-#: Bumped whenever a page's history block renders differently, so a block
+#: Bumped whenever a page's history block renders differently (including a
+#: change to ``md_inline``, which renders unparsable times there), so a block
 #: written by another renderer is never reused.
 HISTORY_FORMAT = 1
 _HEX64 = re.compile(r"[0-9a-f]{64}")
