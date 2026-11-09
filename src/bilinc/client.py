@@ -7,6 +7,7 @@ shipped in the public package.
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import os
@@ -409,6 +410,18 @@ def _default_ssl_context() -> ssl.SSLContext:
     """
 
     ca_bundle = os.environ.get("BILINC_CA_BUNDLE") or os.environ.get("SSL_CERT_FILE")
+    return _ssl_context_for(ca_bundle or None)
+
+
+@functools.lru_cache(maxsize=4)
+def _ssl_context_for(ca_bundle: str | None) -> ssl.SSLContext:
+    """Build the TLS context once per CA bundle path and reuse it.
+
+    Loading a CA bundle costs milliseconds of CPU and contends for the GIL, so a
+    fresh context per request made many-request commands (``bilinc wiki``)
+    several times slower. A context is safe to share between threads.
+    """
+
     if ca_bundle:
         return ssl.create_default_context(cafile=ca_bundle)
 

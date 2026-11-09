@@ -110,3 +110,33 @@ def test_error_for_response_keeps_positional_signature():
     assert isinstance(error, BilincRateLimitError)
     assert error.retry_after is None
     assert error_for_response(429, {}, retry_after="3").retry_after == 3.0
+
+
+def test_tls_context_is_built_once_per_ca_bundle(monkeypatch, tmp_path):
+    from bilinc import client as client_module
+
+    calls = []
+    real = client_module.ssl.create_default_context
+
+    def counting(*args, **kwargs):
+        calls.append(kwargs.get("cafile"))
+        return real(*args, **kwargs)
+
+    client_module._ssl_context_for.cache_clear()
+    monkeypatch.setattr(client_module.ssl, "create_default_context", counting)
+    monkeypatch.delenv("BILINC_CA_BUNDLE", raising=False)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    try:
+        first = client_module._default_ssl_context()
+        assert client_module._default_ssl_context() is first
+        assert len(calls) == 1
+
+        import certifi
+
+        monkeypatch.setenv("BILINC_CA_BUNDLE", certifi.where())
+        override = client_module._default_ssl_context()
+        assert override is not first
+        assert client_module._default_ssl_context() is override
+        assert calls[-1] == certifi.where() and len(calls) == 2
+    finally:
+        client_module._ssl_context_for.cache_clear()
