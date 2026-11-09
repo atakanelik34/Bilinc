@@ -5,6 +5,9 @@ No network and no API key: a scripted transport answers the SDK's list and
 history routes. It checks that two runs are byte-identical apart from
 ``exported_at``, that a file the user added survives, that a non-empty folder
 without the marker is refused, and that folders are 0700 and files 0600.
+Then, in a second folder, it checks history reuse: a rerun on unchanged data
+makes no per-key history calls (only the two rollback-marker reads), a changed
+key is the one key fetched again, and a changed rollback marker refetches all.
 
 Usage: python scripts/wiki_smoke.py   (exit 1 if any check fails)
 """
@@ -83,13 +86,27 @@ def synthetic_entries():
     return [entry(key, value, minute) for minute, (key, value) in enumerate(values)]
 
 
-class FakeCloud:
-    """Answers list (two pages) and history; FAILING_KEY's history is always 503."""
+NO_ROLLBACK = {"key": "__system", "exists": False, "entries": [], "truncated": False, "values": "none"}
+ROLLBACK = {
+    "key": "__system",
+    "exists": False,
+    "entries": [{"op": "rollback", "at": 1762700000.0, "reason": "smoke", "source": None}],
+    "truncated": False,
+    "values": "none",
+}
 
-    def __init__(self, entries):
+
+class FakeCloud:
+    """Answers list (two pages), history and the rollback marker; FAILING_KEY's history is always 503."""
+
+    def __init__(self, entries, marker=NO_ROLLBACK, note="smoke"):
         self.entries = sorted(entries, key=lambda item: item["key"])
+        self.marker = marker
+        self.note = note
         self.lock = threading.Lock()
         self.history_calls = 0
+        self.marker_calls = 0
+        self.keys_fetched = set()
 
     def __call__(self, method, url, *, headers, body, timeout):
         path = urlsplit(url).path
@@ -100,16 +117,21 @@ class FakeCloud:
                 return {"entries": self.entries[:half], "nextCursor": "c1", "total": len(self.entries)}
             return {"entries": self.entries[half:], "nextCursor": None, "total": len(self.entries)}
         if path == "/api/cloud/memory/history":
+            key = payload["key"]
+            if key == "__system" and payload.get("values") == "none":
+                with self.lock:
+                    self.marker_calls += 1
+                return self.marker
             with self.lock:
                 self.history_calls += 1
-            key = payload["key"]
+                self.keys_fetched.add(key)
             if key == FAILING_KEY:
                 raise error_for_response(503, {"error": "cloud_runtime_unavailable"})
             return {
                 "key": key,
                 "exists": True,
                 "entries": [
-                    {"op": "update", "at": "2026-11-08T12:00:00.000Z", "reason": "smoke", "source": "smoke",
+                    {"op": "update", "at": "2026-11-08T12:00:00.000Z", "reason": self.note, "source": "smoke",
                      "before": "old", "after": "new"},
                     {"op": "commit", "at": "2026-11-01T00:00:00.000Z", "source": "smoke", "after": "old"},
                 ],
@@ -119,9 +141,42 @@ class FakeCloud:
         raise AssertionError(f"unexpected route {path}")
 
 
-def run(target: Path, clock: datetime):
-    client = CloudClient(api_key=API_KEY, transport=FakeCloud(synthetic_entries()))
+def run(target: Path, clock: datetime, cloud: FakeCloud | None = None):
+    client = CloudClient(api_key=API_KEY, transport=cloud or FakeCloud(synthetic_entries()))
     return export_wiki(client, target, clock=lambda: clock, sleep=lambda seconds: None)
+
+
+def reuse_checks(scratch: Path, checks: dict) -> None:
+    """History reuse on a folder whose keys all have readable history."""
+    data = [item for item in synthetic_entries() if item["key"] != FAILING_KEY]
+    target = scratch / "reuse"
+    first = FakeCloud(data)
+    run(target, FIRST, first)
+    unchanged = FakeCloud(data)
+    result = run(target, SECOND, unchanged)
+    print(
+        f"reuse rerun: {unchanged.history_calls} per-key history calls, {unchanged.marker_calls} marker calls, "
+        f"{result.history_reused} blocks reused of {len(data)}"
+    )
+    checks["rerun_makes_no_history_calls"] = (
+        first.history_calls == len(data) and unchanged.history_calls == 0 and unchanged.marker_calls == 2
+    )
+
+    changed_key = "ops:on-call"
+    changed = [dict(item, entryVersion="v-changed", value="changed value") if item["key"] == changed_key else item
+               for item in data]
+    one_change = FakeCloud(changed, note="after the change")
+    run(target, SECOND, one_change)
+    page = (target / "ops" / "on-call.md").read_text(encoding="utf-8")
+    print(f"changed key run: fetched {sorted(one_change.keys_fetched)}")
+    checks["changed_key_refreshed"] = one_change.keys_fetched == {changed_key} and "after the change" in page
+
+    rolled_back = FakeCloud(changed, marker=ROLLBACK, note="after a rollback")
+    run(target, SECOND, rolled_back)
+    print(f"rollback marker run: {rolled_back.history_calls} per-key history calls")
+    checks["rollback_marker_refetches_all"] = rolled_back.history_calls == len(data) and "after a rollback" in (
+        target / "solo.md"
+    ).read_text(encoding="utf-8")
 
 
 def tree(root: Path, skip=()):
@@ -178,6 +233,8 @@ def main() -> int:
 
         names = sorted(path.relative_to(target).as_posix() for path in target.rglob("*.md"))
         print(f"sample paths: {[name for name in names if '~' in name or '%' in name][:8]}")
+
+        reuse_checks(Path(scratch), checks)
 
     for name, ok in checks.items():
         print(f"{name}: {ok}")
