@@ -18,7 +18,7 @@ from bilinc.wiki.export import MARKER_UNREADABLE
 from bilinc.wiki.manifest import MANIFEST_NAME
 from tests.test_wiki_export import ENTRIES, SECOND, history_payload, normalised, public_entry, run, transport_for
 from tests.test_wiki_integration import entries, paged
-from tests.wiki_fakes import NO_ROLLBACK, RoutedTransport, not_found, snapshot, unavailable
+from tests.wiki_fakes import NO_ROLLBACK, RoutedTransport, auth_error, not_found, snapshot, unavailable
 
 KEYS = sorted(entry["key"] for entry in ENTRIES)
 ROLLBACK = {
@@ -340,3 +340,46 @@ def test_reuse_keeps_owner_only_permissions(tmp_path):
     for rel, (_, mode) in snapshot(tmp_path).items():
         assert mode == (0o700 if rel.endswith("/") else 0o600), rel
     assert os.stat(tmp_path).st_mode & 0o777 == 0o700
+
+
+# --- the end marker and the second pass ----------------------------------------------
+
+
+def test_an_unreadable_end_marker_refetches_the_reused_keys(tmp_path):
+    run(tmp_path, transport_for())
+    second = transport_for(history=all_fresh("fetched again"), marker=[NO_ROLLBACK, unavailable()])
+
+    result = run(tmp_path, second, clock=SECOND)
+
+    assert second.total_history_calls() == len(KEYS)
+    assert (result.history_fetched, result.history_reused) == (len(KEYS), 0)
+    assert "fetched again" in page(tmp_path)
+
+
+@pytest.mark.parametrize("where", ["end marker", "second pass"])
+def test_an_auth_error_after_reuse_leaves_the_previous_wiki_identical(tmp_path, where):
+    run(tmp_path, transport_for())
+    before = snapshot(tmp_path)
+    if where == "end marker":
+        second = transport_for(marker=[NO_ROLLBACK, auth_error()])
+    else:
+        second = transport_for(history={"solo": [auth_error()]}, marker=[NO_ROLLBACK, ROLLBACK])
+
+    with pytest.raises(Exception, match="(?i)auth|key|invalid"):
+        run(tmp_path, second, clock=SECOND)
+
+    assert snapshot(tmp_path) == before
+
+
+def test_a_key_failing_in_the_second_pass_is_unavailable_and_fetched_next_time(tmp_path):
+    run(tmp_path, transport_for())
+    second = transport_for(history={"solo": [not_found()]}, marker=[NO_ROLLBACK, ROLLBACK])
+
+    result = run(tmp_path, second, clock=SECOND)
+
+    assert result.history_unavailable == ["solo"]
+    assert "History unavailable." in page(tmp_path)
+    assert "history_sha256" not in manifest(tmp_path)["keys"]["solo"]
+    third = transport_for()
+    run(tmp_path, third, clock=SECOND)
+    assert third.history_calls("solo") == 1 and third.total_history_calls() == 1
