@@ -473,23 +473,18 @@ cached by the serving process and is not guaranteed fresh.
      chose to reuse is fetched after all (a second history pass for exactly
      those keys) and the manifest records the **start** marker, so the next
      run refetches everything once more.
-   - *Rollback start entry (runtime change, decided at G1).* Reads do not
-     take the project's mutation lock, and `rollback_execute()` restores keys
-     one by one and writes its `__system` entry only at the end. An export
-     whose whole run falls inside a long rollback could read a restored key
-     with its old version while neither marker has changed yet. Fix: the
-     runtime writes a value-free `rollback` entry under `__system` (metadata
-     `phase: "start"`, `rollback: true`, the snapshot id and reason)
-     **before** the first key is restored; the existing end entry gains
-     `rollback: true` and stays. With `rollback: true` the history record
-     carries `rollbackSnapshotId`, so the marker holds the snapshot id, not
-     only a timestamp. Then any rollback that has
-     restored anything has already changed the marker. Until the runtime with
-     this entry is deployed, that overlap remains a stated risk. A failure to fetch it
-   (other than auth / entitlement / payment, which abort as before) sets the
-   marker to `null`: no reuse in this run, one stderr line
-   `note: history reuse is off for this run (…)`, and the next run cannot
-   reuse either.
+   - *No runtime change (decided at G1).* Reads do not take the project's
+     mutation lock, and `rollback_execute()` restores keys one by one and
+     writes its `__system` entry only at the end. An export that overlaps a
+     rollback still restoring keys, and whose end-marker read happens before
+     that entry is written, can reuse a restored key's pre-rollback block.
+     This is accepted as a stated residual (below): it is narrow, and it
+     heals on the next run, because the manifest keeps the start marker,
+     which then differs from the new `__system` head and forces a refetch.
+     A runtime "rollback started" entry can be proposed separately.
+   - The `__system` history answers `exists: false` while still returning
+     entries (verified against the live service, read-only); the marker
+     hashes `entries` and `truncated` and ignores `exists`.
 2. *Manifest additions* (format stays 1; the 2.7.0 manifest has not
    shipped). `read_manifest` validates them when present (`history_marker`
    null or a 64-hex string, `history_format` an int, `history_sha256` a
@@ -532,12 +527,12 @@ cached by the serving process and is not guaranteed fresh.
    counts. The CLI summary line becomes
    `Wrote N pages to DIR (removed M stale files; history: F fetched, R reused)`.
 
-**Residual risk, stated.** With the rollback start entry deployed, none
-known: a rollback that restored anything has changed the marker, whether it
-finished, is still running, or crashed. Without it (older runtime), a
-rollback still running when the end marker is read, or one that crashed
-before its end entry, can leave a restored key's pre-rollback block in the
-export until the key changes or `--refresh-history` is used.
+**Residual risk, stated.** A rollback still restoring keys when the end
+marker is read, or one that crashed before writing its `__system` entry,
+can leave a restored key's pre-rollback history block in that export. The
+next run refetches every key (the start marker it compares against has
+changed), or sooner with `--refresh-history`. User-facing text says history
+is reused only when nothing changed; it does not claim more.
 
 Known limit (as in the base design, the folder is tied to `base_url`, not
 a workspace id): exporting a different workspace on the same `base_url`
@@ -573,9 +568,8 @@ rendered differently.
   every key is fetched; the page shows the new block. Kept as a permanent
   test; the mutation check (deleting the marker comparison makes it fail) is
   recorded once in the state log.
-- Runtime: a rollback writes the start entry before the first restore
-  (an audit spy that fails on the first restore sees it already written) and
-  the end entry after; `history("__system")` shows both.
+- A marker answer with `exists: false` and entries is used (not treated as
+  "no marker").
 - Each other off-rule has a test: `--refresh-history`, different N,
   `complete: false`, other `tool_version`, marker fetch failure, missing page,
   page replaced by a symlink, page edited inside the history block, page
@@ -627,6 +621,10 @@ is pinned as:
      /System /Library /Applications /cores`, and on Windows the Windows
      folder and the Program Files folders;
    - `/Volumes` and `/mnt` themselves (a drive under them is allowed);
+   - the Bilinc config folder (`BILINC_CONFIG_DIR`, else
+     `$XDG_CONFIG_HOME/bilinc`, else `~/.config/bilinc`): the target may not
+     equal it, sit inside it, or contain it, so an export can never replace
+     the saved key file;
    - carve-out, evaluated before the system-folder rule: the system temp folder (`realpath(tempfile.gettempdir())`)
      and `/private/tmp` are allowed even though they sit under `/private`
      or `/var` on macOS;
@@ -733,10 +731,7 @@ tests.
 
 ### A6. Release-chain impact (replaces the paragraph above for these items)
 
-SDK, CLI and the local MCP adapter, plus one additive runtime change: the
-rollback start entry under `__system` (A1). That runtime change ships with
-the hosted runtime in the 2.7.0 chain; until it is deployed, reuse is still
-correct except for the stated overlap with a running rollback. No site API
-or database change. The public product truth gains `cloud_mcp.local_tools`;
+SDK, CLI and the local MCP adapter only. No hosted runtime, site API or
+database change. The public product truth gains `cloud_mcp.local_tools`;
 the site's `/docs/wiki` page should mention `--wikilinks`,
 `--refresh-history` and the MCP tool when 2.7.0 ships.
