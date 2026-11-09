@@ -23,6 +23,9 @@ LIST_PATH = "/api/cloud/memory/list"
 HISTORY_PATH = "/api/cloud/memory/history"
 TEST_API_KEY = "bil_live_example"
 TEST_BASE_URL = "https://bilinc.space"
+MARKER_KEY = "__system"
+#: The rollback marker's answer when no rollback ever happened.
+NO_ROLLBACK = {"key": MARKER_KEY, "exists": False, "entries": [], "truncated": False, "values": "none"}
 
 
 class RoutedTransport:
@@ -35,6 +38,12 @@ class RoutedTransport:
     "entries": []}``. ``on_history(key)`` runs before a history answer,
     outside the lock, so tests can block or reorder workers.
 
+    The rollback marker call (key ``__system`` with ``values="none"``) is
+    answered from its own ``marker`` script (default: no rollback) and counted
+    apart: ``history_calls`` and ``total_history_calls`` never include it.
+    ``order`` lists every call as ``("list", cursor)`` or
+    ``("history", key, values)`` in the order they arrived.
+
     Every piece of shared state is guarded by one lock.
     """
 
@@ -45,11 +54,15 @@ class RoutedTransport:
         default_history: dict | None = None,
         *,
         on_history: Callable[[str], None] | None = None,
+        marker: list[dict | Exception] | None = None,
     ) -> None:
         self.list_pages = list(list_pages or [])
         self.history = {key: list(script) for key, script in (history or {}).items()}
         self.default_history = default_history
         self.on_history = on_history
+        self.marker = list(marker or [NO_ROLLBACK])
+        self._marker_calls = 0
+        self._order: list[tuple] = []
         self._lock = threading.Lock()
         self._calls: list[dict[str, Any]] = []
         self._history_calls: dict[str, int] = {}
@@ -64,6 +77,10 @@ class RoutedTransport:
             self._calls.append(
                 {"method": method, "path": path, "headers": headers, "body": payload}
             )
+            if path == LIST_PATH:
+                self._order.append(("list", payload.get("cursor")))
+            elif path == HISTORY_PATH:
+                self._order.append(("history", payload.get("key"), payload.get("values")))
         if path == LIST_PATH:
             return self._answer_list(payload)
         if path == HISTORY_PATH:
@@ -79,6 +96,11 @@ class RoutedTransport:
 
     def _answer_history(self, payload):
         key = payload["key"]
+        if key == MARKER_KEY and payload.get("values") == "none":
+            with self._lock:
+                response = self.marker[min(self._marker_calls, len(self.marker) - 1)]
+                self._marker_calls += 1
+            return _deliver(response)
         with self._lock:
             calls = self._history_calls.get(key, 0)
             self._history_calls[key] = calls + 1
@@ -112,6 +134,15 @@ class RoutedTransport:
 
     def history_bodies(self) -> list[dict]:
         return [call["body"] for call in self.calls if call["path"] == HISTORY_PATH]
+
+    @property
+    def order(self) -> list[tuple]:
+        with self._lock:
+            return list(self._order)
+
+    def marker_calls(self) -> int:
+        with self._lock:
+            return self._marker_calls
 
     def history_calls(self, key: str) -> int:
         with self._lock:
