@@ -13,6 +13,7 @@ parents) cannot slip past; casefolded text is the fallback.
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -34,9 +35,9 @@ LIBRARY_ALLOWED = frozenset({"mobile documents", "cloudstorage"})
 
 
 def WINDOWS_ROOTS() -> tuple[str, ...]:  # noqa: N802 - named like the constant it stands for
-    """The Windows folder and the Program Files folders, from the environment."""
+    """The Windows folder, Program Files and the app data folders, from the environment."""
 
-    names = ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)")
+    names = ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData", "APPDATA", "LOCALAPPDATA")
     return tuple(value for name in names if (value := os.environ.get(name)))
 
 
@@ -72,7 +73,8 @@ def check_mcp_target(
     if refused_roots is None:
         refused_roots = SYSTEM_ROOTS + (WINDOWS_ROOTS() if os.name == "nt" else ())
     if temp_dirs is None:
-        temp_dirs = (os.path.realpath(tempfile.gettempdir()), "/private/tmp")
+        temp_dirs = (os.path.realpath(tempfile.gettempdir()), "/tmp", "/private/tmp")
+    temp_dirs = _narrow_temps(temp_dirs, home=home, roots=refused_roots)
 
     given = os.fspath(directory)
     # Long-path prefix: \\?\C:\x is C:\x, and \\?\UNC\server\share is \\server\share.
@@ -86,17 +88,80 @@ def check_mcp_target(
     given = os.path.expanduser(given)
     if not given or not os.path.isabs(given):
         raise WikiRefused(f"{directory!r} is not an absolute path; give the full folder path")
-    # Trailing separators make islink follow the link, so strip them first.
-    if os.path.islink(given.rstrip("/\\") or given):
+    # Trailing separators and "." or ".." parts make islink follow the link, so
+    # normalise first; the folder itself must be what its parent says it is.
+    normalised = os.path.normpath(given)
+    resolved = Path(os.path.realpath(given))
+    name = os.path.basename(normalised)
+    link_like = os.path.islink(given.rstrip("/\\") or given) or os.path.islink(normalised)
+    moved = bool(name) and Path(os.path.realpath(os.path.dirname(normalised))) / name != resolved
+    if link_like or moved:
         raise WikiRefused(f"{directory} is a symbolic link; give the real folder instead")
 
-    resolved = Path(os.path.realpath(given))
     for path in _candidates(given):
         reason = _refusal(path, home=home, config=config, roots=refused_roots, temps=temp_dirs)
         if reason:
             shown = str(path) if str(path) == directory else f"{directory} ({path})"
             raise WikiRefused(f"{shown} {reason}")
+    reason = _ownership_refusal(resolved)
+    if reason:
+        raise WikiRefused(f"{directory} {reason}")
     return resolved
+
+
+def _ownership_refusal(resolved: Path) -> str | None:
+    """Refuse a folder another local user could swap out from under the export (POSIX).
+
+    An existing target must be ours and not world-writable. A new one is
+    created in its parent, which must not be world-writable unless it has the
+    sticky bit (as ``/tmp`` does), where nobody else can rename our folder.
+    Group write is left alone: with a umask of 002 and a group per user it is
+    the normal state of a user's own folders.
+    """
+
+    if not hasattr(os, "geteuid"):
+        return None
+    try:
+        info = os.stat(resolved)
+    except FileNotFoundError:
+        try:
+            parent = os.stat(resolved.parent)
+        except OSError:
+            return None  # the writer refuses a missing parent
+        if parent.st_mode & 0o002 and not parent.st_mode & stat.S_ISVTX:
+            return "would be created in a folder others can write; choose a folder of your own"
+        return None
+    except OSError:
+        return None
+    if info.st_uid != os.geteuid():
+        return "belongs to another user; choose a folder of your own"
+    if info.st_mode & 0o002:
+        return "is a folder others can write; choose a folder of your own"
+    return None
+
+
+def _narrow_temps(temps: tuple[str, ...], *, home: Path, roots: tuple[str, ...]) -> tuple[str, ...]:
+    """Drop temp folders too broad to lift the system-folder rule.
+
+    ``tempfile.gettempdir()`` follows ``TMPDIR``, which could name ``/`` or a
+    system folder. A temp folder is kept when it is ``/tmp`` or
+    ``/private/tmp``, or sits at least two levels below its drive root, and in
+    either case is neither home, an ancestor of home, nor a refused root or one
+    of its ancestors.
+    """
+
+    kept = []
+    for temp in temps:
+        path = Path(os.path.realpath(temp))
+        literal = os.path.normpath(temp) in ("/tmp", "/private/tmp")
+        if not literal and len(path.parts) < 3:
+            continue
+        if _under(home, path) is not None:
+            continue
+        if any(_under(Path(root), path) is not None for root in roots):
+            continue
+        kept.append(temp)
+    return tuple(kept)
 
 
 def _candidates(given: str) -> list[Path]:

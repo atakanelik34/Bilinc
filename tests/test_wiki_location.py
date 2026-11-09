@@ -255,3 +255,73 @@ def test_system_roots_list_matches_the_design():
         location.SYSTEM_ROOTS
     )
     assert "/tmp" not in location.SYSTEM_ROOTS and "/home" not in location.SYSTEM_ROOTS
+
+
+# --- review round 1: ownership, temp carve-out limits, dot components, AppData -----
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX ownership")
+def test_mcp_refuses_an_existing_folder_others_can_write(env):
+    shared = env.home / "Documents" / "shared"
+    shared.mkdir()
+    os.chmod(shared, 0o777)
+    assert "others can write" in env.refused(shared)
+    os.chmod(shared, 0o755)
+    assert env.check(shared) == shared.resolve()
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX ownership")
+def test_mcp_refuses_a_new_folder_in_a_parent_others_can_write_without_sticky_bit(env):
+    open_parent = env.home / "Documents" / "open"
+    open_parent.mkdir()
+    os.chmod(open_parent, 0o777)
+    assert "others can write" in env.refused(open_parent / "wiki")
+    os.chmod(open_parent, 0o1777)  # like /tmp: a new folder of ours cannot be swapped out
+    assert env.check(open_parent / "wiki") == (open_parent / "wiki").resolve()
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX ownership")
+def test_mcp_refuses_a_folder_owned_by_someone_else(env, monkeypatch):
+    target = env.home / "Documents" / "theirs"
+    target.mkdir()
+    monkeypatch.setattr(os, "geteuid", lambda: os.stat(target).st_uid + 1)
+    assert "belongs to another user" in env.refused(target)
+
+
+@pytest.mark.parametrize("bad_temp", ["/", "home", "system", "home_parent"])
+def test_mcp_ignores_a_temp_carve_out_that_is_too_broad(env, bad_temp):
+    temp = {
+        "/": "/",
+        "home": str(env.home),
+        "system": str(env.system),
+        "home_parent": str(env.home.parent),
+    }[bad_temp]
+    with pytest.raises(WikiRefused) as caught:
+        check_mcp_target(
+            str(env.system / "inner" / "wiki"),
+            home=env.home,
+            config_dir=env.config_dir,
+            refused_roots=(str(env.system),),
+            temp_dirs=(temp,),
+        )
+    assert "system folder" in str(caught.value)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks")
+@pytest.mark.parametrize("suffix", ["/.", "/x/.."])
+def test_mcp_refuses_a_symlinked_last_component_spelled_with_dots(env, suffix):
+    real = env.home / "Documents" / "real"
+    real.mkdir()
+    (real / "x").mkdir()
+    link = env.home / "Documents" / "link"
+    link.symlink_to(real, target_is_directory=True)
+    assert "symbolic link" in env.refused(str(link) + suffix)
+
+
+def test_windows_roots_include_app_data(monkeypatch):
+    monkeypatch.setenv("APPDATA", r"C:\Users\u\AppData\Roaming")
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\u\AppData\Local")
+    monkeypatch.setenv("ProgramData", r"C:\ProgramData")
+    roots = location.WINDOWS_ROOTS()
+    assert r"C:\Users\u\AppData\Roaming" in roots and r"C:\Users\u\AppData\Local" in roots
+    assert r"C:\ProgramData" in roots
