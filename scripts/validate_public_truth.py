@@ -105,6 +105,10 @@ def validate_product_truth(path: Path = MANIFEST) -> list[str]:
         errors.append("Cloud MCP tools and local_tools overlap")
     if tools + local_tools != _cloud_mcp_tool_names(ROOT / "src" / "bilinc" / "cloud_mcp.py"):
         errors.append("Cloud MCP tools and local_tools do not match cloud_mcp.py")
+    # Tools the stdio adapter has that the hosted connector does not offer yet.
+    pending = cloud_mcp.get("hosted_connector_pending", [])
+    if not isinstance(pending, list) or not set(pending) <= set(tools):
+        errors.append("hosted_connector_pending must be a subset of tools")
     benchmark = payload["benchmark_claims"]
     required_benchmark_fields = {"state", "public_approved", "label", "scope", "metrics", "qualification", "rule"}
     errors.extend(

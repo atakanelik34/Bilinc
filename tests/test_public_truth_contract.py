@@ -38,6 +38,9 @@ def test_public_product_truth_matches_the_shipped_cloud_surface() -> None:
         "list_memories",
         "history",
         "confirm",
+        "dream_start",
+        "dream_apply",
+        "dream_undo",
     ]
     benchmark = payload["benchmark_claims"]
     assert benchmark["state"] == "historical_scoped"
