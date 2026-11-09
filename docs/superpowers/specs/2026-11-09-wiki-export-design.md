@@ -459,12 +459,30 @@ cached by the serving process and is not guaranteed fresh.
 
 **Design.**
 
-1. *Run marker.* When reuse is possible (rules 1–4 below), the run first
-   fetches `history("__system", limit=1)` through the same retry layer as
-   other history calls, **before** the list. The marker is
-   `sha256` of the canonical JSON (`sort_keys`, `ensure_ascii=False`) of
-   that response's `entries` and `truncated`. Any rollback after the marker
-   is read changes the marker seen by the next run. A failure to fetch it
+1. *Run marker.* When reuse is possible (rules 1–4 below), the run
+   fetches `history("__system", limit=1, values="none")` through the same
+   retry layer as other history calls, **before** the list (the start
+   marker), and again **after** the per-key history phase (the end marker).
+   The marker is `sha256` of the canonical JSON (`sort_keys`,
+   `ensure_ascii=False`) of that response's `entries` and `truncated`.
+   `values="none"` keeps a large value out of the call if a user owns a key
+   named `__system` (the name is not reserved; such a key only makes reuse
+   rarer, never wrong). Any rollback after the start marker is read changes
+   the marker seen by the next run.
+   - When the end marker differs from the start marker, every block this run
+     chose to reuse is fetched after all (a second history pass for exactly
+     those keys) and the manifest records the **start** marker, so the next
+     run refetches everything once more.
+   - *Rollback start entry (runtime change, decided at G1).* Reads do not
+     take the project's mutation lock, and `rollback_execute()` restores keys
+     one by one and writes its `__system` entry only at the end. An export
+     whose whole run falls inside a long rollback could read a restored key
+     with its old version while neither marker has changed yet. Fix: the
+     runtime writes a value-free `rollback` entry under `__system` (metadata
+     `phase: "start"`, the snapshot id and reason) **before** the first key
+     is restored; the existing end entry stays. Then any rollback that has
+     restored anything has already changed the marker. Until the runtime with
+     this entry is deployed, that overlap remains a stated risk. A failure to fetch it
    (other than auth / entitlement / payment, which abort as before) sets the
    marker to `null`: no reuse in this run, one stderr line
    `note: history reuse is off for this run (…)`, and the next run cannot
@@ -479,7 +497,8 @@ cached by the serving process and is not guaranteed fresh.
 3. *A key's block is reused only when all hold:*
    1. `--history N` > 0 and `--refresh-history` is not given;
    2. the previous manifest exists and has `complete: true`;
-   3. its `tool_version` equals this tool's version (the renderer may differ);
+   3. its `tool_version` equals this tool's version and its
+      `history_format` equals this tool's (the renderer may differ);
    4. its `history` equals N;
    5. this run's marker is not `null` and equals the manifest's
       `history_marker`;
@@ -502,24 +521,43 @@ cached by the serving process and is not guaranteed fresh.
    counts. The CLI summary line becomes
    `Wrote N pages to DIR (removed M stale files; history: F fetched, R reused)`.
 
-**Residual risk, stated.** A rollback that dies after restoring some keys
-and before writing its `__system` entry would not change the marker. The
-next export then shows those keys' pre-rollback history block until the key
-changes or `--refresh-history` is used. This is a crash in the middle of a
-destructive server operation; the export cannot detect it from public data.
+**Residual risk, stated.** With the rollback start entry deployed, none
+known: a rollback that restored anything has changed the marker, whether it
+finished, is still running, or crashed. Without it (older runtime), a
+rollback still running when the end marker is read, or one that crashed
+before its end entry, can leave a restored key's pre-rollback block in the
+export until the key changes or `--refresh-history` is used.
+
+The manifest also gains `history_format` (an integer, 1), bumped whenever
+the history block's rendering changes; reuse requires it to match, so a
+development build with an unchanged version string cannot reuse a block
+rendered differently.
 
 **Proof (tests).**
-- Counting fake transport (the routed integration transport): first run
-  makes 1 marker call + one history call per key; the second run on the same
-  data makes the same list calls, exactly 1 marker call and 0 per-key history
-  calls, and writes byte-identical pages apart from `exported_at`.
+- Counting fake transport (the routed integration transport, extended to
+  record every call in one ordered log and to count marker calls, i.e.
+  `__system` with `values="none"`, separately): first run makes 2 marker
+  calls + one history call per key; the second run on the same data makes
+  the same list calls, exactly 2 marker calls and 0 per-key history calls,
+  and writes byte-identical pages apart from `exported_at`.
+- Order: the first call of a run is the start marker, before any list call;
+  the end marker comes after the last per-key history call.
+- Rollback during the run: the `__system` answer changes between the start
+  and end marker → the reused keys are fetched in the same run, the pages
+  show the new blocks, the manifest holds the start marker, and the next run
+  refetches every key.
+- A user key named `__system`: exported as a page, its own history fetched
+  with full values, and marker counting unaffected.
 - Changed key: one key's `entryVersion` changes between runs → exactly that
   key is fetched and its page shows the new block; a variant where only
   `updatedAt` changes does the same.
 - Rollback: same `entryVersion`/`updatedAt`, new history, changed marker →
-  every key is fetched; the page shows the new block. This test fails if the
-  reuse decision ignores the marker (checked once by deleting the marker
-  comparison and watching it fail).
+  every key is fetched; the page shows the new block. Kept as a permanent
+  test; the mutation check (deleting the marker comparison makes it fail) is
+  recorded once in the state log.
+- Runtime: a rollback writes the start entry before the first restore
+  (an audit spy that fails on the first restore sees it already written) and
+  the end entry after; `history("__system")` shows both.
 - Each other off-rule has a test: `--refresh-history`, different N,
   `complete: false`, other `tool_version`, marker fetch failure, missing page,
   page replaced by a symlink, page edited inside the history block, page
@@ -656,7 +694,10 @@ tests.
 
 ### A6. Release-chain impact (replaces the paragraph above for these items)
 
-SDK, CLI and the local MCP adapter only. No hosted runtime, site API or
-database change. The public product truth gains `cloud_mcp.local_tools`;
+SDK, CLI and the local MCP adapter, plus one additive runtime change: the
+rollback start entry under `__system` (A1). That runtime change ships with
+the hosted runtime in the 2.7.0 chain; until it is deployed, reuse is still
+correct except for the stated overlap with a running rollback. No site API
+or database change. The public product truth gains `cloud_mcp.local_tools`;
 the site's `/docs/wiki` page should mention `--wikilinks`,
 `--refresh-history` and the MCP tool when 2.7.0 ships.
