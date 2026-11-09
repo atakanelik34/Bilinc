@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from collections.abc import Iterable
 from pathlib import Path
@@ -18,6 +19,10 @@ MANIFEST_NAME = ".bilinc-wiki.json"
 TMP_NAME = ".bilinc-wiki.tmp"
 FORMAT = 1
 TOOL = "bilinc wiki"
+#: Bumped whenever a page's history block renders differently, so a block
+#: written by another renderer is never reused.
+HISTORY_FORMAT = 1
+_HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
 class ManifestError(ValueError):
@@ -59,8 +64,16 @@ def _validated_keys(keys: Any) -> dict[str, dict]:
         if not isinstance(key, str) or not isinstance(entry, dict):
             raise ManifestError(f"invalid manifest entry for key {key!r}")
         validate_rel_path(entry.get("path"))
-        result[key] = dict(entry)
+        entry = dict(entry)
+        # A malformed digest only means that key's history is fetched again.
+        if "history_sha256" in entry and not _is_hex64(entry["history_sha256"]):
+            del entry["history_sha256"]
+        result[key] = entry
     return result
+
+
+def _is_hex64(value: Any) -> bool:
+    return isinstance(value, str) and _HEX64.fullmatch(value) is not None
 
 
 def build_manifest(
@@ -73,8 +86,13 @@ def build_manifest(
     complete: bool,
     files: Iterable[str],
     keys: dict[str, dict],
+    history_marker: str | None = None,
 ) -> dict:
-    """Return the manifest dict for one run; ``files`` sorted and validated."""
+    """Return the manifest dict for one run; ``files`` sorted and validated.
+
+    ``history_marker`` is the rollback marker read at the start of the run
+    (None when it was not read); see :mod:`bilinc.wiki.reuse`.
+    """
 
     return {
         "format": FORMAT,
@@ -87,6 +105,8 @@ def build_manifest(
         "complete": complete,
         "files": _validated_files(files),
         "keys": _validated_keys(keys),
+        "history_format": HISTORY_FORMAT,
+        "history_marker": history_marker,
     }
 
 
@@ -142,4 +162,10 @@ def read_manifest(directory: Path) -> dict | None:
         raise ManifestError(f"{MANIFEST_NAME} files must be a list")
     manifest["files"] = _validated_files(files)
     manifest["keys"] = _validated_keys(manifest.get("keys"))
+    # Reuse fields never refuse a folder: a malformed or missing one turns reuse off.
+    if not _is_hex64(manifest.get("history_marker")):
+        manifest["history_marker"] = None
+    history_format = manifest.get("history_format")
+    if isinstance(history_format, bool) or not isinstance(history_format, int):
+        manifest["history_format"] = None
     return manifest
