@@ -138,7 +138,7 @@ def test_existing_commands_are_unchanged():
     parser = build_parser()
     subparsers = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
 
-    assert set(subparsers.choices) == EXISTING_COMMANDS | {"wiki"}
+    assert set(subparsers.choices) == EXISTING_COMMANDS | {"wiki", "dream"}
 
 
 def test_wiki_raw_network_error_on_list_is_a_clean_error(cli, tmp_path, capsys):

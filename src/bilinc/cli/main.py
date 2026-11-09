@@ -187,6 +187,123 @@ def _name_some(keys: list[str], limit: int = 20) -> str:
     return shown + (f", … ({len(keys) - limit} more)" if len(keys) > limit else "")
 
 
+def _read_dream_actions(
+    parser: argparse.ArgumentParser, source: str
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Load `{"actions": [...], "report": {...}}` or a bare action list; bad input is a usage error."""
+    try:
+        if source == "-":
+            text = sys.stdin.read()
+        else:
+            with open(source, encoding="utf-8") as handle:
+                text = handle.read()
+    except OSError as exc:
+        parser.error(f"dream apply: cannot read {source}: {exc.strerror or exc}")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        parser.error(f"dream apply: {source} is not valid JSON ({exc.msg}, line {exc.lineno})")
+    report = None
+    if isinstance(payload, dict):
+        actions = payload.get("actions")
+        report = payload.get("report")
+        if report is not None and not isinstance(report, dict):
+            parser.error("dream apply: report must be a JSON object")
+    else:
+        actions = payload
+    if not isinstance(actions, list):
+        parser.error('dream apply: expected {"actions": [...]} or a JSON list of actions')
+    return actions, report
+
+
+def _dream_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    commands = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
+    return commands.choices["dream"]
+
+
+def _print_dream_start(result: dict[str, Any]) -> None:
+    if not result.get("dream_id"):
+        print(f"Nothing changed since {result.get('since') or 'the last dream'}; no dream started.")
+        return
+    candidates = result.get("candidates") or []
+    count = result.get("candidate_count", len(candidates))
+    window = result.get("undo_window_days", 7)
+    print(
+        f"dream {result['dream_id']}: {count} candidates, forget cap {result.get('forget_cap', 0)}, "
+        f"undo window {window} days"
+    )
+    for item in candidates:
+        print(
+            f"{item.get('key')}  [{item.get('memory_type') or '-'}]  "
+            f"{_short_time(item.get('updated_at'))}  {item.get('entry_version') or '-'}"
+        )
+    if result.get("truncated"):
+        print("(more candidates than shown; run again after this dream, or narrow with --prefix)")
+
+
+def _print_dream_results(results: list[dict[str, Any]]) -> None:
+    totals = {"applied": 0, "conflict": 0, "error": 0, "skipped": 0}
+    for row in results:
+        outcome = str(row.get("result") or "-")
+        if outcome in totals:
+            totals[outcome] += 1
+        line = f"{row.get('n')}  {row.get('op')}  {row.get('key')}  {outcome}"
+        if row.get("error"):
+            line += f" {row['error']}"
+        print(line)
+    print(
+        f"applied {totals['applied']}, conflicts {totals['conflict']}, "
+        f"errors {totals['error']}, skipped {totals['skipped']}"
+    )
+
+
+def _print_dream_undo(result: dict[str, Any]) -> None:
+    print(f"dream {result.get('dream_id')}: {result.get('status')}")
+    restored = result.get("restored") or []
+    conflicts = result.get("conflicts") or []
+    kept = result.get("kept") or []
+    print(f"restored ({len(restored)})")
+    for row in restored:
+        line = f"  {row.get('n')}  {row.get('op')}  {row.get('key')}"
+        if row.get("metadata_restored") is False:
+            line += "  (metadata not restored)"
+        print(line)
+    print(f"conflicts ({len(conflicts)})")
+    for row in conflicts:
+        print(f"  {row.get('n')}  {row.get('key')}  {row.get('reason') or ''}".rstrip())
+    print(f"kept ({len(kept)})")
+    for row in kept:
+        print(f"  {row.get('n')}  {row.get('key')}")
+
+
+def _run_dream(client: CloudClient, args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.dream_command == "start":
+        result = client.dream_start(prefix=args.prefix, since=args.since, limit=args.limit)
+        if args.json:
+            _print(result)
+        else:
+            _print_dream_start(result)
+    elif args.dream_command == "apply":
+        actions, report = _read_dream_actions(parser, args.file)
+        try:
+            result = client.dream_apply(args.dream_id, actions, report=report)
+        except BilincCloudError as exc:
+            partial = getattr(exc, "partial", None)
+            if isinstance(partial, dict) and partial.get("results"):
+                _print_dream_results(partial["results"])
+            raise
+        _print_dream_results(result.get("results") or [])
+    elif args.dream_command == "undo":
+        result = client.dream_undo(args.dream_id)
+        if args.json:
+            _print(result)
+        else:
+            _print_dream_undo(result)
+    elif args.dream_command == "show":
+        _print(client.dream_show(args.dream_id))
+    return 0
+
+
 def _run_wiki(client: CloudClient, args: argparse.Namespace) -> int:
     """Export to a folder; one summary line on stdout, everything else on stderr."""
     counted = []
@@ -432,6 +549,28 @@ def build_parser() -> argparse.ArgumentParser:
         "nothing changed since the last export",
     )
 
+    dream_help = "Tidy your agent's memory in a dream pass, and undo it in one step"
+    dream = sub.add_parser("dream", help=dream_help, description=dream_help)
+    dream_sub = dream.add_subparsers(dest="dream_command")
+    dream_start = dream_sub.add_parser("start", help="Start a dream and list the candidate entries")
+    dream_start.add_argument("--prefix", help="Only keys starting with this text")
+    dream_start.add_argument("--since", help="Only entries changed after this ISO-8601 time")
+    dream_start.add_argument("--limit", type=int, default=200, help="Most candidates to return (1-200)")
+    dream_start.add_argument("--json", action="store_true", help="Print the raw JSON response")
+    dream_apply = dream_sub.add_parser("apply", help="Apply a dream's actions from a JSON file or stdin")
+    dream_apply.add_argument("dream_id", help="The id printed by bilinc dream start")
+    dream_apply.add_argument(
+        "--file",
+        default="-",
+        help='JSON with {"actions": [...], "report": {...}} or a bare action list; - reads stdin (default)',
+    )
+    dream_undo = dream_sub.add_parser("undo", help="Undo a dream's own changes")
+    dream_undo.add_argument("dream_id")
+    dream_undo.add_argument("--json", action="store_true", help="Print the raw JSON response")
+    dream_show = dream_sub.add_parser("show", help="Show a dream's report")
+    dream_show.add_argument("dream_id")
+    dream_show.add_argument("--json", action="store_true", help="Print the raw JSON response (the default)")
+
     snapshot = sub.add_parser("snapshot", help="Create or list project checkpoints")
     snapshot.add_argument("action", choices=["create", "list"], nargs="?", default="create")
     snapshot.add_argument("--label", help="Human-readable label for a new checkpoint")
@@ -571,6 +710,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return 0
+    if args.command == "dream" and args.dream_command is None:
+        _dream_parser(parser).print_help(sys.stderr)
+        return 2
 
     try:
         client = _client(args)
@@ -670,6 +812,8 @@ def main(argv: list[str] | None = None) -> int:
                 _print(exported)
         elif args.command == "wiki":
             return _run_wiki(client, args)
+        elif args.command == "dream":
+            return _run_dream(client, args, parser)
         elif args.command == "snapshot":
             if args.action == "list":
                 _print(client.list_snapshots(limit=args.limit))
