@@ -229,6 +229,8 @@ READ_RETRY_BASE_DELAY = 0.25
 
 MAX_DREAM_CANDIDATES = 200
 DREAM_PAGE_SIZE = 25
+#: Most requests one dream_apply or dream_undo call makes before giving up.
+DREAM_MAX_PAGES = 20
 #: Seconds to wait for one dream apply or undo page (the service budget is 60 s).
 DREAM_WRITE_TIMEOUT = 90.0
 DREAM_OPS = ("revise", "forget", "confirm", "flag")
@@ -444,7 +446,7 @@ def _require_dream_action(item: Any, index: int) -> dict[str, Any]:
         version = item.get("expected_version")
         if not isinstance(version, str) or not version.strip():
             raise _invalid(f"{field}.expected_version", f"is required for {op}")
-    if op == "revise" and "new_value" not in item:
+    if op == "revise" and item.get("new_value") is None:
         raise _invalid(f"{field}.new_value", "is required for revise")
     return item
 
@@ -832,6 +834,8 @@ class CloudClient:
         the error is raised with ``exc.partial = {"results": [...], "pages_done": k}``
         holding what earlier pages applied; calling again with the same actions
         resumes, because the service recognises pages it has already seen.
+        Actions the service skipped for lack of time are sent again in a later
+        page.
         """
 
         dream = _require_dream_id(dream_id)
@@ -843,11 +847,15 @@ class CloudClient:
         if report is not None:
             report = _require_object(report, "report")
 
-        pages = [checked[i : i + DREAM_PAGE_SIZE] for i in range(0, len(checked), DREAM_PAGE_SIZE)]
+        queue = list(checked)
         results: list[dict[str, Any]] = []
         last: dict[str, Any] = {}
-        for number, page in enumerate(pages):
-            final = number == len(pages) - 1
+        number = 0
+        while queue:
+            if number >= DREAM_MAX_PAGES:
+                raise _invalid("actions", "the service kept deferring actions; call dream_apply again later")
+            page, queue = queue[:DREAM_PAGE_SIZE], queue[DREAM_PAGE_SIZE:]
+            final = not queue
             payload: dict[str, Any] = {"dreamId": dream, "actions": page, "final": final}
             if final and report is not None:
                 payload["report"] = report
@@ -856,8 +864,16 @@ class CloudClient:
             except BilincCloudError as exc:
                 exc.partial = {"results": list(results), "pages_done": number}
                 raise
-            page_results = last.get("results") if isinstance(last, dict) else None
-            results.extend(page_results or [])
+            number += 1
+            page_results = (last.get("results") if isinstance(last, dict) else None) or []
+            # Actions the service had no time for come back as skipped: send them again.
+            deferred = {
+                row.get("key")
+                for row in page_results
+                if isinstance(row, dict) and row.get("result") == "skipped" and row.get("error") == "deadline"
+            }
+            results.extend(row for row in page_results if not (isinstance(row, dict) and row.get("key") in deferred))
+            queue = [action for action in page if action["key"] in deferred] + queue
         return {**last, "results": results}
 
     def dream_undo(self, dream_id: str) -> dict[str, Any]:
@@ -866,14 +882,24 @@ class CloudClient:
         Entries another writer changed after the dream are reported under
         ``conflicts`` and left alone. A removed entry comes back with its
         value, type, importance and source; other metadata such as TTL or
-        canonical flags is not restored (``metadata_restored: false``).
+        canonical flags is not restored (``metadata_restored: false``). A long
+        undo pauses at the service's time budget (``status: "undoing"``); this
+        method calls again until it finishes and merges the results.
         """
 
-        return self._post(
-            "/api/cloud/memory/dream/undo",
-            {"dreamId": _require_dream_id(dream_id)},
-            timeout=DREAM_WRITE_TIMEOUT,
-        )
+        payload = {"dreamId": _require_dream_id(dream_id)}
+        merged: dict[str, Any] = {}
+        for _ in range(DREAM_MAX_PAGES):
+            result = self._post("/api/cloud/memory/dream/undo", payload, timeout=DREAM_WRITE_TIMEOUT)
+            for name in ("restored", "conflicts", "kept"):
+                seen = {(row.get("n"), row.get("key")) for row in merged.get(name, [])}
+                rows = [row for row in result.get(name) or [] if (row.get("n"), row.get("key")) not in seen]
+                merged[name] = merged.get(name, []) + rows
+            merged = {**result, **{name: merged[name] for name in ("restored", "conflicts", "kept")}}
+            # A long undo pauses at the service's time budget; the next call continues it.
+            if result.get("status") != "undoing":
+                return merged
+        return merged
 
     def dream_show(self, dream_id: str) -> dict[str, Any]:
         """Return a dream's report: its index and the recorded changes. Read-only."""

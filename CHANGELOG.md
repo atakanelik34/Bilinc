@@ -17,6 +17,7 @@ All notable changes to Bilinc.
 - A dream's forget cap is at most 30% of its candidates and at most 20 entries; a page of actions that would go past it is refused before anything is written. `dream_apply` sends actions in pages of 25 and, when a page fails, raises the error with what earlier pages applied in `exc.partial`.
 - `dream_undo` reverses a dream's own changes for 7 days after it; an entry another writer changed since is reported as a conflict and kept. Undoing a removed entry restores its value, type, importance and source; other metadata such as TTL or canonical flags is not restored, so an entry that had a TTL comes back without one.
 - SDK: `CloudClient.commit(..., if_absent=True)` writes a memory when its key does not exist yet. Calls without `if_absent` send the same request as before.
+- Keys starting `bilinc:dream:` hold dream reports and are written by the dream pass only: an ordinary commit, revise or confirm of such a key is refused (forgetting one is allowed). Reasons and `Idempotency-Key` values starting `dream:` are reserved the same way.
 
 ### Fixed
 

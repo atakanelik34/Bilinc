@@ -307,3 +307,48 @@ def test_errors_carry_no_partial_by_default():
     from bilinc.client import error_for_response
 
     assert error_for_response(400, {"error": "invalid_request"}).partial is None
+
+
+# --- review round 1 ------------------------------------------------------------
+
+
+def test_dream_apply_rejects_revise_with_null_new_value():
+    from bilinc import BilincValidationError
+
+    transport = RecordingTransport({})
+    action = {**_action(1, "revise"), "new_value": None}
+
+    with pytest.raises(BilincValidationError):
+        _client(transport).dream_apply("drm_1", [action])
+    assert transport.calls == []
+
+
+def test_dream_apply_resends_actions_the_deadline_skipped():
+    actions = [_action(n) for n in range(1, 4)]
+    first = _page_response(actions, status="applying")
+    first["results"][1].update(result="skipped", error="deadline")
+    first["results"][2].update(result="skipped", error="deadline")
+    second = _page_response(actions[1:], start=4, status="applied")
+    transport = RecordingTransport(first, second)
+
+    result = _client(transport).dream_apply("drm_1", actions, report={"notes": "n"})
+
+    assert len(transport.calls) == 2
+    assert [a["key"] for a in transport.calls[1]["body"]["actions"]] == ["team.item_2", "team.item_3"]
+    assert transport.calls[0]["body"]["final"] is True
+    assert transport.calls[1]["body"]["final"] is True
+    assert transport.calls[1]["body"]["report"] == {"notes": "n"}
+    assert [r["result"] for r in result["results"]] == ["applied", "applied", "applied"]
+    assert result["status"] == "applied"
+
+
+def test_dream_undo_continues_while_the_service_says_undoing():
+    paused = {"dream_id": "drm_1", "status": "undoing", "restored": [{"n": 2, "key": "b", "op": "revise"}], "conflicts": [], "kept": []}
+    done = {"dream_id": "drm_1", "status": "undone", "restored": [{"n": 1, "key": "a", "op": "forget", "metadata_restored": False}], "conflicts": [], "kept": []}
+    transport = RecordingTransport(paused, done)
+
+    result = _client(transport).dream_undo("drm_1")
+
+    assert len(transport.calls) == 2
+    assert result["status"] == "undone"
+    assert [r["key"] for r in result["restored"]] == ["b", "a"]
