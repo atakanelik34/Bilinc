@@ -844,6 +844,13 @@ class CloudClient:
         checked = [_require_dream_action(item, index) for index, item in enumerate(actions)]
         if not checked:
             raise _invalid("actions", "must contain at least one action")
+        # The service acts on a key at most once per dream, and deferred
+        # actions are matched back to their results by key.
+        seen_keys: set[str] = set()
+        for index, item in enumerate(checked):
+            if item["key"] in seen_keys:
+                raise _invalid(f"actions[{index}].key", "appears more than once; one action per key per dream")
+            seen_keys.add(item["key"])
         if report is not None:
             report = _require_object(report, "report")
 

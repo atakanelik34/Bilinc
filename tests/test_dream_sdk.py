@@ -223,6 +223,19 @@ def test_dream_apply_rejects_bad_actions_before_any_request(bad):
     assert transport.calls == []
 
 
+@pytest.mark.parametrize("second", ["revise", "forget", "flag"])
+def test_dream_apply_rejects_two_actions_on_one_key_before_any_request(second):
+    from bilinc import BilincValidationError
+
+    transport = RecordingTransport({})
+    # Same key on page 1 and page 2: deferred resends match by key, so refuse up front.
+    actions = [_action(n) for n in range(30)] + [{**_action(3, second), "key": "team.item_3"}]
+
+    with pytest.raises(BilincValidationError):
+        _client(transport).dream_apply("drm_1", actions)
+    assert transport.calls == []
+
+
 def test_dream_apply_rejects_empty_actions_and_missing_dream_id():
     from bilinc import BilincValidationError
 
