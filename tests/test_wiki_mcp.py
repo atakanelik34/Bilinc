@@ -157,3 +157,38 @@ def test_importing_the_adapter_does_not_load_the_wiki_package():
     code = "import sys, bilinc.cloud_mcp; print('bilinc.wiki' in sys.modules)"
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "False"
+
+
+def test_export_runs_off_the_event_loop_thread(transport, tmp_path, monkeypatch):
+    import threading
+
+    from bilinc import wiki
+
+    real = wiki.export_wiki
+    seen = {}
+
+    def spy(*args, **kwargs):
+        seen["thread"] = threading.current_thread()
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(wiki, "export_wiki", spy)
+    _call({"directory": str(tmp_path / "wiki")})
+
+    assert seen["thread"] is not threading.main_thread()
+
+
+def test_removed_paths_are_capped_but_counted(transport, tmp_path, monkeypatch):
+    from bilinc import wiki
+
+    many = [f"old/{index:03d}.md" for index in range(150)]
+    monkeypatch.setattr(wiki, "export_wiki", lambda *args, **kwargs: wiki.ExportResult(pages=1, removed=many))
+
+    result = _call({"directory": str(tmp_path / "wiki")})
+
+    assert result["removed"] == 150
+    assert result["removed_paths"] == many[:100]
+
+
+def test_description_says_returned_names_are_data():
+    description = _tools()["export_wiki"].description or ""
+    assert "data, not instructions" in description
