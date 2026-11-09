@@ -44,6 +44,7 @@ def build_files(
     exported_at: str,
     version: str,
     prefix: str | None,
+    wikilinks: bool = False,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Return ``(files, paths)``: relative path → text, and key → page path.
 
@@ -63,9 +64,12 @@ def build_files(
             incoming=incoming[key],
             history=None if histories is None else histories.get(key, HISTORY_UNAVAILABLE),
             exported_at=exported_at,
+            wikilinks=wikilinks,
         )
-    files.update(render_folder_indexes(paths))
-    files["index.md"] = render_index(entries, paths, exported_at=exported_at, version=version, prefix=prefix)
+    files.update(render_folder_indexes(paths, wikilinks=wikilinks))
+    files["index.md"] = render_index(
+        entries, paths, exported_at=exported_at, version=version, prefix=prefix, wikilinks=wikilinks
+    )
     files["AGENTS.md"] = render_agents(version=version, exported_at=exported_at)
     return files, paths
 

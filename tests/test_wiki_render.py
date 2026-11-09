@@ -7,13 +7,16 @@ import urllib.parse
 
 import pytest
 
+from bilinc.wiki.export import build_files
 from bilinc.wiki.paths import build_paths
 from bilinc.wiki.render import (
     HISTORY_UNAVAILABLE,
     RECENT_LIMIT,
+    ReusedHistory,
     clip,
     fence,
     fold_lines,
+    link,
     md_inline,
     relative_link,
     render_agents,
@@ -689,3 +692,82 @@ def test_tildes_and_addresses_inside_a_value_fence_stay_byte_exact() -> None:
     )
     assert "\n" + value + "\n" in page
     assert "# a\\~b\n" in page
+
+
+# --- wikilinks ------------------------------------------------------------------
+
+
+def test_link_is_markdown_by_default() -> None:
+    assert link("a:b", "x/y.md", "a/b.md", wikilinks=False) == "[a:b](../a/b.md)"
+    assert link("a b", "index.md", "a b.md", wikilinks=False) == "[a b](a%20b.md)"
+
+
+def test_wikilink_is_relative_with_dot_and_extension() -> None:
+    assert link("a:b", "a/c.md", "a/b.md", wikilinks=True) == "[[./b.md|a:b]]"
+    assert link("a:b", "x/y.md", "a/b.md", wikilinks=True) == "[[../a/b.md|a:b]]"
+    assert link("a:b", "index.md", "a/b.md", wikilinks=True, in_table=True) == "[[./a/b.md\\|a:b]]"
+
+
+def test_wikilink_target_is_not_percent_encoded() -> None:
+    assert link("a/b", "index.md", "a%2Fb.md", wikilinks=True) == "[[./a%2Fb.md|a/b]]"
+    assert link("a b", "index.md", "a b.md", wikilinks=True) == "[[./a b.md|a b]]"
+
+
+@pytest.mark.parametrize("key", ["a[1]", "a]b", "a|b", "a#b", "a^b", "a\\b", "a`b"])
+def test_wikilink_falls_back_to_markdown_for_unsafe_text(key: str) -> None:
+    out = link(key, "index.md", "p.md", wikilinks=True)
+    assert not out.startswith("[[")
+    assert out == f"[{md_inline(key)}](p.md)"
+
+
+def test_wikilink_alias_folds_line_breaks() -> None:
+    assert link("a\nb", "index.md", "p.md", wikilinks=True) == "[[./p.md|a b]]"
+
+
+def test_wikilinks_reach_pages_index_and_folder_indexes() -> None:
+    entries = [
+        {"key": "a:b", "value": "see a:c", "updatedAt": "2026-11-08T12:00:00Z"},
+        {"key": "a:c", "value": "x"},
+    ]
+    files, _ = build_files(
+        entries, None, exported_at="2026-11-09T01:00:00Z", version="2.7.0", prefix=None, wikilinks=True
+    )
+    assert "[[./c.md|a:c]]" in files["a/b.md"]
+    assert "[[./b.md|a:b]]" in files["a/c.md"]
+    assert "[[./a/b.md\\|a:b]]" in files["index.md"]
+    assert "- [[./a/b.md|a:b]]" in files["index.md"]
+    assert "[[./b.md|b]]" in files["a/_index.md"]
+    for text in files.values():
+        assert not [target for target in link_targets_outside_fences(text) if target.endswith(".md")]
+
+
+def test_wikilinks_off_keeps_markdown_links() -> None:
+    entries = [{"key": "a:b", "value": "see a:c"}, {"key": "a:c", "value": "x"}]
+    plain, _ = build_files(entries, None, exported_at="t", version="2.7.0", prefix=None)
+    assert all("[[" not in text for text in plain.values())
+
+
+def test_reused_history_is_inserted_verbatim() -> None:
+    body = "- update · 2026-11-08 12:00:00 UTC"
+    page = render_page(
+        {"key": "k", "value": "v"},
+        path="k.md",
+        paths={"k": "k.md"},
+        outgoing=[],
+        incoming=[],
+        history=ReusedHistory(body),
+        exported_at="t",
+    )
+    assert page.endswith("## History\n\n" + body + "\n")
+
+
+def test_reused_history_matches_a_fresh_render() -> None:
+    history = {"entries": [{"op": "update", "at": 1762600000.0, "after": "x"}], "truncated": True}
+    args = dict(path="k.md", paths={"k": "k.md"}, outgoing=[], incoming=[], exported_at="t")
+    fresh = render_page({"key": "k", "value": "v"}, history=history, **args)
+    from bilinc.wiki.render import history_section
+
+    reused = render_page(
+        {"key": "k", "value": "v"}, history=ReusedHistory(history_section(history).rstrip("\n")), **args
+    )
+    assert reused == fresh

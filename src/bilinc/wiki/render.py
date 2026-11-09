@@ -45,6 +45,8 @@ _LEADING_ORDERED = re.compile(r"^(\d+)([.)])")
 _OBSIDIAN_SINGLE = re.compile(r"([$~])")
 _OBSIDIAN_DOUBLED = re.compile(r"([%=])\1+")
 #: Text GitHub and Obsidian turn into links on their own.
+#: Characters that cannot be written inside a ``[[target|alias]]`` link.
+_WIKILINK_UNSAFE = frozenset("[]|#^\\`")
 _AUTOLINK = re.compile(r"(://|(?<![A-Za-z0-9])www\.)", re.IGNORECASE)
 #: An e-mail address GFM turns into a mailto: link, matched after the other
 #: escapes ran (so ``_`` and ``%`` in it may already carry a backslash).
@@ -114,6 +116,26 @@ def clip(text: str, limit: int) -> str:
 
 def _short(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
+
+
+class ReusedHistory(str):
+    """A history section body taken byte for byte from the previous page."""
+
+
+def link(text: str, from_path: str, to_path: str, *, wikilinks: bool, in_table: bool = False) -> str:
+    """One generated link: standard Markdown, or ``[[./rel.md|alias]]`` with ``wikilinks``.
+
+    A wikilink is used only when neither its target nor its alias holds a
+    character that cannot be written inside one; such a link falls back to the
+    Markdown form. In a table cell the wikilink separator is written ``\\|``.
+    """
+    relative = posixpath.relpath(to_path, posixpath.dirname(from_path) or ".")
+    alias = fold_lines(text)
+    if wikilinks and not (_WIKILINK_UNSAFE & set(relative + alias)):
+        target = relative if relative.startswith("../") else "./" + relative
+        separator = "\\|" if in_table else "|"
+        return f"[[{target}{separator}{alias}]]"
+    return f"[{md_inline(text)}]({urllib.parse.quote(relative, safe='/')})"
 
 
 def relative_link(from_path: str, to_path: str) -> str:
@@ -226,9 +248,9 @@ def history_section(history: Any) -> str:
     return "\n".join(parts)
 
 
-def _link_list(keys: list[str], path: str, paths: dict[str, str]) -> str:
+def _link_list(keys: list[str], path: str, paths: dict[str, str], wikilinks: bool) -> str:
     return "".join(
-        f"- [{md_inline(key)}]({relative_link(path, paths[key])})\n"
+        f"- {link(key, path, paths[key], wikilinks=wikilinks)}\n"
         for key in sorted(set(keys))
         if key in paths
     )
@@ -243,12 +265,13 @@ def render_page(
     incoming: list[str],
     history: dict[str, Any] | object | None,
     exported_at: str,
+    wikilinks: bool = False,
 ) -> str:
     """Render one memory as a Markdown page.
 
     ``history`` is the history payload, :data:`HISTORY_UNAVAILABLE` when it
-    could not be fetched, or ``None`` to leave the section out
-    (``--history 0``). Links point only at keys present in ``paths``.
+    could not be fetched, a :class:`ReusedHistory` body to insert as it is,
+    or ``None`` to leave the section out (``--history 0``). Links point only at keys present in ``paths``.
     """
     key = entry.get("key")
     key_text = key if isinstance(key, str) else compact_json(key)
@@ -267,10 +290,12 @@ def render_page(
         f"# {md_inline(key_text)}\n",
         "## Value\n\n" + value_block(entry.get("value")),
     ]
-    if history is not None:
+    if isinstance(history, ReusedHistory):
+        sections.append("## History\n\n" + history + "\n")
+    elif history is not None:
         sections.append("## History\n\n" + history_section(history))
-    links_to = _link_list(outgoing, path, paths)
-    mentioned_by = _link_list(incoming, path, paths)
+    links_to = _link_list(outgoing, path, paths, wikilinks)
+    mentioned_by = _link_list(incoming, path, paths, wikilinks)
     if links_to or mentioned_by:
         parts = []
         if links_to:
@@ -288,8 +313,8 @@ def _cell(value: Any) -> str:
     return md_inline(value if isinstance(value, str) else compact_json(value))
 
 
-def _page_link(key: str, path: str) -> str:
-    return f"[{md_inline(key)}]({urllib.parse.quote(path, safe='/')})"
+def _page_link(key: str, path: str, *, wikilinks: bool, in_table: bool = False) -> str:
+    return link(key, "index.md", path, wikilinks=wikilinks, in_table=in_table)
 
 
 def render_index(
@@ -299,6 +324,7 @@ def render_index(
     exported_at: str,
     version: str,
     prefix: str | None,
+    wikilinks: bool = False,
 ) -> str:
     """Render the root ``index.md``: recently changed pages and a table of all.
 
@@ -323,7 +349,7 @@ def render_index(
     )[:RECENT_LIMIT]
     if recent:
         recent_body = "".join(
-            f"- {_page_link(entry['key'], paths[entry['key']])} · "
+            f"- {_page_link(entry['key'], paths[entry['key']], wikilinks=wikilinks)} · "
             f"{format_time(entry.get('updatedAt'))}\n"
             for _, entry in recent
         )
@@ -332,7 +358,7 @@ def render_index(
 
     if rows:
         table = "| Key | Type | Updated (UTC) | Source |\n| --- | --- | --- | --- |\n" + "".join(
-            f"| {_page_link(entry['key'], paths[entry['key']])} "
+            f"| {_page_link(entry['key'], paths[entry['key']], wikilinks=wikilinks, in_table=True)} "
             f"| {_cell(entry.get('memoryType'))} "
             f"| {_updated_cell(entry.get('updatedAt'))} "
             f"| {_cell(entry.get('source'))} |\n"
@@ -351,7 +377,7 @@ def _updated_cell(value: Any) -> str:
     return format_time(value, suffix="")
 
 
-def render_folder_indexes(paths: dict[str, str]) -> dict[str, str]:
+def render_folder_indexes(paths: dict[str, str], *, wikilinks: bool = False) -> dict[str, str]:
     """Render ``<folder>/_index.md`` for every folder holding pages.
 
     Each lists its subfolders (``name/``) and then its pages (by the key's
@@ -373,12 +399,13 @@ def render_folder_indexes(paths: dict[str, str]) -> dict[str, str]:
 
     out: dict[str, str] = {}
     for folder in sorted(name for name in folders if name):
+        here = f"{folder}/_index.md"
         lines = [
-            f"- [{md_inline(sub + '/')}]({urllib.parse.quote(sub, safe='')}/_index.md)\n"
+            f"- {link(sub + '/', here, f'{folder}/{sub}/_index.md', wikilinks=wikilinks)}\n"
             for sub in sorted(folders[folder])
         ]
         lines += [
-            f"- [{md_inline(display)}]({urllib.parse.quote(name, safe='')})\n"
+            f"- {link(display, here, f'{folder}/{name}', wikilinks=wikilinks)}\n"
             for display, name in sorted(pages.get(folder, []))
         ]
         out[f"{folder}/_index.md"] = f"# {md_inline(folder)}\n\n" + "".join(lines)
