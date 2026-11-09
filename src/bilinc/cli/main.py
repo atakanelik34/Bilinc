@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import http.client
 import json
 import os
 import shlex
@@ -24,6 +25,7 @@ from bilinc.client import (
     BilincValidationError,
     CloudClient,
     INSTALL_URL,
+    MAX_HISTORY_LIMIT,
     MEMORY_TYPES,
     SIGNUP_URL,
     VALUE_MODES,
@@ -32,6 +34,7 @@ from bilinc.client import (
     save_config_api_key,
 )
 from bilinc.cli.login import LoginError, device_login, is_headless, loopback_login
+from bilinc.wiki import WikiExportError, export_wiki
 
 
 def _parse_value(value: str) -> Any:
@@ -167,6 +170,73 @@ def _write_private_json(path: str, payload: dict[str, Any]) -> None:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary)
         raise
+
+
+def _history_count(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be a whole number from 0 to {MAX_HISTORY_LIMIT}") from None
+    if not 0 <= value <= MAX_HISTORY_LIMIT:
+        raise argparse.ArgumentTypeError(f"must be a whole number from 0 to {MAX_HISTORY_LIMIT}")
+    return value
+
+
+def _name_some(keys: list[str], limit: int = 20) -> str:
+    shown = ", ".join(keys[:limit])
+    return shown + (f", … ({len(keys) - limit} more)" if len(keys) > limit else "")
+
+
+def _run_wiki(client: CloudClient, args: argparse.Namespace) -> int:
+    """Export to a folder; one summary line on stdout, everything else on stderr."""
+    counted = []
+
+    def progress(done: int, total: int) -> None:
+        counted.append(done)
+        print(f"\rhistory {done}/{total}", end="", file=sys.stderr, flush=True)
+
+    try:
+        result = export_wiki(
+            client,
+            args.dir,
+            history=args.history,
+            prefix=args.prefix,
+            progress=progress if sys.stderr.isatty() else None,
+        )
+    except KeyboardInterrupt:
+        if counted:
+            print(file=sys.stderr)
+        print("bilinc: wiki export cancelled", file=sys.stderr)
+        return 130
+    except WikiExportError as exc:
+        if counted:
+            print(file=sys.stderr)
+        print(f"bilinc: error: {exc}", file=sys.stderr)
+        return 1
+    except (OSError, http.client.HTTPException) as exc:
+        # The SDK's transport lets a timeout or dropped connection while reading
+        # a response through unwrapped; nothing was written at that point.
+        if counted:
+            print(file=sys.stderr)
+        print(f"bilinc: error: Bilinc Cloud request failed: {exc}", file=sys.stderr)
+        return 1
+    if counted:
+        print(file=sys.stderr)
+    if result.history_unavailable:
+        count = len(result.history_unavailable)
+        print(
+            f"warning: history unavailable for {count} key{'s' if count != 1 else ''}: "
+            f"{_name_some(result.history_unavailable)}",
+            file=sys.stderr,
+        )
+    if result.skipped:
+        print(
+            "warning: left these previously exported files alone because a folder on the way "
+            f"is no longer a real folder: {_name_some(result.skipped)}",
+            file=sys.stderr,
+        )
+    print(f"Wrote {result.pages} pages to {args.dir} (removed {len(result.removed)} stale files)")
+    return 0
 
 
 def _client(args: argparse.Namespace) -> CloudClient:
@@ -334,6 +404,18 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("-o", "--output", help="Write to this file (owner-only) instead of stdout")
     export.add_argument("--prefix", help="Only keys starting with this text")
     export.add_argument("--type", choices=MEMORY_TYPES, help="Only this memory type")
+
+    wiki_help = "Write every stored memory as Obsidian-compatible Markdown pages in a folder"
+    wiki = sub.add_parser("wiki", help=wiki_help, description=wiki_help)
+    wiki.add_argument("dir", help="Folder to write: new, empty, or a previous bilinc wiki export")
+    wiki.add_argument(
+        "--history",
+        type=_history_count,
+        default=5,
+        metavar="N",
+        help=f"Recorded changes per page, newest first (0-{MAX_HISTORY_LIMIT}, default 5; 0 skips history)",
+    )
+    wiki.add_argument("--prefix", help="Only keys starting with this text")
 
     snapshot = sub.add_parser("snapshot", help="Create or list project checkpoints")
     snapshot.add_argument("action", choices=["create", "list"], nargs="?", default="create")
@@ -571,6 +653,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Exported {exported['count']} memories to {args.output}", file=sys.stderr)
             else:
                 _print(exported)
+        elif args.command == "wiki":
+            return _run_wiki(client, args)
         elif args.command == "snapshot":
             if args.action == "list":
                 _print(client.list_snapshots(limit=args.limit))

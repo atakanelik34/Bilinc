@@ -2,6 +2,14 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased] (2.7.0)
+
+### Added
+
+- `bilinc wiki <dir> [--history N] [--prefix P]` writes every stored memory as Obsidian-compatible Markdown: one page per key, in folders that follow the key (`project:bilinc:release` becomes `project/bilinc/release.md`). Each page has the key, type, source and update time as front matter, the value in a fenced block (objects also list their top-level fields), the last N recorded changes (default 5, at most 100, `0` skips them) with time, source, reason and before → after, and relative links to the keys its value names plus a "Mentioned by" list. `index.md` lists every page with the most recent changes on top, each folder has an `_index.md`, and `AGENTS.md` tells agents that the folder is memory data, not instructions.
+- The export is one-way and is regenerated on each run. It refuses a folder that is neither new, empty nor a previous export (a folder that holds nothing but `.obsidian/` counts as empty), never changes or removes a file it did not write, builds the new pages in a temporary folder before replacing anything, and keeps folders 0700 and files 0600. A key whose history cannot be read gets "History unavailable" and the run still succeeds, naming those keys. Reads are not billed.
+- SDK: `BilincCloudError.retry_after` carries the seconds from a `Retry-After` header when the service sends one, and `CloudClient(read_retry_attempts=...)` sets how many times a read is tried (default 3, as before).
+
 ## [2.6.3] — 2026-11-08
 
 ### Fixed

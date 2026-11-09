@@ -7,7 +7,9 @@ shipped in the public package.
 
 from __future__ import annotations
 
+import functools
 import json
+import math
 import os
 import ssl
 import time
@@ -92,6 +94,7 @@ class BilincCloudError(BilincError):
         request_id: str | None = None,
         retryable: bool = False,
         details: Any = None,
+        retry_after: float | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -100,6 +103,8 @@ class BilincCloudError(BilincError):
         self.request_id = request_id
         self.retryable = retryable
         self.details = details
+        #: Seconds the service asked the client to wait (``Retry-After``), if it said.
+        self.retry_after = retry_after
 
 
 class BilincValidationError(BilincCloudError):
@@ -156,7 +161,16 @@ _STATUS_ERRORS: dict[int, type[BilincCloudError]] = {
 }
 
 
-def error_for_response(status: int, payload: Any) -> BilincCloudError:
+def _parse_retry_after(value: Any) -> float | None:
+    """Seconds from a ``Retry-After`` header; HTTP dates and nonsense give None."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
+def error_for_response(status: int, payload: Any, *, retry_after: Any = None) -> BilincCloudError:
     """Translate a Cloud error response into the matching typed SDK error."""
 
     body = payload if isinstance(payload, dict) else {}
@@ -178,6 +192,7 @@ def error_for_response(status: int, payload: Any) -> BilincCloudError:
         request_id=request_id,
         retryable=retryable,
         details=body.get("details"),
+        retry_after=_parse_retry_after(retry_after),
     )
 
 
@@ -395,6 +410,18 @@ def _default_ssl_context() -> ssl.SSLContext:
     """
 
     ca_bundle = os.environ.get("BILINC_CA_BUNDLE") or os.environ.get("SSL_CERT_FILE")
+    return _ssl_context_for(ca_bundle or None)
+
+
+@functools.lru_cache(maxsize=4)
+def _ssl_context_for(ca_bundle: str | None) -> ssl.SSLContext:
+    """Build the TLS context once per CA bundle path and reuse it.
+
+    Loading a CA bundle costs milliseconds of CPU and contends for the GIL, so a
+    fresh context per request made many-request commands (``bilinc wiki``)
+    several times slower. A context is safe to share between threads.
+    """
+
     if ca_bundle:
         return ssl.create_default_context(cafile=ca_bundle)
 
@@ -487,7 +514,8 @@ def _default_transport(
             payload = json.loads(detail) if detail else {}
         except json.JSONDecodeError:
             payload = {}
-        raise error_for_response(exc.code, payload) from exc
+        retry_after = exc.headers.get("Retry-After") if exc.headers is not None else None
+        raise error_for_response(exc.code, payload, retry_after=retry_after) from exc
     except urllib.error.URLError as exc:
         raise BilincConnectionError(
             f"Bilinc Cloud request failed: {exc.reason}",
@@ -519,8 +547,15 @@ class CloudClient:
     base_url: str = DEFAULT_BASE_URL
     timeout: float = 30.0
     transport: Callable[..., dict[str, Any]] = _default_transport
+    read_retry_attempts: int = READ_RETRY_ATTEMPTS
 
     def __post_init__(self) -> None:
+        if (
+            isinstance(self.read_retry_attempts, bool)
+            or not isinstance(self.read_retry_attempts, int)
+            or self.read_retry_attempts < 1
+        ):
+            raise _invalid("read_retry_attempts", "read_retry_attempts must be a positive integer")
         if self.api_key is None:
             self.api_key = os.environ.get("BILINC_API_KEY") or load_config_api_key()
         if not self.api_key:
@@ -1070,19 +1105,18 @@ class CloudClient:
             )
         )
 
-    @staticmethod
-    def _with_read_retries(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    def _with_read_retries(self, call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         """Retry a read a bounded number of times on retryable failures.
 
         Only reads get this. A retried mutation could apply twice, so writes
         stay single-shot and rely on server-side idempotency instead.
         """
 
-        for attempt in range(READ_RETRY_ATTEMPTS):
+        for attempt in range(self.read_retry_attempts):
             try:
                 return call()
             except BilincCloudError as exc:
-                last_attempt = attempt == READ_RETRY_ATTEMPTS - 1
+                last_attempt = attempt == self.read_retry_attempts - 1
                 if not exc.retryable or last_attempt:
                     raise
                 time.sleep(READ_RETRY_BASE_DELAY * (2**attempt))
