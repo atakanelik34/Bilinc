@@ -110,12 +110,13 @@ def test_dream_apply_tool_passes_report(fake_client):
     assert fake_client.calls == [("apply", "drm_1", actions, report), ("undo", "drm_1")]
 
 
-def test_product_truth_lists_dream_tools_as_hosted_connector_pending():
+def test_product_truth_has_no_hosted_connector_pending_tools():
     payload = json.loads((ROOT / "docs" / "public" / "product-truth.json").read_text())
     cloud_mcp = payload["cloud_mcp"]
 
     assert cloud_mcp["tools"][-4:] == ["confirm", *DREAM_TOOLS]
-    assert cloud_mcp["hosted_connector_pending"] == DREAM_TOOLS
+    # the hosted connector offers the dream tools since 2026-11-10
+    assert cloud_mcp["hosted_connector_pending"] == []
     assert _validator().validate_product_truth() == []
 
 

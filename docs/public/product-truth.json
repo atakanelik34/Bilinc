@@ -51,11 +51,7 @@
     "local_tools": [
       "export_wiki"
     ],
-    "hosted_connector_pending": [
-      "dream_start",
-      "dream_apply",
-      "dream_undo"
-    ]
+    "hosted_connector_pending": []
   },
   "public_urls": {
     "documentation": "https://bilinc.space/docs",
@@ -64,7 +60,7 @@
     "cloud_status": "https://bilinc.space/api/cloud/status"
   },
   "benchmark_claims": {
-  "state": "historical_scoped",
+    "state": "historical_scoped",
     "public_approved": true,
     "label": "Frozen regression receipt",
     "scope": "LongMemEval-s cleaned retrieval fixture, 500 questions",

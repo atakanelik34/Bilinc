@@ -137,11 +137,12 @@ The config carries no key; the adapter reads the one `bilinc login` saved. On a 
 | `list_memories` | Browse what is stored. Free. |
 | `history` | One memory's changes, newest first. Free. |
 | `confirm` | Record that a memory is still accurate. One write. |
-| `dream_start` | Start a dream pass: the entries changed since the last one, for your agent to review. Stdio adapter; coming to the hosted connector. |
-| `dream_apply` | Apply the dream's merges, retirements, confirmations and flags. **Destructive**; undo with `dream_undo`. Stdio adapter; coming to the hosted connector. |
-| `dream_undo` | Undo a dream in one step, for 7 days. Stdio adapter; coming to the hosted connector. |
+| `dream_start` | Start a dream pass: the entries changed since the last one, for your agent to review. Stdio adapter and hosted connector. |
+| `dream_apply` | Apply the dream's merges, retirements, confirmations and flags. **Destructive**; undo with `dream_undo`. Stdio adapter and hosted connector. |
+| `dream_undo` | Undo a dream in one step, for 7 days. Stdio adapter and hosted connector. |
+| `export_wiki` | Write your memory as Obsidian-compatible Markdown into a folder on your machine, the same export as `bilinc wiki`. Stdio adapter only. |
 
-The remote connector at `https://mcp.bilinc.space/mcp` has ten tools; a read-only connection lists only the four read tools. Client guides: [Claude Code](https://bilinc.space/docs/claude-code) · [Codex](https://bilinc.space/docs/codex) · [Cursor](https://bilinc.space/docs/cursor) · [any MCP client](https://bilinc.space/for/mcp).
+The remote connector at `https://mcp.bilinc.space/mcp` has 13 tools, the dream tools included; a read-only connection lists only the four read tools. Client guides: [Claude Code](https://bilinc.space/docs/claude-code) · [Codex](https://bilinc.space/docs/codex) · [Cursor](https://bilinc.space/docs/cursor) · [any MCP client](https://bilinc.space/for/mcp).
 
 ## Forget and purge
 
@@ -169,7 +170,7 @@ Send an `Idempotency-Key` header on any write you might retry: the same key with
 ## What's new in 2.7.0
 
 - **Wiki export**: `bilinc wiki <dir>` writes your memory as Obsidian-compatible Markdown, one page per key, with recent changes, links between keys and an index. It is one-way, never touches files it did not write, and reruns reuse unchanged pages. `--wikilinks` writes `[[...]]` links; the stdio MCP adapter has the same export as `export_wiki`.
-- **Dream pass**: your agent tidies its own memory (merges duplicates, retires stale entries, flags what a person should decide) and you can undo the pass's own changes in one step for 7 days. Bilinc runs no model for this. Available in the SDK, the CLI (`bilinc dream`) and the stdio MCP adapter; coming to the hosted connector.
+- **Dream pass**: your agent tidies its own memory (merges duplicates, retires stale entries, flags what a person should decide) and you can undo the pass's own changes in one step for 7 days. Bilinc runs no model for this. Available in the SDK, the CLI (`bilinc dream`), the stdio MCP adapter and the hosted connector.
 
 Every release: [changelog](https://bilinc.space/changelog).
 
