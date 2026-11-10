@@ -166,9 +166,10 @@ All endpoints live under `https://bilinc.space`. Memory operations need an API k
 
 Send an `Idempotency-Key` header on any write you might retry: the same key with the same payload replays the original result and is billed once; a different payload is refused with `409 idempotency_conflict`. Saves that contain a credential, such as an API key, token or private key, are refused with `secret_detected` and the value is never echoed back.
 
-## What's new in 2.6.3
+## What's new in 2.7.0
 
-- **Hosted service**: after the database restarts or drops a connection, history, diff against the current state, saves, edits, confirms, forgets and new checkpoints work again on the first call; before, they failed until the service was restarted. If the database stays down they fail fast with a temporary-unavailable error. The SDK and CLI are unchanged.
+- **Wiki export**: `bilinc wiki <dir>` writes your memory as Obsidian-compatible Markdown, one page per key, with recent changes, links between keys and an index. It is one-way, never touches files it did not write, and reruns reuse unchanged pages. `--wikilinks` writes `[[...]]` links; the stdio MCP adapter has the same export as `export_wiki`.
+- **Dream pass**: your agent tidies its own memory (merges duplicates, retires stale entries, flags what a person should decide) and you can undo the pass's own changes in one step for 7 days. Bilinc runs no model for this. Available in the SDK, the CLI (`bilinc dream`) and the stdio MCP adapter; coming to the hosted connector.
 
 Every release: [changelog](https://bilinc.space/changelog).
 

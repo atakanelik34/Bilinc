@@ -24,14 +24,14 @@ BANNED = (
 )
 
 
-def _unreleased_added() -> str:
+def _release_added() -> str:
     text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    section = text.split("## [Unreleased] (2.7.0)", 1)[1].split("\n## [", 1)[0]
+    section = text.split("## [2.7.0] — 2026-11-10", 1)[1].split("\n## [", 1)[0]
     return section.split("### Added", 1)[1].split("\n### ", 1)[0]
 
 
 def _dream_bullets() -> list[str]:
-    bullets = [line for line in _unreleased_added().splitlines() if line.startswith("- ")]
+    bullets = [line for line in _release_added().splitlines() if line.startswith("- ")]
     return [line for line in bullets if re.search(r"\bdream", line, re.IGNORECASE) or "if_absent" in line]
 
 
@@ -42,7 +42,7 @@ def _banned_in(text: str) -> list[str]:
 
 def test_changelog_dream_entry_follows_claim_rules():
     bullets = _dream_bullets()
-    assert bullets, "the Unreleased section must describe the dream pass"
+    assert bullets, "the 2.7.0 section must describe the dream pass"
     joined = "\n".join(bullets)
 
     assert "dream pass" in joined.lower()
