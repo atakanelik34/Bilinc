@@ -54,11 +54,11 @@ def test_changelog_dream_entry_follows_claim_rules():
     assert _banned_in(joined) == []
 
 
-def test_readme_lists_the_dream_tools_as_stdio_and_coming_to_the_hosted_connector():
+def test_readme_lists_the_dream_tools_on_the_stdio_adapter_and_hosted_connector():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     rows = [line for line in readme.splitlines() if line.startswith("| `dream_")]
 
     assert [row.split("`")[1] for row in rows] == ["dream_start", "dream_apply", "dream_undo"]
     for row in rows:
-        assert "stdio adapter; coming to the hosted connector" in row.lower()
+        assert "stdio adapter and hosted connector" in row.lower()
         assert _banned_in(row) == []

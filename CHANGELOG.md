@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Changed
+
+- Since 2026-11-10 the hosted connector at `https://mcp.bilinc.space/mcp` offers the dream pass too: `dream_start`, `dream_apply` and `dream_undo`, on a connection with write access. The 2.7.0 entry below said they were coming. No package change.
+
 ## [2.7.0] — 2026-11-10
 
 ### Added
