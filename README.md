@@ -169,7 +169,7 @@ Send an `Idempotency-Key` header on any write you might retry: the same key with
 
 ## What's new in 2.7.1
 
-- **Newer optional libraries**: the `semantic`, `embeddings` and `internal` extras accept sentence-transformers 6, huggingface_hub 2 and z3-solver 5, and reranking uses the argument name sentence-transformers 4 and later expect.
+- **Newer optional libraries**: the `semantic` and `embeddings` extras accept sentence-transformers 6 and huggingface_hub 2; development installs accept pytest 9 and mypy 2.
 
 ## What's new in 2.7.0
 
