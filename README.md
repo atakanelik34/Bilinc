@@ -167,6 +167,10 @@ All endpoints live under `https://bilinc.space`. Memory operations need an API k
 
 Send an `Idempotency-Key` header on any write you might retry: the same key with the same payload replays the original result and is billed once; a different payload is refused with `409 idempotency_conflict`. Saves that contain a credential, such as an API key, token or private key, are refused with `secret_detected` and the value is never echoed back.
 
+## What's new in 2.7.1
+
+- **Newer optional libraries**: the `semantic`, `embeddings` and `internal` extras accept sentence-transformers 6, huggingface_hub 2 and z3-solver 5, and reranking uses the argument name sentence-transformers 4 and later expect.
+
 ## What's new in 2.7.0
 
 - **Wiki export**: `bilinc wiki <dir>` writes your memory as Obsidian-compatible Markdown, one page per key, with recent changes, links between keys and an index. It is one-way, never touches files it did not write, and reruns reuse unchanged pages. `--wikilinks` writes `[[...]]` links; the stdio MCP adapter has the same export as `export_wiki`.

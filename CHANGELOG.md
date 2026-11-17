@@ -2,11 +2,16 @@
 
 All notable changes to Bilinc.
 
-## [Unreleased]
+## [2.7.1] — 2026-11-18
 
 ### Changed
 
-- Since 2026-11-10 the hosted connector at `https://mcp.bilinc.space/mcp` offers the dream pass too: `dream_start`, `dream_apply` and `dream_undo`, on a connection with write access. The 2.7.0 entry below said they were coming. No package change.
+- Since 2026-11-10 the hosted connector at `https://mcp.bilinc.space/mcp` offers the dream pass too: `dream_start`, `dream_apply` and `dream_undo`, on a connection with write access. The 2.7.0 entry below said they were coming.
+- Wider ranges for the optional extras: `semantic` accepts sentence-transformers up to 6.x, `embeddings` huggingface_hub up to 2.x and `internal` z3-solver up to 5.x. The `dev` extra accepts pytest 9, pytest-cov 7, pytest-asyncio 1.x and mypy 2. Lower bounds are unchanged.
+
+### Fixed
+
+- Reranking (`BILINC_RERANK_MODEL`) passes its raw-logits setting as `activation_fn` on sentence-transformers 4 and later, which renamed `activation_fct`; there the old name only logged a deprecation warning on each call. sentence-transformers 3.x still gets `activation_fct`.
 
 ## [2.7.0] — 2026-11-10
 

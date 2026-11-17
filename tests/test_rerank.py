@@ -1,5 +1,7 @@
 import asyncio
+import sys
 import threading
+import types
 
 import pytest
 
@@ -151,4 +153,33 @@ def test_rerank_asks_for_raw_logits(monkeypatch):
     monkeypatch.setattr(rerank, "_load_rerank_model", _loaded(model))
     rerank.rerank_keys("q", ["a", "b"], lambda k: k, limit=1)
     # a model whose config names no activation would otherwise get a sigmoid
-    assert isinstance(model.kwargs["activation_fct"], torch.nn.Identity)
+    assert isinstance(model.kwargs[rerank._activation_argument()], torch.nn.Identity)
+
+
+class _CrossEncoderV4:  # sentence-transformers 4 and later
+    def predict(self, sentences, batch_size=32, activation_fn=None):
+        return []
+
+
+class _CrossEncoderV3:
+    def predict(self, sentences, batch_size=32, activation_fct=None):
+        return []
+
+
+@pytest.mark.parametrize("cross_encoder, expected", [(_CrossEncoderV4, "activation_fn"), (_CrossEncoderV3, "activation_fct")])
+def test_the_activation_argument_follows_the_installed_sentence_transformers(monkeypatch, cross_encoder, expected):
+    monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(CrossEncoder=cross_encoder))
+    rerank._activation_argument.cache_clear()
+    try:
+        assert rerank._activation_argument() == expected
+    finally:
+        rerank._activation_argument.cache_clear()
+
+
+def test_without_sentence_transformers_the_activation_argument_is_the_3x_name(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)  # import raises ImportError
+    rerank._activation_argument.cache_clear()
+    try:
+        assert rerank._activation_argument() == "activation_fct"
+    finally:
+        rerank._activation_argument.cache_clear()

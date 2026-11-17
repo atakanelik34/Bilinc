@@ -19,10 +19,12 @@ batch at a time, because tokenizers are not safe for concurrent use.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import threading
 import time
+from functools import lru_cache
 from typing import Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -75,13 +77,27 @@ def _load_rerank_model(model_name: str, device: str, revision: str) -> Optional[
         return model, _predict_locks[cache_key]
 
 
+@lru_cache(maxsize=1)
+def _activation_argument() -> str:
+    """The name CrossEncoder.predict() takes the activation under: sentence-transformers 4 renamed activation_fct to
+    activation_fn (the old name only logs a deprecation), so the installed version decides; 3.x keeps activation_fct."""
+    try:
+        from sentence_transformers import CrossEncoder
+
+        if "activation_fn" in inspect.signature(CrossEncoder.predict).parameters:
+            return "activation_fn"
+    except Exception:  # noqa: BLE001 - not installed or not inspectable: the 3.x name
+        pass
+    return "activation_fct"
+
+
 def _raw_logits() -> Dict[str, object]:
     """predict() arguments that return raw logits instead of the config's activation."""
     try:
         import torch
     except ImportError:  # a real CrossEncoder cannot load without torch; test doubles can
         return {}
-    return {"activation_fct": torch.nn.Identity()}
+    return {_activation_argument(): torch.nn.Identity()}
 
 
 def _clear_model_cache() -> None:
