@@ -67,7 +67,7 @@ def build_server():
     try:
         from mcp.server.fastmcp import FastMCP
     except Exception as exc:  # pragma: no cover - depends on optional MCP runtime import path
-        raise RuntimeError("Bilinc Cloud MCP adapter requires mcp>=1.0.0") from exc
+        raise RuntimeError("Bilinc Cloud MCP adapter requires mcp>=1.30.0,<2") from exc
 
     from mcp.types import ToolAnnotations
 

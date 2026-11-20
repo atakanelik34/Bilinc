@@ -1,6 +1,6 @@
 """Bilinc Cloud client.
 
-Bilinc 2.7.1 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
+Bilinc 2.7.2 is cloud-only: the PyPI package is a thin SDK and MCP adapter for
 https://bilinc.space. Local self-hosted StatePlane internals are no longer
 shipped in the public package.
 """
@@ -12,6 +12,7 @@ import json
 import math
 import os
 import ssl
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -21,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-__version__ = "2.7.1"
+__version__ = "2.7.2"
 DEFAULT_BASE_URL = "https://bilinc.space"
 SIGNUP_URL = "https://bilinc.space/signup"
 ACTIVATION_CAMPAIGN = "activation_2_3_4"
@@ -76,6 +77,10 @@ class BilincError(RuntimeError):
 
 class BilincApiKeyRequired(BilincError):
     """Raised when no Bilinc Cloud API key is configured."""
+
+
+class BilincBaseUrlError(BilincError, ValueError):
+    """Raised when a Bilinc Cloud base URL is unsafe to send an API key to."""
 
 
 class BilincCloudError(BilincError):
@@ -485,6 +490,78 @@ def _ssl_context_for(ca_bundle: str | None) -> ssl.SSLContext:
     return ssl.create_default_context(cafile=certifi.where())
 
 
+#: Hosts that may use plain http, for a Bilinc server on this computer.
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+#: Non-default hosts already warned about in this process.
+_WARNED_HOSTS: set[str] = set()
+
+
+def validate_base_url(base_url: Any) -> str:
+    """Return ``base_url`` without a trailing slash, or raise if a key must not go there.
+
+    The API key travels in a header on every request, so the URL must be
+    ``https://``; plain ``http://`` is accepted only for this computer
+    (localhost, 127.0.0.1, ::1). Credentials, query strings and fragments are
+    refused because they would be repeated on every request path.
+    """
+
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise BilincBaseUrlError("Bilinc Cloud base URL is empty. Use https://bilinc.space.")
+    value = base_url.strip().rstrip("/")
+    parsed = urllib.parse.urlsplit(value)
+    scheme = parsed.scheme.lower()
+    try:
+        host = (parsed.hostname or "").lower()
+        parsed.port  # noqa: B018 - raises ValueError on a malformed port
+    except ValueError:
+        host = ""
+    if not host or scheme not in ("https", "http"):
+        raise BilincBaseUrlError(
+            f"Bilinc Cloud base URL {value!r} is not an http(s) URL. Use https://bilinc.space."
+        )
+    if scheme == "http" and host not in LOOPBACK_HOSTS:
+        raise BilincBaseUrlError(
+            f"Bilinc Cloud base URL {value!r} uses plain http, which would send your API key "
+            "unencrypted. Use https:// (http is allowed only for localhost)."
+        )
+    if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+        raise BilincBaseUrlError(
+            f"Bilinc Cloud base URL {value!r} must not carry credentials, a query or a fragment."
+        )
+    return value
+
+
+def is_default_base_url(base_url: str) -> bool:
+    """Whether ``base_url`` (already validated) is the public Bilinc Cloud."""
+
+    return base_url.rstrip("/").lower() == DEFAULT_BASE_URL
+
+
+def require_custom_host_allowed(base_url: str, *, allow_custom_host: bool) -> str:
+    """Validate ``base_url`` and refuse to bind a key to another host without consent."""
+
+    value = validate_base_url(base_url)
+    if not is_default_base_url(value) and not allow_custom_host:
+        raise BilincBaseUrlError(
+            f"Refusing to save an API key for {value}, which is not {DEFAULT_BASE_URL}. "
+            "If you run that server, pass --allow-custom-host."
+        )
+    return value
+
+
+def _warn_custom_host(base_url: str) -> None:
+    """Tell the user once per process that the key goes to a non-default host."""
+
+    host = (urllib.parse.urlsplit(base_url).hostname or "").lower()
+    if is_default_base_url(base_url) or host in LOOPBACK_HOSTS or base_url in _WARNED_HOSTS:
+        return
+    _WARNED_HOSTS.add(base_url)
+    print(
+        f"bilinc: warning: sending your API key to {base_url}, not {DEFAULT_BASE_URL}",
+        file=sys.stderr,
+    )
+
+
 def config_path() -> Path:
     """Return the local Bilinc CLI config path."""
 
@@ -517,8 +594,36 @@ def load_config_api_key() -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def save_config_api_key(api_key: str, *, base_url: str = DEFAULT_BASE_URL) -> Path:
-    """Persist the Cloud API key for local CLI use with user-only permissions."""
+def load_config_base_url() -> str | None:
+    """Return the base URL saved with the API key by `bilinc login`, validated.
+
+    A key saved for one host is sent only to that host. A saved URL that is not
+    safe (edited by hand, or written by an older release) raises instead of
+    being used.
+    """
+
+    value = load_config().get("base_url")
+    if value is None:
+        return None
+    try:
+        return validate_base_url(value)
+    except BilincBaseUrlError as exc:
+        raise BilincBaseUrlError(
+            f"{exc} It was read from {config_path()}; run bilinc login again."
+        ) from exc
+
+
+def save_config_api_key(
+    api_key: str,
+    *,
+    base_url: str = DEFAULT_BASE_URL,
+    allow_custom_host: bool = False,
+) -> Path:
+    """Persist the Cloud API key for local CLI use with user-only permissions.
+
+    The key is saved together with the host it belongs to. A host other than
+    https://bilinc.space needs ``allow_custom_host=True``.
+    """
 
     key = api_key.strip()
     if not key:
@@ -529,9 +634,10 @@ def save_config_api_key(api_key: str, *, base_url: str = DEFAULT_BASE_URL) -> Pa
             "or set BILINC_API_KEY. Then run bilinc quicktest."
         )
 
+    host_url = require_custom_host_allowed(base_url, allow_custom_host=allow_custom_host)
     path = config_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    payload = {"api_key": key, "base_url": base_url.rstrip("/") or DEFAULT_BASE_URL}
+    payload = {"api_key": key, "base_url": host_url}
     # Create the file owner-only from the start, so the key is never briefly
     # readable by other users between the write and a later chmod.
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -608,8 +714,12 @@ class CloudClient:
             or self.read_retry_attempts < 1
         ):
             raise _invalid("read_retry_attempts", "read_retry_attempts must be a positive integer")
+        key_from_config = False
         if self.api_key is None:
-            self.api_key = os.environ.get("BILINC_API_KEY") or load_config_api_key()
+            self.api_key = os.environ.get("BILINC_API_KEY") or None
+            if not self.api_key:
+                self.api_key = load_config_api_key()
+                key_from_config = self.api_key is not None
         if not self.api_key:
             raise BilincApiKeyRequired(
                 "No Bilinc Cloud API key is configured. "
@@ -618,8 +728,14 @@ class CloudClient:
                 "or set BILINC_API_KEY. Then run bilinc quicktest."
             )
         if self.base_url == DEFAULT_BASE_URL:
-            self.base_url = os.environ.get("BILINC_BASE_URL", self.base_url)
-        self.base_url = self.base_url.rstrip("/")
+            env_base_url = os.environ.get("BILINC_BASE_URL")
+            if env_base_url:
+                self.base_url = env_base_url
+            elif key_from_config:
+                # A key saved by `bilinc login` goes back to the host it came from.
+                self.base_url = load_config_base_url() or DEFAULT_BASE_URL
+        self.base_url = validate_base_url(self.base_url)
+        _warn_custom_host(self.base_url)
 
     def commit(
         self,
@@ -1317,6 +1433,7 @@ __all__ = [
     "BilincConnectionError",
     "BilincEntitlementError",
     "BilincError",
+    "BilincBaseUrlError",
     "BilincNotFoundError",
     "BilincPaymentRequiredError",
     "BilincRateLimitError",
@@ -1329,6 +1446,7 @@ __all__ = [
     "config_path",
     "INSTALL_URL",
     "load_config_api_key",
+    "load_config_base_url",
     "MAX_DIFF_LIMIT",
     "MAX_HISTORY_LIMIT",
     "MAX_LIST_LIMIT",
@@ -1339,6 +1457,7 @@ __all__ = [
     "RETRYABLE_ERROR_CODES",
     "REVISION_STRATEGIES",
     "save_config_api_key",
+    "validate_base_url",
     "SIGNUP_URL",
     "VALUE_MODES",
 ]

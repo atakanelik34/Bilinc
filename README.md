@@ -167,6 +167,15 @@ All endpoints live under `https://bilinc.space`. Memory operations need an API k
 
 Send an `Idempotency-Key` header on any write you might retry: the same key with the same payload replays the original result and is billed once; a different payload is refused with `409 idempotency_conflict`. Saves that contain a credential, such as an API key, token or private key, are refused with `secret_detected` and the value is never echoed back.
 
+## What leaves your machine
+
+Bilinc is a cloud SDK: `commit`, `recall`, `revise`, `export` and the other calls send the memory keys and values you pass, with your API key, to Bilinc Cloud over HTTPS. The package keeps no memory store on your computer. `bilinc login` saves the API key and the host it belongs to in `~/.config/bilinc/config.json` (or `$BILINC_CONFIG_DIR`), readable only by you (0600); `bilinc wiki` and the `export_wiki` tool write files only to the folder you name. Remove a memory with `forget`, and its stored content as well with `--purge`. What Bilinc Cloud keeps, and for how long, is in the [privacy policy](https://bilinc.space/privacy).
+
+## What's new in 2.7.2
+
+- **Safer base URLs**: the API key goes only to an `https://` host (plain `http://` only for localhost), a key saved by `bilinc login` goes back to the host it was saved for, and saving a key for a host other than bilinc.space needs `--allow-custom-host`.
+- **Newer minimum dependencies**: `mcp>=1.30.0` and `certifi>=2026.10.18`, which close known advisories in older versions.
+
 ## What's new in 2.7.1
 
 - **Newer optional libraries**: the `semantic` and `embeddings` extras accept sentence-transformers 6 and huggingface_hub 2; development installs accept pytest 9 and mypy 2.

@@ -21,6 +21,7 @@ from bilinc import __version__
 from bilinc.client import (
     ACTIVATION_SIGNUP_URL,
     BilincApiKeyRequired,
+    BilincBaseUrlError,
     BilincCloudError,
     BilincValidationError,
     CloudClient,
@@ -31,7 +32,9 @@ from bilinc.client import (
     VALUE_MODES,
     config_path,
     load_config_api_key,
+    require_custom_host_allowed,
     save_config_api_key,
+    validate_base_url,
 )
 from bilinc.cli.login import LoginError, device_login, is_headless, loopback_login
 from bilinc.wiki import WikiExportError, export_wiki, summary_line
@@ -429,6 +432,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"bilinc {__version__}")
     parser.add_argument("--api-key", help="Bilinc Cloud API key. Defaults to BILINC_API_KEY.")
     parser.add_argument("--base-url", default="https://bilinc.space", help="Bilinc Cloud base URL")
+    parser.add_argument(
+        "--allow-custom-host",
+        action="store_true",
+        help="Allow `bilinc login` to save a key for a --base-url other than https://bilinc.space",
+    )
     parser.add_argument("--timeout", type=float, default=30.0, help="HTTP timeout in seconds")
 
     sub = parser.add_subparsers(dest="command")
@@ -622,6 +630,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    try:
+        args.base_url = validate_base_url(args.base_url)
+        if args.command == "login":
+            # Refuse before the browser sign-in, not after it.
+            require_custom_host_allowed(args.base_url, allow_custom_host=args.allow_custom_host)
+    except BilincBaseUrlError as exc:
+        print(f"bilinc: error: {exc}", file=sys.stderr)
+        return 1
 
     if args.command == "start":
         opened = False
@@ -640,7 +656,7 @@ def main(argv: list[str] | None = None) -> int:
                     "next": "Run bilinc quicktest",
                 }
             )
-        except (BilincApiKeyRequired, BilincCloudError) as exc:
+        except (BilincApiKeyRequired, BilincBaseUrlError, BilincCloudError) as exc:
             print(f"bilinc: error: {exc}", file=sys.stderr)
             return 1
         return 0
@@ -648,8 +664,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "login":
         if args.api_key:
             try:
-                path = save_config_api_key(args.api_key, base_url=args.base_url)
-            except BilincApiKeyRequired as exc:
+                path = save_config_api_key(
+                    args.api_key, base_url=args.base_url, allow_custom_host=args.allow_custom_host
+                )
+            except (BilincApiKeyRequired, BilincBaseUrlError) as exc:
                 print(f"bilinc: error: {exc}", file=sys.stderr)
                 return 1
             _print({"saved": True, "config": str(path), "next": "Run bilinc quicktest"})
@@ -662,8 +680,10 @@ def main(argv: list[str] | None = None) -> int:
             api_key = result.get("api_key")
             if not isinstance(api_key, str) or not api_key:
                 raise LoginError("Bilinc Cloud did not return an API key. Run bilinc login again.")
-            path = save_config_api_key(api_key, base_url=args.base_url)
-        except (LoginError, BilincApiKeyRequired, BilincCloudError) as exc:
+            path = save_config_api_key(
+                api_key, base_url=args.base_url, allow_custom_host=args.allow_custom_host
+            )
+        except (LoginError, BilincApiKeyRequired, BilincBaseUrlError, BilincCloudError) as exc:
             print(f"bilinc: error: {exc}", file=sys.stderr)
             return 1
         except KeyboardInterrupt:

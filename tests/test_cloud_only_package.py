@@ -16,8 +16,8 @@ WIKI_MODULES = sorted(
 def test_public_api_is_cloud_only():
     import bilinc
 
-    assert bilinc.__version__ == "2.7.1"
-    assert bilinc.version == "2.7.1"
+    assert bilinc.__version__ == "2.7.2"
+    assert bilinc.version == "2.7.2"
     assert "utm_campaign=activation_2_3_4" in bilinc.ACTIVATION_SIGNUP_URL
     assert hasattr(bilinc, "Bilinc")
     assert hasattr(bilinc, "CloudClient")
@@ -36,7 +36,7 @@ def test_declared_wheel_packages_stay_cloud_only():
         pyproject = tomllib.load(handle)
 
     assert pyproject["tool"]["setuptools"]["packages"] == ["bilinc", "bilinc.cli", "bilinc.wiki"]
-    assert set(pyproject["project"]["dependencies"]) == {"certifi>=2024.2.2", "mcp>=1.10.0,<2.0"}
+    assert set(pyproject["project"]["dependencies"]) == {"certifi>=2026.10.18", "mcp>=1.30.0,<2.0"}
 
 
 class RecordingTransport:
@@ -114,9 +114,9 @@ def test_cloud_client_commit_posts_to_hosted_api():
             "headers": {
                 "Authorization": "Bearer bil_live_example",
                 "Content-Type": "application/json",
-                "User-Agent": "bilinc-python/2.7.1",
+                "User-Agent": "bilinc-python/2.7.2",
                 "X-Bilinc-Client": "python-sdk",
-                "X-Bilinc-Client-Version": "2.7.1",
+                "X-Bilinc-Client-Version": "2.7.2",
             },
             "body": json.dumps(
                 {
@@ -192,7 +192,7 @@ def test_cloud_client_status_reads_the_authenticated_status_endpoint():
             "url": "https://bilinc.space/api/cloud/status",
             "headers": {
                 "Authorization": "Bearer bil_live_example",
-                "User-Agent": "bilinc-python/2.7.1",
+                "User-Agent": "bilinc-python/2.7.2",
             },
             "body": None,
             "timeout": 30.0,
