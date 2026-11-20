@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -513,12 +513,15 @@ _WARNED_HOSTS: set[str] = set()
 def _display_base_url(value: str) -> str:
     """``value`` without any user:password part, safe to print in an error."""
 
-    try:
-        parts = urllib.parse.urlsplit(value)
-    except ValueError:
-        return "<unparseable URL>"
-    netloc = parts.netloc.rsplit("@", 1)[-1]
-    return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+    scheme, sep, rest = value.partition("://")
+    if not sep:
+        scheme, rest = "", value
+    if "@" in rest:
+        # Cut on the raw text: a password may hold "/", "?" or "#", which would
+        # end the parsed netloc before the "@".
+        rest = "<redacted>@" + rest.rsplit("@", 1)[1]
+    rest = rest.split("?", 1)[0].split("#", 1)[0]
+    return f"{scheme}{sep}{rest}"
 
 
 def validate_base_url(base_url: Any) -> str:
@@ -753,13 +756,14 @@ def save_config_api_key(
 
 
 def _redirect_allowed(old_url: str, new_url: str) -> bool:
-    """Same host, and either the same scheme and port or an upgrade from http to https."""
+    """Same host, and either the same scheme and port, or http to https on port 443 or the same port."""
 
     try:
         old, new = _origin(old_url), _origin(new_url)
     except ValueError:
         return False
-    return old[1] == new[1] and (old == new or (old[0] == "http" and new[0] == "https"))
+    upgrade = old[0] == "http" and new[0] == "https" and new[2] in (443, old[2])
+    return old[1] == new[1] and (old == new or upgrade)
 
 
 class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -812,8 +816,10 @@ def _default_transport(
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         location = exc.headers.get("Location") if exc.headers is not None and 300 <= exc.code < 400 else None
-        target_url = urllib.parse.urljoin(url, location) if location else None
-        if target_url is not None and not _redirect_allowed(url, target_url):
+        hop_from = getattr(exc, "url", None) or url
+        target_url = urllib.parse.urljoin(hop_from, location) if location else None
+        if target_url is not None and not _redirect_allowed(hop_from, target_url):
+            exc.close()
             target = _display_base_url(target_url)
             raise BilincConnectionError(
                 f"Bilinc Cloud request was redirected to {target}, a different host, port or scheme; "
@@ -864,6 +870,7 @@ class CloudClient:
     timeout: float = 30.0
     transport: Callable[..., dict[str, Any]] = _default_transport
     read_retry_attempts: int = READ_RETRY_ATTEMPTS
+    _checked_base_url: str | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if (
@@ -892,6 +899,7 @@ class CloudClient:
             # A key saved by `bilinc login` goes only to the host it was saved for,
             # whichever of --base-url, BILINC_BASE_URL or the config named the URL.
             saved.check(self.base_url)
+        self._checked_base_url = self.base_url
         _warn_custom_host(self.base_url)
 
     def commit(
@@ -1520,6 +1528,16 @@ class CloudClient:
             headers["Idempotency-Key"] = idempotency_key
         return headers
 
+    def _endpoint(self) -> str:
+        """The base URL checked at construction; a later reassignment is refused."""
+
+        if self.base_url != self._checked_base_url:
+            raise BilincBaseUrlError(
+                "CloudClient.base_url changed after the client was created, so it was not checked. "
+                "Create a new CloudClient(base_url=...) instead."
+            )
+        return self._checked_base_url
+
     def _post(
         self,
         path: str,
@@ -1531,7 +1549,7 @@ class CloudClient:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         return self.transport(
             "POST",
-            f"{self.base_url}{path}",
+            f"{self._endpoint()}{path}",
             headers=self._headers(content_type=True, idempotency_key=idempotency_key),
             body=body,
             timeout=float(self.timeout if timeout is None else timeout),
@@ -1546,7 +1564,8 @@ class CloudClient:
         query = urllib.parse.urlencode(
             {name: value for name, value in (params or {}).items() if value is not None}
         )
-        url = f"{self.base_url}{path}?{query}" if query else f"{self.base_url}{path}"
+        base = self._endpoint()
+        url = f"{base}{path}?{query}" if query else f"{base}{path}"
         return self._with_read_retries(
             lambda: self.transport(
                 "GET",

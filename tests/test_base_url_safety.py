@@ -426,7 +426,7 @@ def test_cross_origin_redirect_error_names_the_target():
     finally:
         srv.close()
     message = str(caught.value)
-    assert "redirected to https://elsewhere.example/api" in message
+    assert "redirected to https://<redacted>@elsewhere.example/api" in message
     assert "user:pw" not in message
     assert caught.value.retryable is False
 
@@ -551,9 +551,42 @@ def test_cli_api_key_before_login_is_saved(monkeypatch):
 def test_redirect_rule():
     from bilinc.client import _redirect_allowed
 
-    assert _redirect_allowed("http://localhost:8080/a", "https://localhost:8443/a")
+    assert _redirect_allowed("http://localhost:8080/a", "https://localhost/a")
     assert _redirect_allowed("https://bilinc.space/a", "https://bilinc.space/b")
     assert not _redirect_allowed("https://bilinc.space/a", "http://bilinc.space/a")
     assert not _redirect_allowed("https://bilinc.space/a", "https://www.bilinc.space/a")
     assert not _redirect_allowed("https://bilinc.space/a", "https://bilinc.space:8443/a")
+
+
+@pytest.mark.parametrize(
+    "url, secret",
+    [
+        ("https://user:se/cret@host.example", "se/cret"),
+        ("https://user:sec?ret@host.example", "sec"),
+        ("https://user:sec#ret@host.example", "sec"),
+        ("http://admin:pw@evil.example.com", "pw@"),
+    ],
+)
+def test_password_with_url_delimiters_is_never_shown(url, secret):
+    with pytest.raises(BilincBaseUrlError) as caught:
+        validate_base_url(url)
+    assert secret not in str(caught.value)
+    assert "user:" not in str(caught.value) and "admin" not in str(caught.value)
+
+
+def test_http_to_https_upgrade_only_to_443_or_same_port():
+    from bilinc.client import _redirect_allowed
+
+    assert _redirect_allowed("http://localhost:8080/a", "https://localhost/a")
+    assert _redirect_allowed("http://localhost:8080/a", "https://localhost:8080/a")
+    assert not _redirect_allowed("http://localhost:8080/a", "https://localhost:9443/a")
+
+
+def test_base_url_reassignment_is_refused():
+    transport = RecordingTransport()
+    client = CloudClient(api_key="bil_live_example", transport=transport)
+    client.base_url = "http://evil.example"
+    with pytest.raises(BilincBaseUrlError, match="changed after"):
+        client.status()
+    assert transport.calls == []
 
