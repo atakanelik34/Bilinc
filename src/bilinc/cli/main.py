@@ -456,6 +456,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     login.add_argument("--api-key", help="Save this API key instead of signing in (for CI)")
     login.add_argument(
+        "--allow-custom-host",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Save the key for a --base-url or BILINC_BASE_URL other than https://bilinc.space",
+    )
+    login.add_argument(
         "--device",
         action="store_true",
         help="Sign in with a code approved in any browser (for SSH sessions and servers)",

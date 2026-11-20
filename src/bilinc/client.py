@@ -504,6 +504,8 @@ def _is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
 #: Non-default hosts already warned about in this process.
 _WARNED_HOSTS: set[str] = set()
 
@@ -599,18 +601,6 @@ def _warn_custom_host(base_url: str) -> None:
     )
 
 
-def _require_same_host(env_url: str, key_host: str) -> None:
-    """Refuse to send a key saved for one host to another one named by BILINC_BASE_URL."""
-
-    if _origin(env_url) == _origin(key_host) or _is_loopback_host(_origin(env_url)[1]):
-        return
-    raise BilincBaseUrlError(
-        f"BILINC_BASE_URL points to {_display_base_url(env_url)}, but the API key saved by bilinc login "
-        f"belongs to {key_host}. Unset BILINC_BASE_URL, set BILINC_API_KEY for that host, "
-        "or run bilinc login again with it set."
-    )
-
-
 def config_path() -> Path:
     """Return the local Bilinc CLI config path."""
 
@@ -640,44 +630,78 @@ def load_config_api_key() -> str | None:
     """Return a stored API key if one was saved with `bilinc login`.
 
     Never raises: it only says whether a key is there. Which host it may go to
-    is decided by ``_config_key_and_host``.
+    is decided by ``_saved_key``.
     """
 
     value = load_config().get("api_key")
     return value if isinstance(value, str) and value.strip() else None
 
 
-def _config_key_and_host(payload: dict[str, Any]) -> tuple[str | None, str | None]:
-    """The saved key and the custom host it may be sent to, from one read of the config.
+class _SavedKey:
+    """A key saved by `bilinc login` and the hosts it may be sent to."""
 
-    The host counts only when the file records that it was saved with
-    ``--allow-custom-host`` (2.7.2 and later). Otherwise the saved ``base_url``
-    is ignored, as every release before 2.7.2 ignored it, and the key goes to
-    https://bilinc.space. A consented host that is not safe (edited by hand)
-    raises instead of being used.
+    __slots__ = ("key", "home", "hosts")
+
+    def __init__(self, key: str, home: str, hosts: tuple[str, ...]) -> None:
+        self.key = key
+        #: Where requests go when nothing else names a host.
+        self.home = home
+        #: Every host this key may be sent to (hosts on this computer are always allowed).
+        self.hosts = hosts
+
+    def check(self, url: str) -> None:
+        origin = _origin(url)
+        if _is_loopback_host(origin[1]) or any(origin == _origin(host) for host in self.hosts):
+            return
+        raise BilincBaseUrlError(
+            f"The API key saved by bilinc login belongs to {' or '.join(self.hosts)}, not "
+            f"{_display_base_url(url)}. Use that host, set BILINC_API_KEY for this one, "
+            "or run bilinc login again with this host."
+        )
+
+
+def _saved_key(payload: dict[str, Any]) -> _SavedKey | None:
+    """The saved key and the hosts it may go to, from one read of the config.
+
+    - Saved by 2.7.2 or later for a custom host (``allow_custom_host``): only
+      that host. A consented URL that is not safe (edited by hand) raises.
+    - Saved for https://bilinc.space, or by an earlier release: https://bilinc.space,
+      plus the saved ``base_url`` if it is a safe URL, because earlier releases
+      sent the key there whenever BILINC_BASE_URL or --base-url named it.
     """
 
     key = payload.get("api_key")
-    key = key if isinstance(key, str) and key.strip() else None
+    if not isinstance(key, str) or not key.strip():
+        return None
     value = payload.get("base_url")
-    if value is None or payload.get("allow_custom_host") is not True:
-        return key, None
+    if payload.get("allow_custom_host") is True and value is not None:
+        try:
+            host_url = validate_base_url(value)
+        except BilincBaseUrlError as exc:
+            raise BilincBaseUrlError(
+                f"{exc} It was read from {config_path()}; run bilinc login again."
+            ) from exc
+        return _SavedKey(key, host_url, (host_url,))
+    hosts = [DEFAULT_BASE_URL]
     try:
-        host_url = validate_base_url(value)
-    except BilincBaseUrlError as exc:
-        raise BilincBaseUrlError(
-            f"{exc} It was read from {config_path()}; run bilinc login again."
-        ) from exc
-    return key, None if is_default_base_url(host_url) else host_url
+        legacy = validate_base_url(value) if value is not None else None
+    except BilincBaseUrlError:
+        legacy = None
+    if legacy and not is_default_base_url(legacy):
+        hosts.append(legacy)
+    return _SavedKey(key, DEFAULT_BASE_URL, tuple(hosts))
 
 
 def load_config_base_url() -> str | None:
-    """Return the host saved with the API key by `bilinc login`, validated.
+    """Return the custom host a `bilinc login` key was saved for, or None.
 
-    None when nothing usable is saved (see ``_config_key_and_host``).
+    None also when no key is saved, or the key belongs to https://bilinc.space.
     """
 
-    return _config_key_and_host(load_config())[1]
+    saved = _saved_key(load_config())
+    if saved is None or is_default_base_url(saved.home):
+        return None
+    return saved.home
 
 
 def save_config_api_key(
@@ -765,8 +789,13 @@ def _default_transport(
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         location = exc.headers.get("Location") if exc.headers is not None and 300 <= exc.code < 400 else None
-        if location:
-            target = _display_base_url(urllib.parse.urljoin(url, location))
+        target_url = urllib.parse.urljoin(url, location) if location else None
+        try:
+            cross_origin = target_url is not None and _origin(target_url) != _origin(url)
+        except ValueError:
+            cross_origin = target_url is not None
+        if cross_origin:
+            target = _display_base_url(target_url)
             raise BilincConnectionError(
                 f"Bilinc Cloud request was redirected to {target}, a different host or scheme; "
                 "the redirect was not followed so the API key stays with the configured host. "
@@ -824,13 +853,12 @@ class CloudClient:
             or self.read_retry_attempts < 1
         ):
             raise _invalid("read_retry_attempts", "read_retry_attempts must be a positive integer")
-        config_host: str | None = None
-        key_from_config = False
+        saved: _SavedKey | None = None
         if self.api_key is None:
             self.api_key = os.environ.get("BILINC_API_KEY") or None
             if not self.api_key:
-                self.api_key, config_host = _config_key_and_host(load_config())
-                key_from_config = self.api_key is not None
+                saved = _saved_key(load_config())
+                self.api_key = saved.key if saved else None
         if not self.api_key:
             raise BilincApiKeyRequired(
                 "No Bilinc Cloud API key is configured. "
@@ -839,22 +867,16 @@ class CloudClient:
                 "or set BILINC_API_KEY. Then run bilinc quicktest."
             )
         env_base_url = os.environ.get("BILINC_BASE_URL") or None
-        if self.base_url is None or (
-            env_base_url and self.base_url.strip().rstrip("/").lower() == DEFAULT_BASE_URL
-        ):
-            # An explicit https://bilinc.space keeps honouring BILINC_BASE_URL, as
-            # before 2.7.2, but never picks up a host saved in the config.
-            explicit_default = self.base_url is not None
-            if env_base_url:
-                self.base_url = env_base_url
-                if key_from_config:
-                    _require_same_host(validate_base_url(env_base_url), config_host or DEFAULT_BASE_URL)
-            elif key_from_config and config_host and not explicit_default:
-                # A key saved by `bilinc login` goes back to the host it came from.
-                self.base_url = config_host
-            else:
-                self.base_url = DEFAULT_BASE_URL
+        if self.base_url is None:
+            self.base_url = env_base_url or (saved.home if saved else DEFAULT_BASE_URL)
+        elif env_base_url and self.base_url.strip().rstrip("/").lower() == DEFAULT_BASE_URL:
+            # An explicit https://bilinc.space keeps honouring BILINC_BASE_URL, as before 2.7.2.
+            self.base_url = env_base_url
         self.base_url = validate_base_url(self.base_url)
+        if saved is not None:
+            # A key saved by `bilinc login` goes only to the host it was saved for,
+            # whichever of --base-url, BILINC_BASE_URL or the config named the URL.
+            saved.check(self.base_url)
         _warn_custom_host(self.base_url)
 
     def commit(

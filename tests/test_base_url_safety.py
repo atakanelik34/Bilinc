@@ -259,16 +259,7 @@ def test_custom_host_consent_is_recorded():
     }
 
 
-def test_explicit_default_base_url_wins_over_saved_host():
-    save_config_api_key("bil_live_saved", base_url="https://self.example", allow_custom_host=True)
-
-    transport = RecordingTransport()
-    CloudClient(base_url="https://bilinc.space", transport=transport).status()
-
-    assert transport.calls[0]["url"] == "https://bilinc.space/api/cloud/status"
-
-
-def test_cli_explicit_default_base_url_wins_over_saved_host(monkeypatch):
+def test_cli_passes_explicit_base_url_to_the_client(monkeypatch):
     save_config_api_key("bil_live_saved", base_url="https://self.example", allow_custom_host=True)
     seen = {}
 
@@ -403,7 +394,7 @@ def test_env_base_url_cannot_take_a_saved_key_to_another_host(monkeypatch):
     save_config_api_key("bil_live_saved")
     monkeypatch.setenv("BILINC_BASE_URL", "https://other.example")
 
-    with pytest.raises(BilincBaseUrlError, match="belongs to https://bilinc.space"):
+    with pytest.raises(BilincBaseUrlError, match="belongs to https://bilinc.space, not https://other.example"):
         CloudClient(transport=RecordingTransport())
 
 
@@ -440,4 +431,85 @@ def test_cross_origin_redirect_error_names_the_target():
     assert "redirected to https://elsewhere.example/api" in message
     assert "user:pw" not in message
     assert caught.value.retryable is False
+
+
+def test_explicit_base_url_cannot_take_a_saved_key_to_another_host():
+    save_config_api_key("bil_live_saved")
+    with pytest.raises(BilincBaseUrlError, match="not https://attacker.example"):
+        CloudClient(base_url="https://attacker.example", transport=RecordingTransport())
+
+
+def test_cli_base_url_cannot_take_a_saved_key_to_another_host(capsys):
+    save_config_api_key("bil_live_saved")
+    assert main(["--base-url", "https://attacker.example", "status"]) == 1
+    assert "belongs to https://bilinc.space" in capsys.readouterr().err
+
+
+def test_key_saved_for_custom_host_not_sent_to_default():
+    save_config_api_key("bil_live_saved", base_url="https://self.example", allow_custom_host=True)
+    with pytest.raises(BilincBaseUrlError, match="belongs to https://self.example"):
+        CloudClient(base_url="https://bilinc.space", transport=RecordingTransport())
+
+
+def test_saved_key_may_go_to_a_local_server():
+    save_config_api_key("bil_live_saved")
+    transport = RecordingTransport()
+    CloudClient(base_url="http://127.0.0.1:8000", transport=transport).status()
+    assert transport.calls[0]["url"] == "http://127.0.0.1:8000/api/cloud/status"
+
+
+def test_pre_272_custom_host_config_keeps_working_with_env(monkeypatch):
+    path = config_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"api_key": "bil_live_saved", "base_url": "https://staging.example"}))
+    monkeypatch.setenv("BILINC_BASE_URL", "https://staging.example")
+
+    transport = RecordingTransport()
+    CloudClient(transport=transport).status()
+
+    assert transport.calls[0]["url"] == "https://staging.example/api/cloud/status"
+
+
+def test_pre_272_custom_host_config_not_sent_to_a_third_host(monkeypatch):
+    path = config_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"api_key": "bil_live_saved", "base_url": "https://staging.example"}))
+    monkeypatch.setenv("BILINC_BASE_URL", "https://other.example")
+
+    with pytest.raises(BilincBaseUrlError):
+        CloudClient(transport=RecordingTransport())
+
+
+def test_cli_login_accepts_allow_custom_host_after_login():
+    code = main(["--base-url", "https://self.example", "login", "--allow-custom-host", "--api-key", "bil_live_x"])
+    assert code == 0
+    assert json.loads(config_path().read_text())["allow_custom_host"] is True
+
+
+def test_cli_login_flag_before_login_still_works():
+    code = main(["--allow-custom-host", "--base-url", "https://self.example", "login", "--api-key", "bil_live_x"])
+    assert code == 0
+
+
+def test_same_origin_redirect_that_urllib_refuses_is_not_called_cross_origin():
+    from bilinc.client import BilincCloudError, _default_transport
+
+    srv = _RedirectServer(lambda port: f"http://127.0.0.1:{port}/start")  # endless loop on one host
+    try:
+        with pytest.raises(BilincCloudError) as caught:
+            _default_transport("GET", f"http://127.0.0.1:{srv.port}/start", headers={}, body=None, timeout=5)
+    finally:
+        srv.close()
+    assert getattr(caught.value, "code", None) != "cross_origin_redirect"
+
+
+def test_consented_bad_host_without_key_reports_missing_key():
+    from bilinc.client import BilincApiKeyRequired
+
+    path = config_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"allow_custom_host": True, "base_url": "http://remote"}))
+    with pytest.raises(BilincApiKeyRequired):
+        CloudClient(transport=RecordingTransport())
+    assert load_config_base_url() is None
 
