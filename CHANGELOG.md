@@ -6,14 +6,18 @@ All notable changes to Bilinc.
 
 ### Security
 
-- The SDK, CLI and stdio MCP adapter refuse a base URL that is not `https://`, so an API key is never sent unencrypted. Plain `http://` is accepted only for `localhost`, `127.0.0.1` and `::1`; a URL with credentials, a query or a fragment is refused too. This covers `--base-url`, `BILINC_BASE_URL`, `CloudClient(base_url=...)` and both `bilinc login` flows.
+- The SDK, CLI and stdio MCP adapter refuse a base URL that is not `https://`, so an API key is never sent unencrypted. Plain `http://` is accepted only for `localhost`, `127.0.0.1` and `::1`; a URL with a user name or password, a query or a fragment is refused too, and the error never repeats the password. This covers `--base-url`, `BILINC_BASE_URL`, `CloudClient(base_url=...)` and both `bilinc login` flows.
+- Requests no longer follow a redirect to another scheme, host or port: urllib would have copied the `Authorization` header to it. Such a redirect fails as the 30x response it is. Redirects within the same host still work.
 - `bilinc login` saves a key for a host other than `https://bilinc.space` only with `--allow-custom-host`, and refuses before the browser sign-in starts. Requests to a host other than `https://bilinc.space` (and not on this computer) print a one-time warning to stderr.
-- A key saved by `bilinc login` is sent back to the host it was saved for: the client now reads the saved `base_url` (it was written but never read) and validates it. `BILINC_BASE_URL` and an explicit `base_url` still take precedence, and a key from `BILINC_API_KEY` is not paired with the saved host. A saved URL that fails the check raises and asks you to run `bilinc login` again.
+- A key saved by `bilinc login` is sent back to the host it was saved for: the client now reads the saved `base_url` (it was written but never read) and validates it. A custom host counts only when the config records `--allow-custom-host`; a config written by 2.7.1 or earlier keeps sending its key to `https://bilinc.space`, as before. A saved URL that fails the check raises and asks you to run `bilinc login` again.
 - Minimum versions: `mcp>=1.30.0` (GHSA-vj7q-gjh5-988w, GHSA-w4fh-qvv9-3v23, GHSA-5h93-6whr-6q8j, GHSA-rwrf-2pqf-9j8j, GHSA-84m7-p3x7-pcfv) and `certifi>=2026.10.18` (GHSA-6q48-6c7w-9gw2). `mcp` 2.x stays out: it removes `mcp.server.fastmcp`.
 
 ### Changed
 
+- Which host a request goes to: an explicit `--base-url` or `CloudClient(base_url=...)` (including `https://bilinc.space` itself), then `BILINC_BASE_URL`, then the host saved with a `bilinc login` key, then `https://bilinc.space`. A key from `BILINC_API_KEY` is not paired with the saved host. `CloudClient.base_url` now defaults to `None` and holds the resolved URL after construction.
+- `bilinc login` signs in against `--base-url`, else `BILINC_BASE_URL`, else `https://bilinc.space`, so the key is saved for the host later requests use.
 - A `--base-url` or `BILINC_BASE_URL` that uses plain `http://` for a host other than this computer now fails instead of connecting.
+- `BilincBaseUrlError` (a `ValueError`) is exported from `bilinc`.
 - README and SECURITY.md say what the package sends to Bilinc Cloud and what it keeps on this computer.
 
 ## [2.7.1] — 2026-11-18

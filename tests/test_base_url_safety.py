@@ -206,3 +206,167 @@ def test_login_flows_refuse_plain_http_before_any_request():
     with pytest.raises(LoginError):
         loopback_login("http://evil.example.com", transport=transport, open_browser=False)
     assert transport.calls == []
+
+
+def test_error_message_never_shows_credentials():
+    for url in ("https://admin:s3cret@proxy.example", "http://admin:s3cret@evil.example.com"):
+        with pytest.raises(BilincBaseUrlError) as caught:
+            validate_base_url(url)
+        assert "s3cret" not in str(caught.value)
+        assert "admin" not in str(caught.value)
+
+
+def test_cli_error_never_shows_credentials(monkeypatch, capsys):
+    monkeypatch.setenv("BILINC_API_KEY", "bil_live_example")
+    monkeypatch.setenv("BILINC_BASE_URL", "https://admin:s3cret@proxy.example")
+    assert main(["status"]) == 1
+    assert "s3cret" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("url", ["https://bilinc.space:443", "HTTPS://BILINC.SPACE/", "https://bilinc.space"])
+def test_default_host_spellings_count_as_default(url, capsys):
+    path = save_config_api_key("bil_live_example", base_url=url)
+    assert "allow_custom_host" not in json.loads(path.read_text())
+    CloudClient(api_key="bil_live_example", base_url=url, transport=RecordingTransport())
+    assert capsys.readouterr().err == ""
+
+
+def test_pre_272_config_with_custom_host_keeps_default(capsys):
+    """2.7.1 saved --base-url without consent and never read it: keep sending to bilinc.space."""
+
+    path = config_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"api_key": "bil_live_saved", "base_url": "https://staging.example"}))
+
+    transport = RecordingTransport()
+    CloudClient(transport=transport).status()
+
+    assert transport.calls[0]["url"] == "https://bilinc.space/api/cloud/status"
+    assert load_config_base_url() is None
+
+
+def test_custom_host_consent_is_recorded():
+    path = save_config_api_key("bil_live_saved", base_url="https://self.example", allow_custom_host=True)
+    assert json.loads(path.read_text()) == {
+        "api_key": "bil_live_saved",
+        "base_url": "https://self.example",
+        "allow_custom_host": True,
+    }
+
+
+def test_explicit_default_base_url_wins_over_saved_host():
+    save_config_api_key("bil_live_saved", base_url="https://self.example", allow_custom_host=True)
+
+    transport = RecordingTransport()
+    CloudClient(base_url="https://bilinc.space", transport=transport).status()
+
+    assert transport.calls[0]["url"] == "https://bilinc.space/api/cloud/status"
+
+
+def test_cli_explicit_default_base_url_wins_over_saved_host(monkeypatch):
+    save_config_api_key("bil_live_saved", base_url="https://self.example", allow_custom_host=True)
+    seen = {}
+
+    def fake_client(*, api_key, base_url, timeout):
+        seen["base_url"] = base_url
+        raise SystemExit(0)
+
+    monkeypatch.setattr("bilinc.cli.main.CloudClient", fake_client)
+    with pytest.raises(SystemExit):
+        main(["--base-url", "https://bilinc.space", "status"])
+    assert seen["base_url"] == "https://bilinc.space"
+
+
+def test_cli_login_signs_in_where_env_points(monkeypatch, capsys):
+    monkeypatch.setenv("BILINC_BASE_URL", "https://other.example")
+
+    def fail(*args, **kwargs):  # pragma: no cover - must not be reached
+        raise AssertionError("sign-in must not start")
+
+    monkeypatch.setattr("bilinc.cli.main.loopback_login", fail)
+    monkeypatch.setattr("bilinc.cli.main.device_login", fail)
+
+    assert main(["login"]) == 1
+    assert "https://other.example" in capsys.readouterr().err
+
+
+def test_cli_login_uses_env_host_with_consent(monkeypatch):
+    monkeypatch.setenv("BILINC_BASE_URL", "https://other.example")
+    assert main(["--allow-custom-host", "login", "--api-key", "bil_live_example"]) == 0
+    assert json.loads(config_path().read_text())["base_url"] == "https://other.example"
+
+
+def test_package_exports_base_url_error():
+    from bilinc import BilincBaseUrlError as exported
+
+    assert exported is BilincBaseUrlError
+
+
+class _RedirectServer:
+    """A local https-less server that redirects every request to ``target``."""
+
+    def __init__(self, target_for):
+        import http.server
+        import threading
+
+        outer = self
+        self.hits: list[tuple[str, str | None]] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - http.server API
+                outer.hits.append((self.path, self.headers.get("Authorization")))
+                if self.path.startswith("/final"):
+                    body = b'{"status": "ok"}'
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(302)
+                self.send_header("Location", target_for(outer.port))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                return
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def test_transport_follows_same_origin_redirect():
+    from bilinc.client import _default_transport
+
+    srv = _RedirectServer(lambda port: f"http://127.0.0.1:{port}/final")
+    try:
+        result = _default_transport(
+            "GET", f"http://127.0.0.1:{srv.port}/start", headers={"Authorization": "Bearer k"}, body=None, timeout=5
+        )
+    finally:
+        srv.close()
+    assert result == {"status": "ok"}
+    assert srv.hits[-1] == ("/final", "Bearer k")
+
+
+def test_transport_refuses_cross_origin_redirect():
+    from bilinc.client import BilincCloudError, _default_transport
+
+    other = _RedirectServer(lambda port: "http://127.0.0.1:1/never")
+    srv = _RedirectServer(lambda port: f"http://localhost:{other.port}/final")
+    try:
+        with pytest.raises(BilincCloudError):
+            _default_transport(
+                "GET", f"http://127.0.0.1:{srv.port}/start", headers={"Authorization": "Bearer k"}, body=None, timeout=5
+            )
+    finally:
+        srv.close()
+        other.close()
+    assert other.hits == []
+

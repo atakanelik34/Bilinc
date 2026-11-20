@@ -10,7 +10,7 @@
 
 ## Public surface
 
-- SDK exports: `Bilinc`, `BilincApiKeyRequired`, `BilincAuthError`, `BilincCloudError`, `BilincConfirmationExpiredError`, `BilincConflictError`, `BilincConnectionError`, `BilincEntitlementError`, `BilincError`, `BilincNotFoundError`, `BilincPaymentRequiredError`, `BilincRateLimitError`, `BilincRuntimeUnavailableError`, `BilincValidationError`, `API_VERSION`, `CANONICAL_ERROR_CODES`, `CloudClient`, `RETRYABLE_ERROR_CODES`
+- SDK exports: `Bilinc`, `BilincApiKeyRequired`, `BilincAuthError`, `BilincBaseUrlError`, `BilincCloudError`, `BilincConfirmationExpiredError`, `BilincConflictError`, `BilincConnectionError`, `BilincEntitlementError`, `BilincError`, `BilincNotFoundError`, `BilincPaymentRequiredError`, `BilincRateLimitError`, `BilincRuntimeUnavailableError`, `BilincValidationError`, `API_VERSION`, `CANONICAL_ERROR_CODES`, `CloudClient`, `RETRYABLE_ERROR_CODES`
 - Cloud MCP transport: `stdio`
 - Cloud MCP tools: `commit_mem`, `recall`, `revise`, `forget`, `status`, `snapshot`, `diff`, `rollback`, `list_memories`, `history`, `confirm`, `dream_start`, `dream_apply`, `dream_undo`
 - Local tools in the stdio adapter (they write to this machine): `export_wiki`

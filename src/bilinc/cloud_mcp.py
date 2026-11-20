@@ -55,7 +55,7 @@ LOCAL_MCP_TOOLS = ("export_wiki",)
 REMOVED_PATHS_SHOWN = 100
 
 
-def create_client(api_key: str | None = None, base_url: str = "https://bilinc.space") -> CloudClient:
+def create_client(api_key: str | None = None, base_url: str | None = None) -> CloudClient:
     """Create a Bilinc Cloud client for MCP adapters."""
 
     return CloudClient(api_key=api_key, base_url=base_url)

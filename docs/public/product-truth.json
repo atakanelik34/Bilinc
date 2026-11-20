@@ -13,6 +13,7 @@
       "Bilinc",
       "BilincApiKeyRequired",
       "BilincAuthError",
+      "BilincBaseUrlError",
       "BilincCloudError",
       "BilincConfirmationExpiredError",
       "BilincConflictError",

@@ -232,7 +232,7 @@ def test_default_transport_uses_explicit_ssl_context(monkeypatch):
         captured["context"] = context
         return FakeResponse()
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("bilinc.client._open", fake_urlopen)
 
     result = _default_transport(
         "GET",

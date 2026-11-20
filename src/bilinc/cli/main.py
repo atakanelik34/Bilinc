@@ -25,6 +25,7 @@ from bilinc.client import (
     BilincCloudError,
     BilincValidationError,
     CloudClient,
+    DEFAULT_BASE_URL,
     INSTALL_URL,
     MAX_HISTORY_LIMIT,
     MEMORY_TYPES,
@@ -431,7 +432,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"bilinc {__version__}")
     parser.add_argument("--api-key", help="Bilinc Cloud API key. Defaults to BILINC_API_KEY.")
-    parser.add_argument("--base-url", default="https://bilinc.space", help="Bilinc Cloud base URL")
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help="Bilinc Cloud base URL. Defaults to BILINC_BASE_URL, then the host saved by bilinc login, "
+        "then https://bilinc.space",
+    )
     parser.add_argument(
         "--allow-custom-host",
         action="store_true",
@@ -631,10 +637,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        args.base_url = validate_base_url(args.base_url)
+        if args.base_url is not None:
+            args.base_url = validate_base_url(args.base_url)
         if args.command == "login":
-            # Refuse before the browser sign-in, not after it.
-            require_custom_host_allowed(args.base_url, allow_custom_host=args.allow_custom_host)
+            # Sign in where later requests will go (flag, then BILINC_BASE_URL),
+            # and refuse a custom host before the browser sign-in, not after it.
+            args.base_url = require_custom_host_allowed(
+                args.base_url or os.environ.get("BILINC_BASE_URL") or DEFAULT_BASE_URL,
+                allow_custom_host=args.allow_custom_host,
+            )
     except BilincBaseUrlError as exc:
         print(f"bilinc: error: {exc}", file=sys.stderr)
         return 1
