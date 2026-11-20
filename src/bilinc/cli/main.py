@@ -659,6 +659,8 @@ def main(argv: list[str] | None = None) -> int:
     except BilincBaseUrlError as exc:
         print(f"bilinc: error: {exc}", file=sys.stderr)
         return 1
+    if args.allow_custom_host and args.command != "login":
+        print("bilinc: warning: --allow-custom-host only applies to bilinc login", file=sys.stderr)
 
     if args.command == "start":
         opened = False

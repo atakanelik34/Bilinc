@@ -525,7 +525,8 @@ def _display_base_url(value: str) -> str:
         # before the "@": treat "name:...@" ahead of the first "/" as credentials.
         before = rest.rsplit("@", 1)[0]
         colon, slash = before.find(":"), before.find("/")
-        if colon != -1 and (slash == -1 or colon < slash):
+        after_colon = before[colon + 1 : slash if slash != -1 else None] if colon != -1 else ""
+        if colon != -1 and (slash == -1 or colon < slash) and not after_colon.isdigit():
             rest = "<redacted>@" + rest.rsplit("@", 1)[1]
     rest = rest.split("?", 1)[0].split("#", 1)[0]
     return f"{scheme}{sep}{rest}"
@@ -553,7 +554,9 @@ def validate_base_url(base_url: Any) -> str:
     try:
         parsed = urllib.parse.urlsplit(value)
         host = (parsed.hostname or "").lower()
-        parsed.port  # noqa: B018 - raises ValueError on a malformed port
+        port = parsed.port  # raises ValueError on a malformed port
+        if port == 0:
+            raise ValueError("port 0")
     except ValueError:
         raise BilincBaseUrlError(
             f"Bilinc Cloud base URL {shown} is not a valid URL. Use https://bilinc.space."
@@ -580,7 +583,7 @@ def validate_base_url(base_url: Any) -> str:
 def _origin(base_url: str) -> tuple[str, str, int | None]:
     parts = urllib.parse.urlsplit(base_url)
     scheme = parts.scheme.lower()
-    port = parts.port or (443 if scheme == "https" else 80 if scheme == "http" else None)
+    port = parts.port if parts.port is not None else (443 if scheme == "https" else 80 if scheme == "http" else None)
     return scheme, (parts.hostname or "").lower(), port
 
 
@@ -905,9 +908,18 @@ class CloudClient:
         saved: _SavedKey | None = None
         if self.api_key is None:
             self.api_key = os.environ.get("BILINC_API_KEY") or None
-            if not self.api_key:
-                saved = _saved_key(load_config())
-                self.api_key = saved.key if saved else None
+        if self.api_key is None:
+            saved = _saved_key(load_config())
+            self.api_key = saved.key if saved else None
+        else:
+            # The saved key passed back in explicitly or through BILINC_API_KEY
+            # is still the saved key: same home host, same binding.
+            try:
+                candidate = _saved_key(load_config())
+            except BilincBaseUrlError:
+                candidate = None
+            if candidate is not None and candidate.key == self.api_key:
+                saved = candidate
         if not self.api_key:
             raise BilincApiKeyRequired(
                 "No Bilinc Cloud API key is configured. "
@@ -1626,13 +1638,13 @@ __all__ = [
     "Bilinc",
     "BilincApiKeyRequired",
     "BilincAuthError",
+    "BilincBaseUrlError",
     "BilincCloudError",
     "BilincConfirmationExpiredError",
     "BilincConflictError",
     "BilincConnectionError",
     "BilincEntitlementError",
     "BilincError",
-    "BilincBaseUrlError",
     "BilincNotFoundError",
     "BilincPaymentRequiredError",
     "BilincRateLimitError",

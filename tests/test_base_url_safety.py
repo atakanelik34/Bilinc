@@ -661,3 +661,34 @@ def test_local_server_bypasses_http_proxy(monkeypatch):
     finally:
         _opener_for.cache_clear()
 
+
+def test_port_zero_is_refused():
+    with pytest.raises(BilincBaseUrlError):
+        validate_base_url("https://bilinc.space:0")
+
+
+def test_display_keeps_host_with_port_and_at_in_path():
+    from bilinc.client import _display_base_url
+
+    assert _display_base_url("http://example.com:8080/a@b") == "http://example.com:8080/a@b"
+
+
+def test_saved_key_passed_back_explicitly_goes_home(monkeypatch):
+    save_config_api_key("bil_live_self", base_url="https://self.example", allow_custom_host=True)
+    transport = RecordingTransport()
+    CloudClient(api_key="bil_live_self", transport=transport).status()
+    assert transport.calls[0]["url"] == "https://self.example/api/cloud/status"
+
+    monkeypatch.setenv("BILINC_API_KEY", "bil_live_self")
+    transport = RecordingTransport()
+    CloudClient(transport=transport).status()
+    assert transport.calls[0]["url"] == "https://self.example/api/cloud/status"
+
+
+def test_allow_custom_host_outside_login_warns(capsys):
+    main(["--allow-custom-host", "--api-key", "bil_live_x", "--base-url", "http://evil.example", "status"])
+    err = capsys.readouterr().err
+    assert "plain http" in err
+    main(["--allow-custom-host", "start"])
+    assert "only applies to bilinc login" in capsys.readouterr().err
+
