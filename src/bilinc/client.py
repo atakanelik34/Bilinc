@@ -12,6 +12,7 @@ import ipaddress
 import json
 import math
 import os
+import re
 import ssl
 import sys
 import time
@@ -516,10 +517,16 @@ def _display_base_url(value: str) -> str:
     scheme, sep, rest = value.partition("://")
     if not sep:
         scheme, rest = "", value
-    if "@" in rest:
-        # Cut on the raw text: a password may hold "/", "?" or "#", which would
-        # end the parsed netloc before the "@".
-        rest = "<redacted>@" + rest.rsplit("@", 1)[1]
+    authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
+    if "@" in authority:
+        rest = "<redacted>@" + rest.split("@", authority.count("@"))[-1]
+    elif "@" in rest:
+        # A password may hold "/", "?" or "#", which ends the parsed authority
+        # before the "@": treat "name:...@" ahead of the first "/" as credentials.
+        before = rest.rsplit("@", 1)[0]
+        colon, slash = before.find(":"), before.find("/")
+        if colon != -1 and (slash == -1 or colon < slash):
+            rest = "<redacted>@" + rest.rsplit("@", 1)[1]
     rest = rest.split("?", 1)[0].split("#", 1)[0]
     return f"{scheme}{sep}{rest}"
 
@@ -537,6 +544,11 @@ def validate_base_url(base_url: Any) -> str:
     if not isinstance(base_url, str) or not base_url.strip():
         raise BilincBaseUrlError("Bilinc Cloud base URL is empty. Use https://bilinc.space.")
     value = base_url.strip().rstrip("/")
+    if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value):
+        raise BilincBaseUrlError(
+            "Bilinc Cloud base URL contains a space, tab, line break or control character. "
+            "Use https://bilinc.space."
+        )
     shown = repr(_display_base_url(value))
     try:
         parsed = urllib.parse.urlsplit(value)
@@ -780,22 +792,29 @@ class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-@functools.lru_cache(maxsize=4)
-def _opener_for(context: ssl.SSLContext) -> urllib.request.OpenerDirector:
-    return urllib.request.build_opener(
+@functools.lru_cache(maxsize=8)
+def _opener_for(context: ssl.SSLContext, *, direct: bool) -> urllib.request.OpenerDirector:
+    handlers: list[urllib.request.BaseHandler] = [
         urllib.request.HTTPSHandler(context=context),
         _SameOriginRedirectHandler(),
-    )
+    ]
+    if direct:
+        # A server on this computer is reached directly, never through an
+        # HTTP_PROXY that would carry the key off the machine in plain text.
+        handlers.append(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(*handlers)
 
 
 def _open(request: urllib.request.Request, *, timeout: float, context: ssl.SSLContext):
     """``urlopen`` with TLS ``context`` that refuses cross-origin redirects.
 
     It uses its own opener, so one installed with ``urllib.request.install_opener``
-    is not used; proxies from the environment (``HTTPS_PROXY``) still apply.
+    is not used; proxies from the environment (``HTTPS_PROXY``) still apply,
+    except to a server on this computer, which is always reached directly.
     """
 
-    return _opener_for(context).open(request, timeout=timeout)
+    host = (urllib.parse.urlsplit(request.full_url).hostname or "").lower()
+    return _opener_for(context, direct=_is_loopback_host(host)).open(request, timeout=timeout)
 
 
 def _default_transport(
@@ -815,7 +834,11 @@ def _default_transport(
         ) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        location = exc.headers.get("Location") if exc.headers is not None and 300 <= exc.code < 400 else None
+        location = (
+            (exc.headers.get("Location") or exc.headers.get("URI"))
+            if exc.headers is not None and 300 <= exc.code < 400
+            else None
+        )
         hop_from = getattr(exc, "url", None) or url
         target_url = urllib.parse.urljoin(hop_from, location) if location else None
         if target_url is not None and not _redirect_allowed(hop_from, target_url):

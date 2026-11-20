@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import urllib.request
 
 import pytest
 
@@ -538,14 +539,20 @@ def test_cli_flag_and_login_agree_on_the_host(monkeypatch):
     assert seen["base_url"] == "https://bilinc.space"
 
 
-def test_cli_api_key_before_login_is_saved(monkeypatch):
-    def fail(*args, **kwargs):  # pragma: no cover - must not be reached
-        raise AssertionError("sign-in must not start")
+def test_cli_top_level_api_key_does_not_skip_login_sign_in(monkeypatch):
+    """As in 2.7.1, only `login --api-key` saves a key; a global --api-key still signs in."""
 
-    monkeypatch.setattr("bilinc.cli.main.loopback_login", fail)
-    monkeypatch.setattr("bilinc.cli.main.device_login", fail)
+    started = []
+
+    def fake_login(base_url, **kwargs):
+        started.append(base_url)
+        return {"api_key": "bil_live_from_browser"}
+
+    monkeypatch.setattr("bilinc.cli.main.loopback_login", fake_login)
+    monkeypatch.setattr("bilinc.cli.main.device_login", fake_login)
     assert main(["--api-key", "bil_live_top", "login"]) == 0
-    assert json.loads(config_path().read_text())["api_key"] == "bil_live_top"
+    assert started == ["https://bilinc.space"]
+    assert json.loads(config_path().read_text())["api_key"] == "bil_live_from_browser"
 
 
 def test_redirect_rule():
@@ -589,4 +596,68 @@ def test_base_url_reassignment_is_refused():
     with pytest.raises(BilincBaseUrlError, match="changed after"):
         client.status()
     assert transport.calls == []
+
+
+
+
+@pytest.mark.parametrize("url", ["https://bili\nnc.space", "https://bilinc\t.space", "https://bil inc.space", "https://bilinc\x00.space"])
+def test_control_characters_are_refused(url):
+    with pytest.raises(BilincBaseUrlError, match="control character"):
+        validate_base_url(url)
+
+
+@pytest.mark.parametrize(
+    "url, shown",
+    [
+        ("https://bilinc.space#a@evil", "https://bilinc.space"),
+        ("https://bilinc.space/p@th?q=1", "https://bilinc.space/p@th"),
+        ("https://user:pw@host.example/x", "https://<redacted>@host.example/x"),
+        ("https://user:se/cret@host.example", "https://<redacted>@host.example"),
+    ],
+)
+def test_display_redacts_only_credentials(url, shown):
+    from bilinc.client import _display_base_url
+
+    assert _display_base_url(url) == shown
+
+
+def test_uri_header_redirect_is_reported_as_cross_origin():
+    import email.message
+    import urllib.error
+
+    from bilinc.client import BilincConnectionError, _default_transport
+    import bilinc.client as cm
+
+    headers = email.message.Message()
+    headers["URI"] = "https://evil.example/x"
+
+    def fake_open(request, *, timeout, context):
+        raise urllib.error.HTTPError(request.full_url, 302, "Found", headers, None)
+
+    import pytest as _pytest
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cm, "_open", fake_open)
+        with pytest.raises(BilincConnectionError, match="redirected to https://evil.example/x"):
+            _default_transport("GET", "https://bilinc.space/api", headers={}, body=None, timeout=1)
+
+
+def test_local_server_bypasses_http_proxy(monkeypatch):
+    import ssl
+
+    from bilinc.client import _opener_for
+
+    monkeypatch.setenv("HTTP_PROXY", "http://corp-proxy.example:3128")
+    monkeypatch.setenv("HTTPS_PROXY", "http://corp-proxy.example:3128")
+    _opener_for.cache_clear()
+    try:
+        context = ssl.create_default_context()
+
+        def proxied(opener):
+            return [h for h in opener.handlers if isinstance(h, urllib.request.ProxyHandler) and h.proxies]
+
+        assert proxied(_opener_for(context, direct=False))
+        assert not proxied(_opener_for(context, direct=True))
+    finally:
+        _opener_for.cache_clear()
 

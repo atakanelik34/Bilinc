@@ -456,7 +456,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     login.add_argument(
         "--api-key",
-        default=argparse.SUPPRESS,
+        dest="login_api_key",
         help="Save this API key instead of signing in (for CI)",
     )
     login.add_argument(
@@ -683,10 +683,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "login":
-        if args.api_key:
+        if args.login_api_key:
             try:
                 path = save_config_api_key(
-                    args.api_key, base_url=args.base_url, allow_custom_host=args.allow_custom_host
+                    args.login_api_key, base_url=args.base_url, allow_custom_host=args.allow_custom_host
                 )
             except (BilincApiKeyRequired, BilincBaseUrlError) as exc:
                 print(f"bilinc: error: {exc}", file=sys.stderr)
