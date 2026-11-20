@@ -44,6 +44,9 @@ def _isolated(monkeypatch, tmp_path):
         ("http://localhost:8000", "http://localhost:8000"),
         ("http://127.0.0.1:9999/", "http://127.0.0.1:9999"),
         ("http://[::1]:8000", "http://[::1]:8000"),
+        ("http://127.0.0.2:8000", "http://127.0.0.2:8000"),
+        ("http://[0:0:0:0:0:0:0:1]:8000", "http://[0:0:0:0:0:0:0:1]:8000"),
+        ("http://localhost.:8000", "http://localhost.:8000"),
         ("HTTPS://Bilinc.Space", "HTTPS://Bilinc.Space"),
     ],
 )
@@ -148,7 +151,9 @@ def test_env_base_url_wins_over_saved_host(monkeypatch):
 def test_tampered_saved_host_is_refused():
     path = config_path()
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"api_key": "bil_live_saved", "base_url": "http://evil.example.com"}))
+    path.write_text(
+        json.dumps({"api_key": "bil_live_saved", "base_url": "http://evil.example.com", "allow_custom_host": True})
+    )
 
     with pytest.raises(BilincBaseUrlError, match="run bilinc login again"):
         CloudClient(transport=RecordingTransport())
@@ -369,4 +374,70 @@ def test_transport_refuses_cross_origin_redirect():
         srv.close()
         other.close()
     assert other.hits == []
+
+
+def test_pre_272_config_with_unsafe_host_still_works(capsys):
+    """2.7.1 saved any --base-url unchecked and never read it; that must not break the upgrade."""
+
+    path = config_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"api_key": "bil_live_saved", "base_url": "http://staging.internal"}))
+
+    transport = RecordingTransport()
+    CloudClient(transport=transport).status()
+
+    assert transport.calls[0]["url"] == "https://bilinc.space/api/cloud/status"
+
+
+def test_cli_start_does_not_crash_on_unsafe_consented_config(capsys):
+    path = config_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"api_key": "bil_live_saved", "base_url": "http://example.com", "allow_custom_host": True})
+    )
+    assert main(["start"]) == 1
+    assert "bilinc: error:" in capsys.readouterr().err
+
+
+def test_env_base_url_cannot_take_a_saved_key_to_another_host(monkeypatch):
+    save_config_api_key("bil_live_saved")
+    monkeypatch.setenv("BILINC_BASE_URL", "https://other.example")
+
+    with pytest.raises(BilincBaseUrlError, match="belongs to https://bilinc.space"):
+        CloudClient(transport=RecordingTransport())
+
+
+def test_env_base_url_with_env_key_is_fine(monkeypatch):
+    save_config_api_key("bil_live_saved")
+    monkeypatch.setenv("BILINC_BASE_URL", "https://other.example")
+    monkeypatch.setenv("BILINC_API_KEY", "bil_live_env")
+
+    transport = RecordingTransport()
+    CloudClient(transport=transport).status()
+
+    assert transport.calls[0]["url"] == "https://other.example/api/cloud/status"
+
+
+def test_explicit_default_still_honours_env_override(monkeypatch):
+    monkeypatch.setenv("BILINC_BASE_URL", "https://staging.example")
+
+    transport = RecordingTransport()
+    CloudClient(api_key="bil_live_ci", base_url="https://bilinc.space", transport=transport).status()
+
+    assert transport.calls[0]["url"] == "https://staging.example/api/cloud/status"
+
+
+def test_cross_origin_redirect_error_names_the_target():
+    from bilinc.client import BilincConnectionError, _default_transport
+
+    srv = _RedirectServer(lambda port: "https://user:pw@elsewhere.example/api")
+    try:
+        with pytest.raises(BilincConnectionError) as caught:
+            _default_transport("GET", f"http://127.0.0.1:{srv.port}/start", headers={}, body=None, timeout=5)
+    finally:
+        srv.close()
+    message = str(caught.value)
+    assert "redirected to https://elsewhere.example/api" in message
+    assert "user:pw" not in message
+    assert caught.value.retryable is False
 
