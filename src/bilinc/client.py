@@ -550,6 +550,14 @@ def validate_base_url(base_url: Any) -> str:
             "Bilinc Cloud base URL contains a space, tab, line break or control character. "
             "Use https://bilinc.space."
         )
+    if "@" in value:
+        raise BilincBaseUrlError(
+            "Bilinc Cloud base URL must not contain '@' (a user name or password). Use https://bilinc.space."
+        )
+    if "?" in value or "#" in value:
+        raise BilincBaseUrlError(
+            f"Bilinc Cloud base URL {_display_base_url(value)!r} must not carry a query or a fragment."
+        )
     shown = repr(_display_base_url(value))
     try:
         parsed = urllib.parse.urlsplit(value)
@@ -639,17 +647,30 @@ def config_path() -> Path:
     return Path.home() / ".config" / "bilinc" / CONFIG_FILE_NAME
 
 
+#: The last parsed config, keyed by path, mtime and size, so a long-running
+#: MCP server does not re-read the file for every tool call.
+_CONFIG_CACHE: dict[str, tuple[tuple[str, int, int], dict[str, Any]]] = {}
+
+
 def load_config() -> dict[str, Any]:
     """Load local CLI config without raising on missing or malformed files."""
 
     path = config_path()
-    if not path.exists():
+    try:
+        stat = path.stat()
+    except OSError:
         return {}
+    stamp = (str(path), stat.st_mtime_ns, stat.st_size)
+    cached = _CONFIG_CACHE.get("entry")
+    if cached is not None and cached[0] == stamp:
+        return dict(cached[1])
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    return payload if isinstance(payload, dict) else {}
+    payload = payload if isinstance(payload, dict) else {}
+    _CONFIG_CACHE["entry"] = (stamp, dict(payload))
+    return payload
 
 
 def load_config_api_key() -> str | None:
@@ -790,13 +811,26 @@ class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     """
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001 - urllib API
-        if not _redirect_allowed(req.full_url, newurl):
+        # urllib turns a redirected POST into a body-less GET, so a write is
+        # never followed: it fails with the 30x instead of losing its body.
+        if req.get_method() != "GET" or not _redirect_allowed(req.full_url, newurl):
             return None
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 @functools.lru_cache(maxsize=8)
+def _direct_opener_for(context: ssl.SSLContext) -> urllib.request.OpenerDirector:
+    return _build_opener(context, direct=True)
+
+
 def _opener_for(context: ssl.SSLContext, *, direct: bool) -> urllib.request.OpenerDirector:
+    """The direct opener is cached; a proxied one is built per request so a
+    changed HTTPS_PROXY takes effect without a restart."""
+
+    return _direct_opener_for(context) if direct else _build_opener(context, direct=False)
+
+
+def _build_opener(context: ssl.SSLContext, *, direct: bool) -> urllib.request.OpenerDirector:
     handlers: list[urllib.request.BaseHandler] = [
         urllib.request.HTTPSHandler(context=context),
         _SameOriginRedirectHandler(),
@@ -844,6 +878,15 @@ def _default_transport(
         )
         hop_from = getattr(exc, "url", None) or url
         target_url = urllib.parse.urljoin(hop_from, location) if location else None
+        if target_url is not None and method != "GET" and _redirect_allowed(hop_from, target_url):
+            exc.close()
+            raise BilincConnectionError(
+                f"Bilinc Cloud answered this {method} with a redirect to {_display_base_url(target_url)}; "
+                "writes are not redirected, so nothing was sent there. Use that URL as the base URL.",
+                code="redirected_write",
+                status=exc.code,
+                retryable=False,
+            ) from exc
         if target_url is not None and not _redirect_allowed(hop_from, target_url):
             exc.close()
             target = _display_base_url(target_url)

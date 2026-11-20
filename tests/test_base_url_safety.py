@@ -645,11 +645,11 @@ def test_uri_header_redirect_is_reported_as_cross_origin():
 def test_local_server_bypasses_http_proxy(monkeypatch):
     import ssl
 
-    from bilinc.client import _opener_for
+    from bilinc.client import _direct_opener_for, _opener_for
 
     monkeypatch.setenv("HTTP_PROXY", "http://corp-proxy.example:3128")
     monkeypatch.setenv("HTTPS_PROXY", "http://corp-proxy.example:3128")
-    _opener_for.cache_clear()
+    _direct_opener_for.cache_clear()
     try:
         context = ssl.create_default_context()
 
@@ -659,7 +659,7 @@ def test_local_server_bypasses_http_proxy(monkeypatch):
         assert proxied(_opener_for(context, direct=False))
         assert not proxied(_opener_for(context, direct=True))
     finally:
-        _opener_for.cache_clear()
+        _direct_opener_for.cache_clear()
 
 
 def test_port_zero_is_refused():
@@ -691,4 +691,90 @@ def test_allow_custom_host_outside_login_warns(capsys):
     assert "plain http" in err
     main(["--allow-custom-host", "start"])
     assert "only applies to bilinc login" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("url", ["https://bilinc.space/api?", "https://bilinc.space#", "https://bilinc.space?"])
+def test_bare_query_or_fragment_marker_is_refused(url):
+    with pytest.raises(BilincBaseUrlError, match="query or a fragment"):
+        validate_base_url(url)
+
+
+def test_digit_password_before_slash_is_refused_without_echo():
+    with pytest.raises(BilincBaseUrlError) as caught:
+        validate_base_url("https://admin:1234/5@evil.com")
+    assert "1234" not in str(caught.value) and "admin" not in str(caught.value)
+
+
+class _PostRedirectServer(_RedirectServer):
+    def __init__(self):
+        import http.server
+        import threading
+
+        outer = self
+        self.hits = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 - http.server API
+                outer.hits.append(self.path)
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{outer.port}/elsewhere")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def do_GET(self):  # noqa: N802 - must never be reached
+                outer.hits.append("GET " + self.path)
+                self.send_response(405)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                return
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+
+def test_redirected_write_is_not_followed():
+    from bilinc.client import BilincConnectionError, _default_transport
+
+    srv = _PostRedirectServer()
+    try:
+        with pytest.raises(BilincConnectionError) as caught:
+            _default_transport("POST", f"http://127.0.0.1:{srv.port}/commit", headers={}, body=b"{}", timeout=5)
+    finally:
+        srv.close()
+    assert caught.value.code == "redirected_write"
+    assert srv.hits == ["/commit"]
+
+
+def test_proxied_opener_follows_env_changes(monkeypatch):
+    import ssl
+
+    from bilinc.client import _opener_for
+
+    context = ssl.create_default_context()
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("https_proxy", raising=False)
+    _opener_for(context, direct=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://corp-proxy.example:3128")
+    opener = _opener_for(context, direct=False)
+    proxies = [h.proxies for h in opener.handlers if isinstance(h, urllib.request.ProxyHandler)]
+    assert any("https" in p for p in proxies)
+
+
+def test_config_is_read_once_until_it_changes(monkeypatch):
+    save_config_api_key("bil_live_saved")
+    reads = []
+    original = type(config_path()).read_text
+
+    def counting(self, *args, **kwargs):
+        reads.append(str(self))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(config_path()), "read_text", counting)
+    for _ in range(3):
+        CloudClient(api_key="bil_live_other", transport=RecordingTransport())
+    assert len(reads) <= 1
 
