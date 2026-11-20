@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "canonical_repository": "https://github.com/ReARCLabs/bilinc",
-  "source_commit": "cbe0488236fe40319a36b88df67169f2e962a473",
+  "source_commit": "57a9e65762a548c62faa65ef209a8ee677d00775",
   "verified_at": "2026-11-20",
   "package": {
     "name": "bilinc",
