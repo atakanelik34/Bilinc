@@ -1,4 +1,4 @@
-"""Bilinc 2.7.1: cloud-only SDK for agent memory."""
+"""Bilinc 2.7.2: cloud-only SDK for agent memory."""
 
 from bilinc.client import (
     ACTIVATION_SIGNUP_URL,
@@ -11,6 +11,7 @@ from bilinc.client import (
     Bilinc,
     BilincApiKeyRequired,
     BilincAuthError,
+    BilincBaseUrlError,
     BilincCloudError,
     BilincConfirmationExpiredError,
     BilincConflictError,
@@ -25,7 +26,7 @@ from bilinc.client import (
     CloudClient,
 )
 
-__version__ = "2.7.1"
+__version__ = "2.7.2"
 version = __version__
 
 __all__ = [
@@ -34,6 +35,7 @@ __all__ = [
     "Bilinc",
     "BilincApiKeyRequired",
     "BilincAuthError",
+    "BilincBaseUrlError",
     "BilincCloudError",
     "BilincConfirmationExpiredError",
     "BilincConflictError",

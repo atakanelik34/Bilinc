@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bilinc"
-version = "2.7.1"
+version = "2.7.2"
 description = "Cloud-only memory SDK and MCP adapter for autonomous agents"
 readme = "README.md"
 license = "BUSL-1.1"
@@ -32,8 +32,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "certifi>=2024.2.2",
-    "mcp>=1.10.0,<2.0",
+    "certifi>=2026.10.18",
+    "mcp>=1.30.0,<2.0",
 ]
 
 [project.urls]

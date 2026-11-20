@@ -2,6 +2,26 @@
 
 All notable changes to Bilinc.
 
+## [2.7.2] — 2026-11-20
+
+### Security
+
+- The SDK, CLI and stdio MCP adapter refuse a base URL that is not `https://`, so an API key is never sent unencrypted. Plain `http://` is accepted only for this computer (`localhost` and loopback addresses such as `127.0.0.1` and `::1`); a URL with an `@` (user name or password), a `?` or `#`, port 0, a space or a control character is refused too, and the error never repeats the password. This covers `--base-url`, `BILINC_BASE_URL`, `CloudClient(base_url=...)` and both `bilinc login` flows.
+- Requests no longer follow a redirect to another scheme, host or port: urllib would have copied the `Authorization` header to it. Such a redirect fails with a `cross_origin_redirect` error that names the target. Redirects of reads within the same host and port, and from `http://` to `https://` on the same host (port 443 or the same port), still work. A write (POST) is never redirected: urllib would resend it as a body-less GET, so it fails with a `redirected_write` error instead. Requests use the SDK's own opener, so an opener installed with `urllib.request.install_opener` is no longer used; `HTTPS_PROXY` and the other proxy variables still apply, except to a server on this computer, which is now always reached directly so a plain-http key never crosses a proxy.
+- `bilinc login` saves a key for a host other than `https://bilinc.space` only with `--allow-custom-host`, and refuses before the browser sign-in starts. Requests to a host other than `https://bilinc.space` (and not on this computer) print a one-time warning to stderr.
+- A key saved by `bilinc login` is sent only to the base URL it was saved for (scheme, host, port and path), whichever of `--base-url`, `CloudClient(base_url=...)`, `BILINC_BASE_URL` or the config names the URL. That includes servers on this computer: any local user can listen on a local port. With no URL given, it goes back to that host (the saved `base_url` was written but never read before). A custom host counts only when the config records `--allow-custom-host`. A config written by 2.7.1 or earlier may still go to `https://bilinc.space` and to the `base_url` it saved, as it could before. A consented URL that fails the check raises and asks you to run `bilinc login` again. A key from `BILINC_API_KEY` or `api_key=` is bound the same way when it is the saved key, and otherwise not bound to any saved host. A redirect within the saved host may change the path.
+- Minimum versions: `mcp>=1.30.0` (GHSA-vj7q-gjh5-988w, GHSA-w4fh-qvv9-3v23, GHSA-5h93-6whr-6q8j, GHSA-rwrf-2pqf-9j8j, GHSA-84m7-p3x7-pcfv) and `certifi>=2026.10.18` (GHSA-6q48-6c7w-9gw2). `mcp` 2.x stays out: it removes `mcp.server.fastmcp`.
+
+### Changed
+
+- Which host a request goes to: an explicit `--base-url` or `CloudClient(base_url=...)`, then `BILINC_BASE_URL`, then the host saved with a `bilinc login` key, then `https://bilinc.space`. An explicit value always wins: `CloudClient(base_url="https://bilinc.space")` no longer yields to `BILINC_BASE_URL`, as it did before. `CloudClient.base_url` now defaults to `None` and holds the resolved URL after construction.
+- `bilinc login` signs in against `--base-url`, else `BILINC_BASE_URL`, else `https://bilinc.space`, so the key is saved for the host later requests use. `--allow-custom-host` works before or after `login`; with any other command it only prints a warning. Only `bilinc login --api-key KEY` saves a given key; a global `--api-key` still starts the browser sign-in, as before.
+- A `--base-url` or `BILINC_BASE_URL` that uses plain `http://` for a host other than this computer now fails instead of connecting.
+- `save_config_api_key(key, base_url=...)` with a host other than `https://bilinc.space` now needs `allow_custom_host=True`; without it, it raises `BilincBaseUrlError` instead of saving.
+- `CloudClient.base_url` is checked once, when the client is created; assigning a new value afterwards makes the next request raise `BilincBaseUrlError`. Create a new client instead.
+- `BilincBaseUrlError` (a `ValueError`) is exported from `bilinc`.
+- README and SECURITY.md say what the package sends to Bilinc Cloud and what it keeps on this computer.
+
 ## [2.7.1] — 2026-11-18
 
 ### Changed

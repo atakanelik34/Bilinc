@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "canonical_repository": "https://github.com/ReARCLabs/bilinc",
-  "source_commit": "fbb7cdd3b9f02998336e6f77bb84d7ee2dff7a92",
-  "verified_at": "2026-11-18",
+  "source_commit": "466209e3750610edece58f072b1156e296df35e1",
+  "verified_at": "2026-11-20",
   "package": {
     "name": "bilinc",
-    "version": "2.7.1",
+    "version": "2.7.2",
     "requires_python": ">=3.10",
     "license": "BUSL-1.1",
     "install": "pip install bilinc",
@@ -13,6 +13,7 @@
       "Bilinc",
       "BilincApiKeyRequired",
       "BilincAuthError",
+      "BilincBaseUrlError",
       "BilincCloudError",
       "BilincConfirmationExpiredError",
       "BilincConflictError",

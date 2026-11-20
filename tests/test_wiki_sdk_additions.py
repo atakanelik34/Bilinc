@@ -47,7 +47,7 @@ def test_default_transport_parses_retry_after(monkeypatch, header, expected):
     def fake_urlopen(request, *, timeout, context):
         raise _http_error(429, headers)
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(client_module, "_open", fake_urlopen)
 
     with pytest.raises(BilincRateLimitError) as caught:
         _default_transport("POST", "https://bilinc.space/x", headers={}, body=b"{}", timeout=1.0)

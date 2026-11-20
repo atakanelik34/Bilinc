@@ -55,7 +55,7 @@ LOCAL_MCP_TOOLS = ("export_wiki",)
 REMOVED_PATHS_SHOWN = 100
 
 
-def create_client(api_key: str | None = None, base_url: str = "https://bilinc.space") -> CloudClient:
+def create_client(api_key: str | None = None, base_url: str | None = None) -> CloudClient:
     """Create a Bilinc Cloud client for MCP adapters."""
 
     return CloudClient(api_key=api_key, base_url=base_url)
@@ -67,7 +67,7 @@ def build_server():
     try:
         from mcp.server.fastmcp import FastMCP
     except Exception as exc:  # pragma: no cover - depends on optional MCP runtime import path
-        raise RuntimeError("Bilinc Cloud MCP adapter requires mcp>=1.0.0") from exc
+        raise RuntimeError("Bilinc Cloud MCP adapter requires mcp>=1.30.0,<2") from exc
 
     from mcp.types import ToolAnnotations
 

@@ -28,7 +28,7 @@ import urllib.parse
 import webbrowser
 from typing import Any, Callable, TextIO
 
-from bilinc.client import BilincCloudError, _default_transport
+from bilinc.client import BilincBaseUrlError, BilincCloudError, _default_transport, validate_base_url
 
 LOOPBACK_TIMEOUT_SECONDS = 600
 CALLBACK_PATH = "/callback"
@@ -64,6 +64,15 @@ def is_headless() -> bool:
     if sys.platform.startswith("linux"):
         return not has_display
     return False
+
+
+def _checked_base_url(base_url: str) -> str:
+    """Validate the sign-in host the same way the SDK does before any request."""
+
+    try:
+        return validate_base_url(base_url)
+    except BilincBaseUrlError as exc:
+        raise LoginError(str(exc)) from exc
 
 
 def _post(
@@ -139,6 +148,8 @@ def loopback_login(
 ) -> dict[str, Any]:
     """Sign in through the browser and return the token response (``api_key``, ``key_name``)."""
 
+    base_url = _checked_base_url(base_url)
+
     verifier, challenge = pkce_pair()
     state = secrets.token_urlsafe(24)
     server = _CallbackServer(("127.0.0.1", 0), _CallbackHandler)
@@ -201,6 +212,7 @@ def device_login(
 ) -> dict[str, Any]:
     """Sign in with a code approved in any browser and return the token response."""
 
+    base_url = _checked_base_url(base_url)
     try:
         start = _post(transport, base_url, "/api/cli/device/code", {"hostname": machine_name()}, timeout)
     except BilincCloudError as exc:
