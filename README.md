@@ -1,7 +1,7 @@
 <!-- mcp-name: io.github.atakanelik34/bilinc -->
 
 <p align="center">
-  <a href="https://bilinc.space"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc/9774f8a97fb16b16cea10b974e9179e6f41df826/docs/assets/readme-hero.jpg" alt="Bilinc: memory you can look back through. Hosted memory for AI agents." width="100%"></a>
+  <a href="https://bilinc.space/?utm_source=github&utm_medium=readme&utm_campaign=bilinc"><img src="https://raw.githubusercontent.com/ReARCLabs/bilinc/9774f8a97fb16b16cea10b974e9179e6f41df826/docs/assets/readme-hero.jpg" alt="Bilinc: memory you can look back through. Hosted memory for AI agents." width="100%"></a>
 </p>
 
 # Bilinc
@@ -14,7 +14,7 @@
 
 **Hosted memory for AI agents.** Save what your agents learn, recall it before they act, see who wrote each memory and what changed, and roll back when a run goes wrong.
 
-The `bilinc` package on PyPI is the Python SDK, the `bilinc` CLI and the stdio MCP adapter for [Bilinc Cloud](https://bilinc.space). Its source is [ReARCLabs/bilinc](https://github.com/ReARCLabs/bilinc); the hosted service is not part of the package.
+The `bilinc` package on PyPI is the Python SDK, the `bilinc` CLI and the stdio MCP adapter for [Bilinc Cloud](https://bilinc.space/?utm_source=github&utm_medium=readme&utm_campaign=bilinc). Its source is [ReARCLabs/bilinc](https://github.com/ReARCLabs/bilinc); the hosted service is not part of the package.
 
 ## Start in 60 seconds
 
@@ -189,7 +189,7 @@ Every release: [changelog](https://bilinc.space/changelog).
 
 ## Links
 
-- [bilinc.space](https://bilinc.space) · [Docs](https://bilinc.space/docs) · [Install guide](https://bilinc.space/install) · [Pricing](https://bilinc.space/pricing) (free plan, no card) · [Changelog](https://bilinc.space/changelog) · [Trust](https://bilinc.space/trust)
+- [bilinc.space](https://bilinc.space/?utm_source=github&utm_medium=readme&utm_campaign=bilinc) · [Docs](https://bilinc.space/docs) · [Install guide](https://bilinc.space/install) · [Pricing](https://bilinc.space/pricing) (free plan, no card) · [Changelog](https://bilinc.space/changelog) · [Trust](https://bilinc.space/trust)
 - Compare: [vector memory](https://bilinc.space/compare/vector-memory) · [Mem0](https://bilinc.space/compare/mem0) · [Zep](https://bilinc.space/compare/zep) · [Letta](https://bilinc.space/compare/letta)
 - Guides: [What is AI agent memory?](https://bilinc.space/answers/ai-agent-memory) · [Rolling back an agent memory write](https://bilinc.space/answers/agent-memory-rollback) · [Auditing what an agent remembered](https://bilinc.space/answers/audit-agent-memory)
 - For machines: [llms.txt](https://bilinc.space/llms.txt) · [ai-index.json](https://bilinc.space/ai-index.json)
