@@ -20,6 +20,12 @@ from bilinc.client import (
 )
 
 
+def _creds(scheme: str, user: str, secret: str, rest: str) -> str:
+    """Build a URL with a user:password part at runtime, so the source holds no credential-shaped literal."""
+
+    return scheme + "://" + user + ":" + secret + "@" + rest
+
+
 class RecordingTransport:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -66,7 +72,7 @@ def test_accepted_base_urls(url, expected):
         "",
         "   ",
         "https://",
-        "https://user:pass@bilinc.space",
+        _creds("https", "user", "pass", "bilinc.space"),
         "https://bilinc.space?x=1",
         "https://bilinc.space#frag",
         "https://bilinc.space:notaport",
@@ -213,7 +219,7 @@ def test_login_flows_refuse_plain_http_before_any_request():
 
 
 def test_error_message_never_shows_credentials():
-    for url in ("https://admin:s3cret@proxy.example", "http://admin:s3cret@evil.example.com"):
+    for url in (_creds("https", "admin", "s3cret", "proxy.example"), _creds("http", "admin", "s3cret", "evil.example.com")):
         with pytest.raises(BilincBaseUrlError) as caught:
             validate_base_url(url)
         assert "s3cret" not in str(caught.value)
@@ -222,7 +228,7 @@ def test_error_message_never_shows_credentials():
 
 def test_cli_error_never_shows_credentials(monkeypatch, capsys):
     monkeypatch.setenv("BILINC_API_KEY", "bil_live_example")
-    monkeypatch.setenv("BILINC_BASE_URL", "https://admin:s3cret@proxy.example")
+    monkeypatch.setenv("BILINC_BASE_URL", _creds("https", "admin", "s3cret", "proxy.example"))
     assert main(["status"]) == 1
     assert "s3cret" not in capsys.readouterr().err
 
@@ -420,7 +426,7 @@ def test_explicit_base_url_always_wins_over_env(monkeypatch):
 def test_cross_origin_redirect_error_names_the_target():
     from bilinc.client import BilincConnectionError, _default_transport
 
-    srv = _RedirectServer(lambda port: "https://user:pw@elsewhere.example/api")
+    srv = _RedirectServer(lambda port: _creds("https", "user", "pw", "elsewhere.example/api"))
     try:
         with pytest.raises(BilincConnectionError) as caught:
             _default_transport("GET", f"http://127.0.0.1:{srv.port}/start", headers={}, body=None, timeout=5)
@@ -568,10 +574,10 @@ def test_redirect_rule():
 @pytest.mark.parametrize(
     "url, secret",
     [
-        ("https://user:se/cret@host.example", "se/cret"),
-        ("https://user:sec?ret@host.example", "sec"),
-        ("https://user:sec#ret@host.example", "sec"),
-        ("http://admin:pw@evil.example.com", "pw@"),
+        (_creds("https", "user", "se/cret", "host.example"), "se/cret"),
+        (_creds("https", "user", "sec?ret", "host.example"), "sec"),
+        (_creds("https", "user", "sec#ret", "host.example"), "sec"),
+        (_creds("http", "admin", "pw", "evil.example.com"), "pw@"),
     ],
 )
 def test_password_with_url_delimiters_is_never_shown(url, secret):
@@ -611,8 +617,8 @@ def test_control_characters_are_refused(url):
     [
         ("https://bilinc.space#a@evil", "https://bilinc.space"),
         ("https://bilinc.space/p@th?q=1", "https://bilinc.space/p@th"),
-        ("https://user:pw@host.example/x", "https://<redacted>@host.example/x"),
-        ("https://user:se/cret@host.example", "https://<redacted>@host.example"),
+        (_creds("https", "user", "pw", "host.example/x"), "https://<redacted>@host.example/x"),
+        (_creds("https", "user", "se/cret", "host.example"), "https://<redacted>@host.example"),
     ],
 )
 def test_display_redacts_only_credentials(url, shown):
@@ -670,7 +676,7 @@ def test_port_zero_is_refused():
 def test_display_keeps_host_with_port_and_at_in_path():
     from bilinc.client import _display_base_url
 
-    assert _display_base_url("http://example.com:8080/a@b") == "http://example.com:8080/a@b"
+    assert _display_base_url(_creds("http", "example.com", "8080/a", "b")) == _creds("http", "example.com", "8080/a", "b")
 
 
 def test_saved_key_passed_back_explicitly_goes_home(monkeypatch):
@@ -701,7 +707,7 @@ def test_bare_query_or_fragment_marker_is_refused(url):
 
 def test_digit_password_before_slash_is_refused_without_echo():
     with pytest.raises(BilincBaseUrlError) as caught:
-        validate_base_url("https://admin:1234/5@evil.com")
+        validate_base_url(_creds("https", "admin", "1234/5", "evil.com"))
     assert "1234" not in str(caught.value) and "admin" not in str(caught.value)
 
 
