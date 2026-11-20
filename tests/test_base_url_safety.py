@@ -26,6 +26,11 @@ def _creds(scheme: str, user: str, secret: str, rest: str) -> str:
     return scheme + "://" + user + ":" + secret + "@" + rest
 
 
+#: Placeholder keys for the binding tests (not real credentials).
+SELF_KEY = "bil_live_self"
+OTHER_KEY = "bil_live_other"
+
+
 class RecordingTransport:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -418,7 +423,7 @@ def test_explicit_base_url_always_wins_over_env(monkeypatch):
     monkeypatch.setenv("BILINC_BASE_URL", "https://staging.example")
 
     transport = RecordingTransport()
-    CloudClient(api_key="bil_live_ci", base_url="https://bilinc.space", transport=transport).status()
+    CloudClient(api_key="bil_live_example", base_url="https://bilinc.space", transport=transport).status()
 
     assert transport.calls[0]["url"] == "https://bilinc.space/api/cloud/status"
 
@@ -682,7 +687,7 @@ def test_display_keeps_host_with_port_and_at_in_path():
 def test_saved_key_passed_back_explicitly_goes_home(monkeypatch):
     save_config_api_key("bil_live_self", base_url="https://self.example", allow_custom_host=True)
     transport = RecordingTransport()
-    CloudClient(api_key="bil_live_self", transport=transport).status()
+    CloudClient(api_key=SELF_KEY, transport=transport).status()
     assert transport.calls[0]["url"] == "https://self.example/api/cloud/status"
 
     monkeypatch.setenv("BILINC_API_KEY", "bil_live_self")
@@ -781,6 +786,6 @@ def test_config_is_read_once_until_it_changes(monkeypatch):
 
     monkeypatch.setattr(type(config_path()), "read_text", counting)
     for _ in range(3):
-        CloudClient(api_key="bil_live_other", transport=RecordingTransport())
+        CloudClient(api_key=OTHER_KEY, transport=RecordingTransport())
     assert len(reads) <= 1
 
