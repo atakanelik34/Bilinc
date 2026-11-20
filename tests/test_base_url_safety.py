@@ -138,14 +138,12 @@ def test_env_key_is_not_paired_with_saved_host(monkeypatch):
     assert transport.calls[0]["url"] == "https://bilinc.space/api/cloud/status"
 
 
-def test_env_base_url_wins_over_saved_host(monkeypatch):
+def test_env_base_url_cannot_move_a_saved_custom_key(monkeypatch):
     save_config_api_key("bil_live_saved", base_url="https://self-hosted.example.com", allow_custom_host=True)
     monkeypatch.setenv("BILINC_BASE_URL", "http://127.0.0.1:9999")
 
-    transport = RecordingTransport()
-    CloudClient(transport=transport).status()
-
-    assert transport.calls[0]["url"] == "http://127.0.0.1:9999/api/cloud/status"
+    with pytest.raises(BilincBaseUrlError, match="belongs to https://self-hosted.example.com"):
+        CloudClient(transport=RecordingTransport())
 
 
 def test_tampered_saved_host_is_refused():
@@ -409,13 +407,13 @@ def test_env_base_url_with_env_key_is_fine(monkeypatch):
     assert transport.calls[0]["url"] == "https://other.example/api/cloud/status"
 
 
-def test_explicit_default_still_honours_env_override(monkeypatch):
+def test_explicit_base_url_always_wins_over_env(monkeypatch):
     monkeypatch.setenv("BILINC_BASE_URL", "https://staging.example")
 
     transport = RecordingTransport()
     CloudClient(api_key="bil_live_ci", base_url="https://bilinc.space", transport=transport).status()
 
-    assert transport.calls[0]["url"] == "https://staging.example/api/cloud/status"
+    assert transport.calls[0]["url"] == "https://bilinc.space/api/cloud/status"
 
 
 def test_cross_origin_redirect_error_names_the_target():
@@ -451,11 +449,12 @@ def test_key_saved_for_custom_host_not_sent_to_default():
         CloudClient(base_url="https://bilinc.space", transport=RecordingTransport())
 
 
-def test_saved_key_may_go_to_a_local_server():
+def test_saved_key_is_not_sent_to_a_local_port_either():
+    """Any local user can listen on 127.0.0.1, so a saved key is bound to its exact host."""
+
     save_config_api_key("bil_live_saved")
-    transport = RecordingTransport()
-    CloudClient(base_url="http://127.0.0.1:8000", transport=transport).status()
-    assert transport.calls[0]["url"] == "http://127.0.0.1:8000/api/cloud/status"
+    with pytest.raises(BilincBaseUrlError):
+        CloudClient(base_url="http://127.0.0.1:8000", transport=RecordingTransport())
 
 
 def test_pre_272_custom_host_config_keeps_working_with_env(monkeypatch):
@@ -512,4 +511,49 @@ def test_consented_bad_host_without_key_reports_missing_key():
     with pytest.raises(BilincApiKeyRequired):
         CloudClient(transport=RecordingTransport())
     assert load_config_base_url() is None
+
+
+def test_saved_key_is_bound_to_its_path():
+    save_config_api_key("bil_live_a", base_url="https://proxy.example/tenant-a", allow_custom_host=True)
+    with pytest.raises(BilincBaseUrlError):
+        CloudClient(base_url="https://proxy.example/tenant-b", transport=RecordingTransport())
+    transport = RecordingTransport()
+    CloudClient(transport=transport).status()
+    assert transport.calls[0]["url"] == "https://proxy.example/tenant-a/api/cloud/status"
+
+
+def test_cli_flag_and_login_agree_on_the_host(monkeypatch):
+    monkeypatch.setenv("BILINC_BASE_URL", "https://self.example")
+    assert main(["--base-url", "https://bilinc.space", "login", "--api-key", "bil_live_x"]) == 0
+    seen = {}
+
+    def fake_client(*, api_key, base_url, timeout):
+        client = CloudClient(api_key=api_key, base_url=base_url, timeout=timeout, transport=RecordingTransport())
+        seen["base_url"] = client.base_url
+        raise SystemExit(0)
+
+    monkeypatch.setattr("bilinc.cli.main.CloudClient", fake_client)
+    with pytest.raises(SystemExit):
+        main(["--base-url", "https://bilinc.space", "status"])
+    assert seen["base_url"] == "https://bilinc.space"
+
+
+def test_cli_api_key_before_login_is_saved(monkeypatch):
+    def fail(*args, **kwargs):  # pragma: no cover - must not be reached
+        raise AssertionError("sign-in must not start")
+
+    monkeypatch.setattr("bilinc.cli.main.loopback_login", fail)
+    monkeypatch.setattr("bilinc.cli.main.device_login", fail)
+    assert main(["--api-key", "bil_live_top", "login"]) == 0
+    assert json.loads(config_path().read_text())["api_key"] == "bil_live_top"
+
+
+def test_redirect_rule():
+    from bilinc.client import _redirect_allowed
+
+    assert _redirect_allowed("http://localhost:8080/a", "https://localhost:8443/a")
+    assert _redirect_allowed("https://bilinc.space/a", "https://bilinc.space/b")
+    assert not _redirect_allowed("https://bilinc.space/a", "http://bilinc.space/a")
+    assert not _redirect_allowed("https://bilinc.space/a", "https://www.bilinc.space/a")
+    assert not _redirect_allowed("https://bilinc.space/a", "https://bilinc.space:8443/a")
 

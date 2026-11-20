@@ -454,7 +454,11 @@ def build_parser() -> argparse.ArgumentParser:
         "login",
         help="Sign in from your browser and save an API key for this computer",
     )
-    login.add_argument("--api-key", help="Save this API key instead of signing in (for CI)")
+    login.add_argument(
+        "--api-key",
+        default=argparse.SUPPRESS,
+        help="Save this API key instead of signing in (for CI)",
+    )
     login.add_argument(
         "--allow-custom-host",
         action="store_true",

@@ -569,6 +569,14 @@ def _origin(base_url: str) -> tuple[str, str, int | None]:
     return scheme, (parts.hostname or "").lower(), port
 
 
+def _same_endpoint(a: str, b: str) -> bool:
+    """Same scheme, host, effective port and path (validated URLs)."""
+
+    return _origin(a) == _origin(b) and (
+        urllib.parse.urlsplit(a).path.rstrip("/") == urllib.parse.urlsplit(b).path.rstrip("/")
+    )
+
+
 def is_default_base_url(base_url: str) -> bool:
     """Whether ``base_url`` (already validated) is the public Bilinc Cloud."""
 
@@ -646,12 +654,11 @@ class _SavedKey:
         self.key = key
         #: Where requests go when nothing else names a host.
         self.home = home
-        #: Every host this key may be sent to (hosts on this computer are always allowed).
+        #: Every base URL this key may be sent to.
         self.hosts = hosts
 
     def check(self, url: str) -> None:
-        origin = _origin(url)
-        if _is_loopback_host(origin[1]) or any(origin == _origin(host) for host in self.hosts):
+        if any(_same_endpoint(url, host) for host in self.hosts):
             return
         raise BilincBaseUrlError(
             f"The API key saved by bilinc login belongs to {' or '.join(self.hosts)}, not "
@@ -696,6 +703,8 @@ def load_config_base_url() -> str | None:
     """Return the custom host a `bilinc login` key was saved for, or None.
 
     None also when no key is saved, or the key belongs to https://bilinc.space.
+    Raises ``BilincBaseUrlError`` when the config consents to a custom host
+    whose URL is not safe (edited by hand); run `bilinc login` again.
     """
 
     saved = _saved_key(load_config())
@@ -743,8 +752,18 @@ def save_config_api_key(
     return path
 
 
+def _redirect_allowed(old_url: str, new_url: str) -> bool:
+    """Same host, and either the same scheme and port or an upgrade from http to https."""
+
+    try:
+        old, new = _origin(old_url), _origin(new_url)
+    except ValueError:
+        return False
+    return old[1] == new[1] and (old == new or (old[0] == "http" and new[0] == "https"))
+
+
 class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Follow a redirect only within the same scheme, host and port.
+    """Follow a redirect only to the same host: same scheme and port, or http to https.
 
     urllib copies the ``Authorization`` header onto a redirect, so following one
     to another host, or from https to http, would hand the API key to that
@@ -752,23 +771,27 @@ class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     """
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001 - urllib API
-        try:
-            same_origin = _origin(req.full_url) == _origin(newurl)
-        except ValueError:
-            same_origin = False
-        if not same_origin:
+        if not _redirect_allowed(req.full_url, newurl):
             return None
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _open(request: urllib.request.Request, *, timeout: float, context: ssl.SSLContext):
-    """``urlopen`` with TLS ``context`` that refuses cross-origin redirects."""
-
-    opener = urllib.request.build_opener(
+@functools.lru_cache(maxsize=4)
+def _opener_for(context: ssl.SSLContext) -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(
         urllib.request.HTTPSHandler(context=context),
         _SameOriginRedirectHandler(),
     )
-    return opener.open(request, timeout=timeout)
+
+
+def _open(request: urllib.request.Request, *, timeout: float, context: ssl.SSLContext):
+    """``urlopen`` with TLS ``context`` that refuses cross-origin redirects.
+
+    It uses its own opener, so one installed with ``urllib.request.install_opener``
+    is not used; proxies from the environment (``HTTPS_PROXY``) still apply.
+    """
+
+    return _opener_for(context).open(request, timeout=timeout)
 
 
 def _default_transport(
@@ -790,14 +813,10 @@ def _default_transport(
     except urllib.error.HTTPError as exc:
         location = exc.headers.get("Location") if exc.headers is not None and 300 <= exc.code < 400 else None
         target_url = urllib.parse.urljoin(url, location) if location else None
-        try:
-            cross_origin = target_url is not None and _origin(target_url) != _origin(url)
-        except ValueError:
-            cross_origin = target_url is not None
-        if cross_origin:
+        if target_url is not None and not _redirect_allowed(url, target_url):
             target = _display_base_url(target_url)
             raise BilincConnectionError(
-                f"Bilinc Cloud request was redirected to {target}, a different host or scheme; "
+                f"Bilinc Cloud request was redirected to {target}, a different host, port or scheme; "
                 "the redirect was not followed so the API key stays with the configured host. "
                 "Check --base-url or BILINC_BASE_URL.",
                 code="cross_origin_redirect",
@@ -866,12 +885,8 @@ class CloudClient:
                 f"new here? {ACTIVATION_SIGNUP_URL}), "
                 "or set BILINC_API_KEY. Then run bilinc quicktest."
             )
-        env_base_url = os.environ.get("BILINC_BASE_URL") or None
         if self.base_url is None:
-            self.base_url = env_base_url or (saved.home if saved else DEFAULT_BASE_URL)
-        elif env_base_url and self.base_url.strip().rstrip("/").lower() == DEFAULT_BASE_URL:
-            # An explicit https://bilinc.space keeps honouring BILINC_BASE_URL, as before 2.7.2.
-            self.base_url = env_base_url
+            self.base_url = os.environ.get("BILINC_BASE_URL") or (saved.home if saved else DEFAULT_BASE_URL)
         self.base_url = validate_base_url(self.base_url)
         if saved is not None:
             # A key saved by `bilinc login` goes only to the host it was saved for,
