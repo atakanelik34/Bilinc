@@ -650,7 +650,9 @@ class TestRecallSmartTimeRouting:
             p = StatePlane(backend=backend, enable_verification=False, enable_audit=False)
             p.init_agm()
             p.init_knowledge_graph()
-            stamp = _time.time() - 60
+            # A minute ago, but never before today's UTC midnight (the test asks what happened today).
+            now = _time.time()
+            stamp = min(now, max(now - 60, now - now % 86400))
             for key, value, source in [
                 ("decision.today", "pricing page decision recorded", "agent"),
                 ("chat.today", "small talk about lunch", "sample-chat-transcript"),

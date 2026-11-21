@@ -203,7 +203,9 @@ def test_a_second_daemon_does_not_take_over(tmp_path):
 
 @pytest.mark.asyncio
 async def test_a_memory_forgotten_or_edited_while_it_is_embedded_gets_no_stale_vectors(tmp_path):
-    import sqlite3 as stdlib_sqlite3
+    # The second connection must come from the SQLite library the backend uses: two
+    # SQLite builds in one process do not see each other's locks on the same file.
+    from bilinc.storage.sqlite import sqlite3 as backend_sqlite3
 
     db = tmp_path / "race.sqlite"
     backend = await _backend(db)
@@ -214,7 +216,7 @@ async def test_a_memory_forgotten_or_edited_while_it_is_embedded_gets_no_stale_v
 
     def embed_then_change(text):
         vectors = real_embed(text)
-        other = stdlib_sqlite3.connect(str(db))  # another process acts mid-pass
+        other = backend_sqlite3.connect(str(db))  # another process acts mid-pass
         other.execute("DELETE FROM memories WHERE key = 'gone'")
         other.execute("UPDATE memories SET value = ? WHERE key = 'edited'", (json.dumps("second text"),))
         other.commit()

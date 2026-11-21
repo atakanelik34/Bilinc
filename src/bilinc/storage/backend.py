@@ -25,6 +25,18 @@ class StorageBackend(ABC):
         """Load a single entry by key, or None if not found."""
         ...
 
+    async def load_many(self, keys: List[str]) -> Dict[str, MemoryEntry]:
+        """Load several entries by key; missing keys are absent from the result.
+
+        Backends with a round-trip cost per query (Postgres) override this with one query.
+        """
+        found: Dict[str, MemoryEntry] = {}
+        for key in dict.fromkeys(k for k in keys if isinstance(k, str)):
+            entry = await self.load(key)
+            if entry is not None:
+                found[key] = entry
+        return found
+
     @abstractmethod
     async def delete(self, key: str) -> bool:
         """Delete an entry by key. Returns True if it existed."""

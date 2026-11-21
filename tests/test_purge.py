@@ -8,12 +8,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import sqlite3
 import uuid
 
 import pytest
 
 from bilinc.core.audit import AuditTrail, OpType
+# The SQLite build the backend and audit trail use (pysqlite3 when installed): another build's
+# connection or exception class would not match theirs.
+from bilinc.storage.sqlite import sqlite3
 
 DSN = os.getenv("BILINC_TEST_POSTGRES_DSN")
 needs_postgres = pytest.mark.skipif(not DSN, reason="BILINC_TEST_POSTGRES_DSN not set")

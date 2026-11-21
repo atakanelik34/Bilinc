@@ -16,7 +16,12 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-import sqlite3
+try:
+    # The same SQLite build the local backend uses (storage/sqlite.py): the audit trail opens the
+    # backend's own file, and two SQLite libraries in one process do not see each other's locks.
+    import pysqlite3 as sqlite3
+except ImportError:
+    import sqlite3
 import threading
 from typing import Any, Dict, List, Optional, NamedTuple
 from enum import Enum

@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +12,9 @@ import pytest
 
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.storage.sqlite import SQLiteBackend
+# The SQLite library the backend uses (pysqlite3 when installed, else the standard one):
+# a second connection or an exception class from another build would not match it.
+from bilinc.storage.sqlite import sqlite3
 
 MEMORIES = [
     ("plan", "The quarterly harbor plan covers shipping routes and port fees."),

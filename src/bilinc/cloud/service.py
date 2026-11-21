@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import os
+import time
 import hmac
 import logging
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from bilinc.cloud.runtime import ProjectRuntimeManager
+from bilinc.observability import stage_timing
 from bilinc.core.postgres_audit_sync import describe_error, is_connection_failure
 
 logger = logging.getLogger(__name__)
@@ -261,10 +263,16 @@ def create_app(
     async def recall(
         project_id: str,
         payload: RecallRequest,
+        response: Response,
         _: None = Depends(require_sidecar_token),
     ):
-        with _runtime_errors():
-            return await manager.recall(project_id, **payload.model_dump())
+        with _runtime_errors(), stage_timing.collect() as timings:
+            started = time.perf_counter()
+            result = await manager.recall(project_id, **payload.model_dump())
+            timings["runtime"] = (time.perf_counter() - started) * 1000.0
+        # Stage durations only (no content), for the control plane to pass on as Server-Timing.
+        response.headers["Server-Timing"] = stage_timing.server_timing_header(timings)
+        return result
 
     @app.post("/v1/projects/{project_id}/revise")
     async def revise(

@@ -1,11 +1,13 @@
 import json
-import sqlite3
 
 import pytest
 
 from bilinc.core import MemoryType, StatePlane
 from bilinc.core.event_ledger import EventOperation, export_events_jsonl, replay_events_summary
 from bilinc.storage.sqlite import SQLiteBackend
+# The SQLite build the backend and audit trail use (pysqlite3 when installed): another build's
+# connection or exception class would not match theirs.
+from bilinc.storage.sqlite import sqlite3
 
 
 async def _plane(tmp_path):

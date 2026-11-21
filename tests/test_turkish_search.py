@@ -1,7 +1,6 @@
 """Turkish-aware search: the shared fold, the SQLite v2 full-text index and local recall."""
 
 import json
-import sqlite3
 
 import pytest
 
@@ -11,6 +10,9 @@ from bilinc.core.text_fold import fold_text, has_turkish_letters, search_terms
 from bilinc.core.vector_search import HybridSearch
 from bilinc.observability.health import HealthCheck
 from bilinc.storage.sqlite import FTS_V2_TABLE, SQLiteBackend
+# The SQLite library the backend uses (pysqlite3 when installed, else the standard one):
+# a second connection or an exception class from another build would not match it.
+from bilinc.storage.sqlite import sqlite3
 
 
 def test_fold_maps_every_turkish_i_and_drops_diacritics():
