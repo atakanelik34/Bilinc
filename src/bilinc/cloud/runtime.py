@@ -1556,10 +1556,12 @@ class ProjectRuntimeManager:
 
         directory = self.snapshot_dir(normalized)
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / f"{snapshot_id}.json").write_text(
+        path = directory / f"{snapshot_id}.json"
+        path.write_text(
             json.dumps(payload, sort_keys=True, default=str),
             encoding="utf-8",
         )
+        self._write_snapshot_summary(path, payload)
         created = self._snapshot_from_payload(payload)
         warnings = label_warnings + metadata_warnings
         return dataclasses.replace(created, warnings=warnings) if warnings else created
@@ -1572,8 +1574,7 @@ class ProjectRuntimeManager:
         snapshots: list[ProjectSnapshot] = []
         for path in directory.glob("*.json"):
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                snapshots.append(self._snapshot_from_payload(payload))
+                snapshots.append(self._snapshot_from_payload(self._snapshot_summary(path)))
             except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
                 # A corrupted or half-written checkpoint must not break listing.
                 continue
@@ -1840,6 +1841,40 @@ class ProjectRuntimeManager:
         self._inflight.clear()
         self._last_used.clear()
         self._mutation_locks.clear()
+
+    #: Listing needs only each checkpoint's header, but a checkpoint file holds every memory, so
+    #: listing used to parse megabytes per checkpoint. The header is kept beside it in ``index/``.
+    SNAPSHOT_SUMMARY_DIR = "index"
+
+    @classmethod
+    def _snapshot_summary_path(cls, path: Path) -> Path:
+        return path.parent / cls.SNAPSHOT_SUMMARY_DIR / path.name
+
+    @classmethod
+    def _write_snapshot_summary(cls, path: Path, payload: dict[str, Any]) -> None:
+        """Best effort: a missing or stale summary is rebuilt from the full file on the next listing."""
+        summary = {key: value for key, value in payload.items() if key != "snapshot"}
+        target = cls._snapshot_summary_path(path)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target.with_suffix(".tmp")
+            temporary.write_text(json.dumps(summary, sort_keys=True, default=str), encoding="utf-8")
+            temporary.replace(target)
+        except OSError:
+            logger.warning("Could not write checkpoint summary %s", target.name)
+
+    @classmethod
+    def _snapshot_summary(cls, path: Path) -> dict[str, Any]:
+        """The checkpoint's header, from its summary when that is at least as new as the file."""
+        summary_path = cls._snapshot_summary_path(path)
+        try:
+            if summary_path.stat().st_mtime >= path.stat().st_mtime:
+                return json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        cls._write_snapshot_summary(path, payload)
+        return {key: value for key, value in payload.items() if key != "snapshot"}
 
     @staticmethod
     def _snapshot_from_payload(payload: dict[str, Any]) -> ProjectSnapshot:

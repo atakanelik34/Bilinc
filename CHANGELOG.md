@@ -9,6 +9,7 @@ All notable changes to Bilinc.
 - Hosted recall is faster:
   - Candidate passes, time-window scans and single-memory loads read only the columns they use; the vector and full-text index columns stay in the database.
   - Result provenance is loaded in one query instead of one per result.
+- Listing checkpoints reads a small summary of each one (kept in `snapshots/index/`) instead of parsing every checkpoint file, each of which holds every memory. Existing checkpoints get their summary the first time they are listed.
 - A current-state recall ("what is the current X") counts how often each word appears in one pass instead of once per word and memory. With a few thousand memories that count alone could take minutes.
 
 ### Changed

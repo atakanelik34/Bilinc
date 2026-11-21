@@ -140,3 +140,44 @@ def test_stage_timing_records_in_synchronous_code_and_not_in_other_tasks():
 
     scoped = asyncio.run(main())
     assert "own" in scoped and "other" not in scoped
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_listing_reads_summaries_not_the_full_checkpoints(tmp_path):
+    """A checkpoint file holds every memory; listing reads the small summary kept in index/."""
+    import json as jsonlib
+
+    from bilinc.cloud.runtime import ProjectRuntimeManager
+
+    manager = ProjectRuntimeManager(tmp_path)
+    project = str(uuid.uuid4())
+    try:
+        await manager.commit(project, key="note", value="hello")
+        created = await manager.create_snapshot(project, label="first")
+        directory = manager.snapshot_dir(project)
+        full = directory / f"{created.id}.json"
+        summary = directory / "index" / f"{created.id}.json"
+        assert summary.exists() and "snapshot" not in jsonlib.loads(summary.read_text())
+
+        # Listing works from the summary alone: the full file is not parsed.
+        original = full.read_text()
+        full.write_text("not json")
+        stamp = summary.stat().st_mtime - 10
+        os.utime(full, (stamp, stamp))
+        assert [s.label for s in await manager.list_snapshots(project)] == ["first"]
+
+        # A missing summary is rebuilt from the full file.
+        full.write_text(original)
+        summary.unlink()
+        assert [s.label for s in await manager.list_snapshots(project)] == ["first"]
+        assert summary.exists()
+
+        # A full file newer than its summary (a purge rewrote it) wins over the summary.
+        payload = jsonlib.loads(original)
+        payload["label"] = "rewritten"
+        full.write_text(jsonlib.dumps(payload))
+        newer = summary.stat().st_mtime + 10
+        os.utime(full, (newer, newer))
+        assert [s.label for s in await manager.list_snapshots(project)] == ["rewritten"]
+    finally:
+        await manager.close()
