@@ -171,6 +171,11 @@ Send an `Idempotency-Key` header on any write you might retry: the same key with
 
 Bilinc is a cloud SDK: `commit`, `recall`, `revise`, `export` and the other calls send the memory keys and values you pass, with your API key, to Bilinc Cloud over HTTPS. The package keeps no memory store on your computer. `bilinc login` saves the API key and the host it belongs to in `~/.config/bilinc/config.json` (or `$BILINC_CONFIG_DIR`), readable only by you (0600); `bilinc wiki` and the `export_wiki` tool write files only to the folder you name. Remove a memory with `forget`, and its stored content as well with `--purge`. What Bilinc Cloud keeps, and for how long, is in the [privacy policy](https://bilinc.space/privacy).
 
+## What's new in 2.7.3
+
+- **Faster hosted recall**: Bilinc Cloud reads only the columns recall uses, loads result details in one query, no longer slows sharply on "what is the current X" questions over thousands of memories, and lists checkpoints from small summaries instead of reading every checkpoint in full.
+- **Recall timing**: hosted recall responses carry a `Server-Timing` header (no memory content) so slow calls can be traced.
+
 ## What's new in 2.7.2
 
 - **Safer base URLs**: the API key goes only to an `https://` host (plain `http://` only for localhost), a key saved by `bilinc login` goes back to the host it was saved for, and saving a key for a host other than bilinc.space needs `--allow-custom-host`.
