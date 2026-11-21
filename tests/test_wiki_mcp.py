@@ -36,6 +36,17 @@ def transport(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("BILINC_CONFIG_DIR", str(home / ".config" / "bilinc"))
+    # The tests export to tmp_path / "wiki". The default temp carve-out is dropped because
+    # this home sits inside the system temp folder, and on macOS that folder is under /var,
+    # a refused system root. Name the export folder itself as the temp folder instead.
+    from bilinc.wiki import location
+
+    real_check = location.check_mcp_target
+    monkeypatch.setattr(
+        location,
+        "check_mcp_target",
+        lambda directory: real_check(directory, temp_dirs=(str(tmp_path / "wiki"),)),
+    )
     fake = transport_for()
     monkeypatch.setattr(cloud_mcp, "create_client", lambda: make_client(fake, read_retry_attempts=1))
     return fake

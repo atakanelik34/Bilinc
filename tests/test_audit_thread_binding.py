@@ -8,12 +8,14 @@ expected to fail and should be updated on purpose.
 """
 from __future__ import annotations
 
-import sqlite3
 import threading
 
 import pytest
 
 from bilinc.core.audit import AuditTrail, OpType
+# The SQLite build the backend and audit trail use (pysqlite3 when installed): another build's
+# connection or exception class would not match theirs.
+from bilinc.storage.sqlite import sqlite3
 
 
 @pytest.mark.asyncio

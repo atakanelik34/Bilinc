@@ -64,7 +64,14 @@ async def _need_pageinspect(conn):
 
 
 async def _flush(conn):
-    await conn.fetchval("SELECT pg_stat_force_next_flush()")
+    if int(await conn.fetchval("SELECT current_setting('server_version_num')::int")) >= 150000:
+        await conn.fetchval("SELECT pg_stat_force_next_flush()")
+        return
+    # Before PostgreSQL 15 there is no forced flush: a session sends its counters after a
+    # statement, at most once per 500 ms, and readers may see a snapshot up to 500 ms old.
+    await asyncio.sleep(0.6)
+    await conn.fetchval("SELECT pg_stat_clear_snapshot()")
+    await asyncio.sleep(0.6)
 
 
 class _Recorder:
