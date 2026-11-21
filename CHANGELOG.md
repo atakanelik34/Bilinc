@@ -2,6 +2,20 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Performance
+
+- Hosted recall is faster:
+  - Candidate passes, time-window scans and single-memory loads read only the columns they use; the vector and full-text index columns stay in the database.
+  - Result provenance is loaded in one query instead of one per result.
+- A current-state recall ("what is the current X") counts how often each word appears in one pass instead of once per word and memory. With a few thousand memories that count alone could take minutes.
+
+### Changed
+
+- The hosted sidecar's recall response carries a `Server-Timing` header with stage durations in milliseconds: `candidates`, `prepare`, `lexical`, `hybrid` (local full-text and vector index), `fts` (Postgres full-text, only when it ran), `semantic`, `fusion` (fallback and temporal ranking and rank fusion), `reorder` (optional reordering by a reranker or by recency, only when one is configured), `results` (current-state preferences and ordering), `claims` (supporting claims, only with explain), `build` (building the result list), `provenance` and `runtime`. A reflective recall adds up its passes. The header holds no memory content; the public API passes on only the total sidecar time.
+- The audit trail opens its SQLite file with the same SQLite build the local backend uses (`pysqlite3` when installed), so both see each other's locks on the same file.
+
 ## [2.7.2] — 2026-11-20
 
 ### Security

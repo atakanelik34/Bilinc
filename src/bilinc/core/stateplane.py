@@ -21,7 +21,7 @@ import os
 import re
 import json
 import time
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from bilinc.core.models import MemoryEntry, MemoryType, strip_reserved_metadata, ttl_expired
@@ -44,6 +44,7 @@ from bilinc.core.temporal import (
 from bilinc.observability.metrics import MetricsCollector
 from bilinc.observability.health import HealthCheck
 from bilinc.observability.logging import log_event
+from bilinc.observability.stage_timing import Stopwatch
 
 
 logger = logging.getLogger(__name__)
@@ -847,10 +848,12 @@ class StatePlane:
                 return []
 
             valid_as_of = parse_temporal_timestamp(query_timestamp)
+            stopwatch = Stopwatch()
             candidates = await self._collect_recall_candidates(
                 memory_types=memory_types,
                 include_stale=include_stale or valid_as_of is not None,
             )
+            stopwatch.lap("candidates")
             candidates = self._filter_candidates_as_of(candidates, query_timestamp)
             candidates = self._project_current_state_candidates(
                 candidates,
@@ -859,16 +862,19 @@ class StatePlane:
             )
             if not include_stale and valid_as_of is None:
                 candidates = self._collapse_current_state_candidates(query, candidates)
+            stopwatch.lap("prepare")
             if not candidates:
                 return []
 
             lexical_ranked = self._rank_lexical_keys(query, candidates)
+            stopwatch.lap("lexical")
             candidate_keys = set(candidates)
             hybrid_ranked = self._rank_hybrid_keys(
                 query,
                 top_k=max(limit * 3, 10),
                 candidate_keys=candidate_keys,
             )
+            stopwatch.lap("hybrid")
             if not hybrid_ranked and self._get_hybrid_search() is None:
                 # Postgres mode has no local FTS5/vector index; its full-text
                 # ranking fills the same RRF slot so weights stay unchanged.
@@ -877,11 +883,13 @@ class StatePlane:
                     top_k=max(limit * 3, 10),
                     candidate_keys=candidate_keys,
                 )
+                stopwatch.lap("fts")
             semantic_ranked, semantic_indexed = await self._rank_semantic_signal_async(
                 query,
                 top_k=max(limit * 10, 50),
                 candidate_keys=candidate_keys,
             )
+            stopwatch.lap("semantic")
             if (
                 len(candidates) <= self.SURFACE_FALLBACK_MAX_CANDIDATES
                 and not lexical_ranked
@@ -988,6 +996,7 @@ class StatePlane:
                 )
                 bucket["entity"] = boost
 
+            stopwatch.lap("fusion")
             use_recency = valid_as_of is not None and self._recency_fusion_enabled()
             rerank_cfg = rerank_config()
             rerank_scores: Dict[str, float] = {}
@@ -1022,11 +1031,15 @@ class StatePlane:
                 if new_order != base_order:
                     relevance_scores = dict(fused_scores)
                     fused_scores = dict(zip(new_order, (fused_scores[key] for key in base_order)))
+                stopwatch.lap("reorder")
             self._apply_current_state_boost(query, fused_scores, candidates)
             self._apply_latest_family_order(query, fused_scores, candidates)
             ordered_keys = [k for k, _ in sorted(fused_scores.items(), key=lambda kv: kv[1], reverse=True)]
             ranked_keys = ordered_keys[:limit]
+            stopwatch.lap("results")
             claims_by_key = await self._active_claims_by_memory_key(ranked_keys) if explain else {}
+            if explain:
+                stopwatch.lap("claims")
             results = []
             for key in ranked_keys:
                 entry = candidates.get(key)
@@ -1077,6 +1090,7 @@ class StatePlane:
                         )
                     )
                 results.append(result)
+            stopwatch.lap("build")
 
             self._record_success(
                 "recall_intelligent",
@@ -2332,11 +2346,11 @@ class StatePlane:
             key: self._normalized_lexical_tokens(str(entry.value or ""))
             for key, entry in candidates.items()
         }
-        value_document_frequency = {
-            token: sum(token in tokens for tokens in value_tokens.values())
-            for tokens in value_tokens.values()
-            for token in tokens
-        }
+        # Number of candidate values containing each token. One pass: the previous
+        # comprehension rescanned every value for every token (O(N^2 * T)).
+        value_document_frequency: Counter[str] = Counter()
+        for tokens in value_tokens.values():
+            value_document_frequency.update(tokens)
         collapsed: set[str] = set()
 
         for token in sorted(query_tokens):

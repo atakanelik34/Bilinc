@@ -38,6 +38,7 @@ from bilinc.cloud.project_settings import load_project_settings
 from bilinc.core.audit import OpType
 from bilinc.core.models import MemoryEntry, MemoryType
 from bilinc.core.stateplane import StatePlane
+from bilinc.observability.stage_timing import Stopwatch
 from bilinc.core.time_intent import mentions_low_signal, parse_time_intent, resolve_timezone
 from bilinc.storage.sqlite import SQLiteBackend
 from bilinc.storage.postgres import PostgresBackend
@@ -852,10 +853,12 @@ class ProjectRuntimeManager:
         """
         if not plane.backend or not isinstance(results, list):
             return
-        for item in results:
-            if not isinstance(item, dict) or not isinstance(item.get("key"), str):
-                continue
-            entry = await plane.backend.load(item["key"])
+        items = [item for item in results if isinstance(item, dict) and isinstance(item.get("key"), str)]
+        if not items:
+            return
+        entries = await plane.backend.load_many([item["key"] for item in items])
+        for item in items:
+            entry = entries.get(item["key"])
             if entry is None:
                 continue
             state = entry.to_dict()
@@ -917,7 +920,9 @@ class ProjectRuntimeManager:
                 )
                 if routed is not None:
                     routed["state_version"] = state_version(plane)
+                    provenance_timer = Stopwatch()
                     await self._attach_provenance(plane, routed.get("results"))
+                    provenance_timer.lap("provenance")
                     return routed
 
         kwargs: dict[str, Any] = {"query": query, "profile": profile, "limit": limit}
@@ -930,7 +935,9 @@ class ProjectRuntimeManager:
 
         payload = await plane.recall_profiled(**kwargs)
         payload["state_version"] = state_version(plane)
+        provenance_timer = Stopwatch()
         await self._attach_provenance(plane, payload.get("results"))
+        provenance_timer.lap("provenance")
 
         # Never let a caller believe it received evidence it did not get.
         if explain and "explain" not in supported:

@@ -122,6 +122,15 @@ def orphan_entities_statement(prefix: str = "", *, count: bool = False) -> str:
     return f"DELETE FROM {prefix}entities WHERE {where}"
 
 
+#: The columns ``PostgresBackend._row_to_entry`` reads (everything except embedding, tsv, tsv_at, created_ts).
+_ENTRY_COLUMNS = ", ".join((
+    "id", "key", "memory_type", "value", "metadata", "ccs_dimensions", "source", "session_id",
+    "created_at", "updated_at", "last_accessed", "access_count", "valid_at", "invalid_at", "ttl",
+    "is_verified", "verification_score", "verification_method", "importance", "decay_rate",
+    "current_strength", "conflict_id", "superseded_by",
+))
+
+
 class PostgresBackend(StorageBackend):
     # v3: the ``tsv`` text is folded (see fts_document); v2 rows are rebuilt once.
     SCHEMA_VERSION = 3
@@ -1179,11 +1188,23 @@ class PostgresBackend(StorageBackend):
             await self.init()
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM bilinc_entries WHERE key = $1", key
+                f"SELECT {_ENTRY_COLUMNS} FROM bilinc_entries WHERE key = $1", key
             )
             if not row:
                 return None
             return self._row_to_entry(row)
+
+    async def load_many(self, keys: List[str]) -> Dict[str, MemoryEntry]:
+        """One round trip for several keys (recall provenance loads ``limit`` entries)."""
+        wanted = list(dict.fromkeys(k for k in keys if isinstance(k, str)))
+        if not wanted:
+            return {}
+        if not self._initialized:
+            await self.init()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(f"SELECT {_ENTRY_COLUMNS} FROM bilinc_entries WHERE key = ANY($1::text[])", wanted)
+        return {row["key"]: self._row_to_entry(row) for row in rows}
+
     async def search_by_intent(self, intent: str, top_k: int = 10, memory_types: Optional[List[str]] = None) -> List[Dict]:
         """Search by semantic intent using BM25 (tsvector) as MVP approach."""
         if not self._initialized:
@@ -1381,7 +1402,11 @@ class PostgresBackend(StorageBackend):
         if not self._initialized:
             await self.init()
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM bilinc_entries ORDER BY importance DESC, created_at DESC")
+            # Only what _row_to_entry reads: recall calls this per pass, and the embedding and tsv
+            # columns were most of the bytes on the wire.
+            rows = await conn.fetch(
+                f"SELECT {_ENTRY_COLUMNS} FROM bilinc_entries ORDER BY importance DESC, created_at DESC"
+            )
             return [self._row_to_entry(r) for r in rows]
 
     @staticmethod
@@ -1465,7 +1490,7 @@ class PostgresBackend(StorageBackend):
             raise ValueError(f"unknown list order: {order}")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(max(1, int(limit)))
-        sql = f"SELECT * FROM bilinc_entries {where} ORDER BY {order_by} LIMIT ${len(params)}"
+        sql = f"SELECT {_ENTRY_COLUMNS} FROM bilinc_entries {where} ORDER BY {order_by} LIMIT ${len(params)}"
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
             return [self._row_to_entry(r) for r in rows]
@@ -1493,7 +1518,7 @@ class PostgresBackend(StorageBackend):
             await self.init()
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM bilinc_entries WHERE memory_type = $1 ORDER BY importance DESC, created_at DESC LIMIT $2",
+                f"SELECT {_ENTRY_COLUMNS} FROM bilinc_entries WHERE memory_type = $1 ORDER BY importance DESC, created_at DESC LIMIT $2",
                 memory_type.value if hasattr(memory_type, 'value') else str(memory_type),
                 limit
             )

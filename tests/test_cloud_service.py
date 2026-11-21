@@ -387,3 +387,17 @@ def test_runtime_errors_works_without_psycopg(monkeypatch):
     with pytest.raises(RuntimeError, match="boom"):
         with _runtime_errors():
             raise RuntimeError("boom")
+
+
+def test_cloud_sidecar_recall_reports_stage_timings(client):
+    headers = {"X-Bilinc-Sidecar-Token": "secret"}
+    project_id = str(uuid4())
+    client.post(f"/v1/projects/{project_id}/commit", headers=headers,
+                json={"key": "agent.editor", "value": "The editor is helix"})
+    response = client.post(f"/v1/projects/{project_id}/recall", headers=headers,
+                           json={"query": "editor", "profile": "fast"})
+    assert response.status_code == 200
+    stages = dict(part.split(";dur=") for part in response.headers["Server-Timing"].split(", "))
+    assert {"runtime", "candidates", "lexical", "provenance"} <= set(stages)
+    assert all(float(value) >= 0 for value in stages.values())
+    assert "helix" not in response.headers["Server-Timing"]  # durations only, never content
