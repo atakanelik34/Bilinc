@@ -69,8 +69,10 @@ Choice: approach 1 now; approach 2 is the named second step, gated on evidence f
 
 Keys use only `[A-Za-z0-9_.:-]`, at most 256 characters (security/validator.py:10). `<utc>` is the
 fixed-width form `YYYYMMDDTHHMMSSffffffZ` (no `+` or `:`; lexical order equals time order). Task ids are
-never reused: a forgotten or expired task key still blocks a create-only write (G4), so a new task
-always gets a new id.
+never reused: `forget` deletes the row (core/stateplane.py:3619-3620) and the create-only check only
+tests `backend.load(key) is not None` (cloud/runtime.py:814), so a forgotten task key can be created
+again; anyone still holding the old id would then act on a different task, and the old task's history
+is hidden behind the new one. A new task always gets a new id.
 
 | Record | Key | Value | Written with |
 |---|---|---|---|
@@ -90,7 +92,11 @@ Rules:
   `version_conflict` (wanted).
 - Done / failed / release: `revise` with the current version.
 - Board: `iter_memories(prefix="coord:<board>:task:", values="full")`, filter by `state`.
-- Feed (tie-safe, G13): keep the set of keys already seen and the two newest distinct `updatedAt`
+- Feed (tie-safe, G13): the feed covers only the `note:` and `announce:` prefixes, whose records
+  are create-only and never revised; task state is read from the Board, never from the feed (task
+  records change in place under the same key, so a key-based feed would drop every change after the
+  first sighting). Alternative, not used here: de-duplicate on `(key, entryVersion)`. Keep the set of
+  keys already seen and the two newest distinct `updatedAt`
   values seen. Re-read with `updated_after=<the second-newest distinct updatedAt seen>` (from the
   start while only one value has been seen), `order="newest"`, and drop keys already seen. A record
   that lands later with the same `updatedAt` as the newest seen is then still returned. No epsilon is
@@ -111,7 +117,8 @@ Rules:
    Answer from this repo: take "now" from the `updatedAt` of a write the reader just made (any confirm
    or note) to avoid skew; lease length stays a client choice (no number fixed here). Trade-off: this
    needs a write (so write access, and a metered write) just to read the clock; a reader without write
-   access must use its own clock and a lease long enough for the skew it expects.
+   access must use its own clock and a lease long enough for the skew it expects. The claim holder
+   needs no extra write: its heartbeat (`confirm`) already returns `updated_at` (runtime.py:1205).
 5. Metering of coordination writes: **owner** (no figures here).
 6. SDK helper or recipe only: recipe only for now; a helper after one real run.
 7. Local parity (G12): local agents would need `if_absent` and `expected_version` on the stdio server
@@ -130,11 +137,17 @@ Rules:
    - E2: N concurrent revises naming the same version -> exactly one success, the rest
      `version_conflict`.
    - E3: version unchanged by recall, history and list; the version a revise/confirm returns equals
-     the one listed afterwards.
+     the one listed afterwards (both taken after the save). `entry_version` hashes the whole entry,
+     access counters included (runtime.py:196-204), and the backends differ on read-side counters
+     (backlog A6): a SQLite-only or Postgres-only difference is reported under the STOP rule, not
+     worked around in the test.
    - E5: `list_memories(order="newest", updated_after=t)` returns only later entries, newest first,
      and a cursor stays valid while another write lands.
-   - G13 pins: two announcements stored with the same `updated_at` T (written through the backend with
-     a fixed stamp): `updated_after=T` returns neither (the strict bound, so a change to it is seen);
+   - Forget then re-create: after `forget` of a task key, `commit(..., if_absent=True)` on that key
+     succeeds (pins the reason task ids are never reused).
+   - G13 pins: two announcements stored with the same `updated_at` T, written with `backend.restore`
+     (which keeps the given `updated_at` on both SQLite, storage/sqlite.py:370, and Postgres,
+     storage/postgres.py:928; `save` on SQLite overwrites it): `updated_after=T` returns neither (the strict bound, so a change to it is seen);
      the Feed rule (re-read from the previous distinct stamp, drop seen keys) returns the one not yet
      seen.
    - E6: history of a task shows create, update (reason "claim by a"), confirm (reason "heartbeat")
