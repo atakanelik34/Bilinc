@@ -3543,7 +3543,7 @@ class StatePlane:
                     total = backend_stats.get("total_entries", 0) or backend_stats.get("total", 0)
                     by_type = backend_stats.get("by_type", {})
                     entries = await self._persistent_state()
-                integrity = self.audit.verify_integrity() if self.enable_audit else None
+                integrity = self.audit.verify_integrity() if self.enable_audit and self.audit else None
                 if self._fresh_root_hash() == head:
                     break
             else:
