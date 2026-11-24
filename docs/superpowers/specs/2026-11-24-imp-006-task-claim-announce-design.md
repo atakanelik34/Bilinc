@@ -38,7 +38,9 @@ later change breaks them. It adds no server, schema or storage change.
 - **G4** No lease: a claim never expires by itself; staleness is a client convention.
 - **G5** A change does not record who made it beyond the `reason` text and the value.
 - **G6** Coordination records are ordinary memories: they show up in recall, the dream pass and the
-  wiki export.
+  wiki export. Until the owner decides (open question 2): do not run dream passes over the `coord:`
+  prefix; a dream `confirm` would make a stale claim look fresh, and a dream `forget` would free a task
+  id for re-creation.
 - **G7** The guarantees hold inside one runtime process; two processes serving one project could both
   pass a create-only check (deployment fact, owner).
 - **G8** The SDK cannot tell whether the live route honoured `ifAbsent` (owner check, same as B4b).
@@ -91,6 +93,9 @@ Rules:
   `revise` naming the version read; a heartbeat in between makes the takeover fail with
   `version_conflict` (wanted).
 - Done / failed / release: `revise` with the current version.
+- Lost the task: on `version_conflict` during a heartbeat, done or release, re-read the task. If
+  `owner` is someone else, stop working on it (it was taken over). If `owner` is still me, carry on with
+  the version just read (another version-checked write changed it, not a takeover).
 - Board: `iter_memories(prefix="coord:<board>:task:", values="full")`, filter by `state`.
 - Feed (tie-safe, G13): the feed covers only the `note:` and `announce:` prefixes, whose records
   are create-only and never revised; task state is read from the Board, never from the feed (task
@@ -101,7 +106,7 @@ Rules:
   start while only one value has been seen), `order="newest"`, and drop keys already seen. A record
   that lands later with the same `updatedAt` as the newest seen is then still returned. No epsilon is
   used. The seen-key set can be trimmed to keys whose `updatedAt` is at or after that bound. Writes of
-  one project are serialised and stamped with the service clock, so a later write does not get an
+  one project are serialised and stamped with the service clock (within one runtime process, see G7), so a later write does not get an
   older stamp unless the service clock steps back (not handled).
 - Who did what: `owner`, the `reason` text, and `history(key)` (G5).
 
