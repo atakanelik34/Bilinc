@@ -183,6 +183,7 @@ def _show_error_code(exc: BilincCloudError) -> BilincCloudError:
     """Put ``exc.code`` in the error text when the service's message does not already name it.
 
     Used where callers branch on the code but only see text (the MCP tool result, the CLI's error line).
+    Shared by ``bilinc.cloud_mcp`` and ``bilinc.cli.main``: rename it in all three places.
     """
 
     if exc.code and exc.code not in str(exc):

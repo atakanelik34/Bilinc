@@ -6,7 +6,7 @@ All notable changes to Bilinc.
 
 ### Added
 
-- Create-only writes on the Cloud MCP adapter and the CLI: `commit_mem(..., if_absent=true)` and `bilinc commit --if-absent` write a memory only when its key does not exist yet, and fail with `memory_exists` when it does. Calls without the option send the same request as before.
+- Create-only writes on the Cloud MCP adapter and the CLI: `commit_mem(..., if_absent=true)` and `bilinc commit --if-absent` write a memory only when its key does not exist yet, and fail with `memory_exists` when it does. Calls without the option send the same request as before; commit errors on these two surfaces now also name their error code.
 
 ## [2.7.3] — 2026-11-21
 
