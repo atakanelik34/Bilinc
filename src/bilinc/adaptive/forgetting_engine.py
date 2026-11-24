@@ -12,8 +12,7 @@ Also includes:
 - Protection mechanisms (core beliefs, high-frequency, etc.)
 - Explainable forgetting (why trace)
 
-Not wired: nothing in the package imports this module (``bilinc.adaptive`` exports the
-different ``LearnableForgetting``), so none of the above runs today.
+Not wired: nothing in the package imports this module, so none of the above runs today.
 """
 from __future__ import annotations
 import time

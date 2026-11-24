@@ -27,8 +27,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from bilinc.core.models import MemoryEntry, MemoryType, strip_reserved_metadata, ttl_expired
 from bilinc.core.event_ledger import EventOperation
 from bilinc.core.working_memory import WorkingMemory
-from bilinc.core.confidence import ConfidenceEstimator
-from bilinc.core.dual_process import System1Engine, System2Engine, Arbiter
 from bilinc.core.verifier import StateVerifier
 from bilinc.core.audit import AuditTrail, OpType
 from bilinc.core.decay import compute_new_strength, should_prune
@@ -283,10 +281,6 @@ class StatePlane:
         # query vectors, matched against vectors the backend persists.
         self.query_encoder = None
         self.working_memory = working_memory or WorkingMemory(max_slots=max_working_slots)
-        self.estimator = ConfidenceEstimator()
-        self.s1 = System1Engine(state_plane=self)
-        self.s2 = System2Engine(state_plane=self)
-        self.arbiter = Arbiter(system1=self.s1, system2=self.s2, estimator=self.estimator)
         
         self.enable_verification = enable_verification
         self.enable_audit = enable_audit
@@ -3651,12 +3645,6 @@ class StatePlane:
             self._record_failure("forget", start_time, exc, key=key)
             raise
     
-    async def route_query(self, query, entries=None):
-        """Route query through System 1/2 arbiter."""
-        if entries is None:
-            entries = await self.recall_all_working()
-        return await self.arbiter.route(query, entries)
-    
     async def stats(self):
         wm_stats = self.working_memory.stats()
         backend_stats = await self.backend.stats() if self.backend else {}
@@ -3672,7 +3660,6 @@ class StatePlane:
             "backend": backend_stats,
             "audit": audit_info,
             "ops_count": self._ops_count,
-            "arbiter": self.arbiter.get_stats(),
             "health": {
                 "status": health_readiness["status"],
                 "issues": health_readiness["issues"],

@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Removed
+
+- Internal runtime modules that nothing called: the two deprecated `bilinc.mcp_server.server` shims, `bilinc.retrieval` (a second hybrid retriever), `bilinc.core.kg_retrieval`, `bilinc.core.dual_process` and `bilinc.core.confidence` (the System 1/System 2 arbiter and its estimator, with `StatePlane.route_query`), `bilinc.adaptive.budget` and `bilinc.adaptive.forgetting`. `StatePlane.stats()` no longer has an `"arbiter"` key. None of these is in the PyPI package.
+
 ## [2.7.3] — 2026-11-21
 
 ### Performance
