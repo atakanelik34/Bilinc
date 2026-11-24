@@ -86,11 +86,14 @@ def build_server():
         priority: float | None = None,
         ttl: float | None = None,
         idempotency_key: str | None = None,
+        if_absent: bool | None = None,
     ) -> dict[str, Any]:
         """Write a memory entry to hosted Bilinc Cloud.
 
-        Creates the entry if it is new and revises it if the key already
-        exists. Returns an opaque entry version you can pass to `revise` or
+        By default, creates the entry if it is new and revises it if the key
+        already exists. With `if_absent=true` the write only creates: an
+        existing key is left untouched and the call fails with `memory_exists`
+        (use `revise` to change it). Returns an opaque entry version you can pass to `revise` or
         `forget` as `expected_version` for optimistic concurrency.
 
         Pass `idempotency_key` when retrying: the same key with the same
@@ -109,6 +112,7 @@ def build_server():
             priority=priority,
             ttl=ttl,
             idempotency_key=idempotency_key,
+            if_absent=if_absent,
         )
 
     @mcp.tool()

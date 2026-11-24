@@ -104,6 +104,8 @@ bilinc export -o bilinc-export.json    # full values; the file is readable only 
 bilinc forget --key agent.goal --reason "superseded by the planner service"
 ```
 
+Add --if-absent to write only when the key does not exist yet; if it does, the command fails with memory_exists.
+
 Rollback is two steps, and execute never prompts, so it is safe in automation:
 
 ```bash

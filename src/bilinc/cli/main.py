@@ -487,6 +487,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commit.add_argument("--importance", type=float, default=1.0)
     commit.add_argument("--metadata", default="{}", help="JSON object metadata")
+    commit.add_argument(
+        "--if-absent",
+        action="store_true",
+        help="Write only when the key does not exist yet; if it does, fail with memory_exists.",
+    )
 
     recall = sub.add_parser("recall", help="Recall memories from Bilinc Cloud")
     recall.add_argument("--query", required=True)
@@ -770,6 +775,8 @@ def main(argv: list[str] | None = None) -> int:
                     memory_type=args.type,
                     importance=args.importance,
                     metadata=metadata,
+                    # None, not False, without the flag: the request stays what it was before.
+                    if_absent=True if args.if_absent else None,
                 )
             )
         elif args.command == "recall":
