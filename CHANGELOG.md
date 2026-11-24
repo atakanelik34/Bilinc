@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- Local server: after a restart, `revise` judges a memory saved with importance below 0.5 against its own importance, as before the restart. Before, such a memory was treated as new and any edit was accepted.
+
 ## [2.7.3] — 2026-11-21
 
 ### Performance

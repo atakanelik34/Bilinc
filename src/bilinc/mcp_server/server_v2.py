@@ -1422,6 +1422,10 @@ async def _handle_revise(plane: StatePlane, args: Dict[str, Any]) -> List[TextCo
     if plane.backend:
         # Revise against what is stored, not a belief another process has since replaced.
         plane._refresh_cached_belief(key, previous_entry)
+        if previous_entry is not None and plane.agm_engine.belief_state.get_belief(key) is None:
+            # A stored row the cache does not hold (not loaded at startup) is judged against its stored
+            # importance, as the hosted revise does; otherwise it would count as a new key.
+            plane._sync_cached_state(key, previous_entry)
     previous_belief = plane.agm_engine.belief_state.get_belief(key)
     base_entry = previous_entry or previous_belief
 
