@@ -2,6 +2,13 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- SDK: a timeout or a dropped connection while waiting for or reading Bilinc Cloud's answer is now a `BilincConnectionError` (`connection_failed`) instead of a raw Python error. Reads retry it like other connection errors (up to 3 attempts), CLI commands print an error line instead of a traceback, and `dream_apply` keeps its partial results. Code that caught the raw `TimeoutError` or `OSError` from the SDK should catch `BilincError` instead; the original error is the `__cause__`.
+- `python -m bilinc.cli` now exits with the command's exit code (it always exited 0).
+
 ## [2.7.3] — 2026-11-21
 
 ### Performance

@@ -8,6 +8,7 @@ shipped in the public package.
 from __future__ import annotations
 
 import functools
+import http.client
 import ipaddress
 import json
 import math
@@ -153,7 +154,11 @@ class BilincRuntimeUnavailableError(BilincCloudError):
 
 
 class BilincConnectionError(BilincCloudError):
-    """The Bilinc Cloud endpoint could not be reached."""
+    """The Bilinc Cloud endpoint could not be reached, or the connection failed before the answer arrived.
+
+    After a write, ``connection_failed`` does not prove the write was not applied: the failure can come
+    after the service received it. Pass ``idempotency_key`` to retry a write safely.
+    """
 
 
 _STATUS_ERRORS: dict[int, type[BilincCloudError]] = {
@@ -863,11 +868,13 @@ def _default_transport(
     timeout: float,
 ) -> dict[str, Any]:
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
+    # Built before the try: a missing or broken CA bundle is a local setup error, not a network failure.
+    context = _default_ssl_context()
     try:
         with _open(  # noqa: S310 - configured endpoint
             request,
             timeout=timeout,
-            context=_default_ssl_context(),
+            context=context,
         ) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
@@ -898,7 +905,10 @@ def _default_transport(
                 status=exc.code,
                 retryable=False,
             ) from exc
-        detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except (OSError, http.client.HTTPException):
+            detail = ""  # the body did not arrive; the status still says what went wrong
         try:
             payload = json.loads(detail) if detail else {}
         except json.JSONDecodeError:
@@ -908,6 +918,15 @@ def _default_transport(
     except urllib.error.URLError as exc:
         raise BilincConnectionError(
             f"Bilinc Cloud request failed: {exc.reason}",
+            code="connection_failed",
+            retryable=True,
+        ) from exc
+    except (OSError, http.client.HTTPException) as exc:
+        # urllib wraps only send-time failures; a timeout or a dropped connection while waiting for or
+        # reading the answer arrives raw. Must stay after HTTPError and URLError (both are OSErrors).
+        raise BilincConnectionError(
+            "Bilinc Cloud request failed after it was sent (the request may have reached Bilinc Cloud): "
+            f"{str(exc) or type(exc).__name__}",
             code="connection_failed",
             retryable=True,
         ) from exc
@@ -1191,7 +1210,8 @@ class CloudClient:
         the last page only, which also carries ``report``. The result is the
         last page's summary with the results of every page. If a page fails,
         the error is raised with ``exc.partial = {"results": [...], "pages_done": k}``
-        holding what earlier pages applied; calling again with the same actions
+        holding what earlier pages applied (after a ``connection_failed`` it is a lower bound: the
+        service may have applied the page that failed); calling again with the same actions
         resumes, because the service recognises pages it has already seen.
         Actions the service skipped for lack of time are sent again in a later
         page.
