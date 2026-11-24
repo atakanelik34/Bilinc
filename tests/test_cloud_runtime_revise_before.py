@@ -94,6 +94,7 @@ async def test_a_rejected_revise_returns_the_stored_rows_version(manager_factory
             metadata={"verification_failed": ["x"]},
         ))
         stored = await _stored(plane, "flagged")
+        plane.agm_engine.set_entrenchment("flagged", 0.9)   # the 0.3 revision below must lose
 
         result = await manager.revise(project, key="flagged", value="lower", importance=0.3,
                                       strategy="entrenchment")
