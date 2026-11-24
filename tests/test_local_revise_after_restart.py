@@ -99,6 +99,7 @@ async def test_a_key_with_no_stored_row_is_still_new(planes):
     a = await planes()
     try:
         assert (await _revise(a, "brand.new", "first", 0.1))["success"] is True
+        assert (await a.backend.load("brand.new")).value == "first"
     finally:
         await _close(a)
 
