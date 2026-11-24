@@ -81,11 +81,13 @@ async def _snapshot_events(plane):
 # 1 ----------------------------------------------------------------------------------------------
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", BACKENDS)
-async def test_snapshot_records_the_store_head_not_the_stale_cache(workers_factory, backend):
+async def test_snapshot_records_the_store_head_not_the_stale_cache(workers_factory, backend, monkeypatch):
     w = workers_factory(backend)
     try:
         plane_a, _plane_b, head = await w.stale_a()
+        calls = _moving_head(monkeypatch, plane_a, plane_a, times=0)
         snap = await plane_a.snapshot()
+        assert calls["n"] == 1                                 # a stale cache costs no retry: both reads hit the store
         assert snap["root_hash"] == head
         assert "intruder" in snap["entries"]
         events = await _snapshot_events(plane_a)
@@ -119,9 +121,18 @@ async def test_a_head_moving_once_is_retried_and_the_stable_head_recorded(worker
     try:
         plane_a, plane_b, _head = await w.stale_a()
         calls = _moving_head(monkeypatch, plane_a, plane_b, times=1)
+        checks = {"n": 0}
+        original_verify = plane_a.audit.verify_integrity
+
+        def counted_verify():
+            checks["n"] += 1
+            return original_verify()
+
+        monkeypatch.setattr(plane_a.audit, "verify_integrity", counted_verify)
         snap = await plane_a.snapshot()
         stable = plane_b.audit.refresh_root_hash()
         assert calls["n"] == 2
+        assert checks["n"] == 2                                # integrity is taken inside each attempt
         assert snap["root_hash"] == stable
         assert snap["integrity"]["valid"] is True
         assert (await _snapshot_events(plane_a))[-1].checkpoint_root == stable
