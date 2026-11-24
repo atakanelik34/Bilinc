@@ -3500,7 +3500,8 @@ class StatePlane:
                 for c in checks
             ]
         
-        result["root_hash"] = self.audit.get_root_hash() if self.enable_audit else None
+        # Fresh head for display; not checked for stability against the integrity read below.
+        result["root_hash"] = self._fresh_root_hash()
         result["integrity_valid"] = True
         if self.enable_audit:
             integrity = self.audit.verify_integrity()
@@ -3508,18 +3509,45 @@ class StatePlane:
         
         return result
     
+    #: Attempts a snapshot makes to read the state while the audit head holds still.
+    SNAPSHOT_ATTEMPTS = 3
+
+    def _fresh_root_hash(self) -> Optional[str]:
+        """The audit chain head read from the store (None without audit); a failed read raises.
+
+        The cached ``get_root_hash()`` is only right while this process is the one writer. There is no
+        cache fallback: a trail without ``refresh_root_hash`` (only the unused async Postgres trail) raises.
+        """
+        if not self.enable_audit or not self.audit:
+            return None
+        return self.audit.refresh_root_hash()
+
     async def snapshot(self) -> Dict[str, Any]:
-        """Create a verifiable snapshot of the current state."""
+        """Create a verifiable snapshot of the current state.
+
+        The head is read before and after the state (and the integrity check); a snapshot is only taken
+        when both reads agree, so its ``root_hash`` names the chain its entries came from. After
+        ``SNAPSHOT_ATTEMPTS`` moving heads it raises ``ValueError("version_conflict")`` and records nothing.
+        Limit: writes save state before they log, so a write whose state lands during the read but whose
+        audit row lands after the second head read is in the entries without being in the head.
+        """
         start_time = time.perf_counter()
         try:
-            total = 0
-            by_type = {}
-            entries = {}
-            if self.backend:
-                backend_stats = await self.backend.stats()
-                total = backend_stats.get("total_entries", 0) or backend_stats.get("total", 0)
-                by_type = backend_stats.get("by_type", {})
-                entries = await self._persistent_state()
+            for _attempt in range(self.SNAPSHOT_ATTEMPTS):
+                head = self._fresh_root_hash()
+                total = 0
+                by_type = {}
+                entries = {}
+                if self.backend:
+                    backend_stats = await self.backend.stats()
+                    total = backend_stats.get("total_entries", 0) or backend_stats.get("total", 0)
+                    by_type = backend_stats.get("by_type", {})
+                    entries = await self._persistent_state()
+                integrity = self.audit.verify_integrity() if self.enable_audit else None
+                if self._fresh_root_hash() == head:
+                    break
+            else:
+                raise ValueError("version_conflict")
 
             result = {
                 "timestamp": time.time(),
@@ -3527,8 +3555,8 @@ class StatePlane:
                 "by_type": by_type,
                 "entries": entries,
                 "working_memory_count": self.working_memory.count,
-                "root_hash": self.audit.get_root_hash() if self.enable_audit else None,
-                "integrity": self.audit.verify_integrity() if self.enable_audit else None,
+                "root_hash": head,
+                "integrity": integrity,
                 "ops_count": self._ops_count,
             }
             await self._append_memory_event(
@@ -3662,8 +3690,9 @@ class StatePlane:
         backend_stats = await self.backend.stats() if self.backend else {}
         audit_info = {}
         if self.enable_audit:
+            # Fresh head for display; it and the integrity read are not checked against each other.
             audit_info = {
-                "root_hash": self.audit.get_root_hash(),
+                "root_hash": self._fresh_root_hash(),
                 "integrity": self.audit.verify_integrity(),
             }
         health_readiness = self.health.readiness()

@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- A checkpoint records the audit chain head read from the store, not this process's cached one, so with a second writer it no longer pairs fresh memories with an older root hash. The head is read before and after the state; if it keeps moving, creating the checkpoint fails with `version_conflict` (409) and nothing is saved, and the caller can retry. Stats, verify and health show the head from the store too.
+
 ## [2.7.3] — 2026-11-21
 
 ### Performance

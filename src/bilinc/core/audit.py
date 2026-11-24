@@ -340,8 +340,10 @@ class AuditTrail:
     def refresh_root_hash(self) -> str:
         """Read the head of the chain from the store and make it the cached value.
 
-        The cache is only right while this process is the one writer; use this where the head is compared
-        or bound (a restore check), not on every read. Raises if the store cannot be read.
+        The cache is only right while this process is the one writer; use this where the head is recorded,
+        compared or bound (a snapshot, a restore check) or shown next to a full-chain check (stats, verify,
+        health). Plain responses right after this process's own write keep the cache. Raises if the store
+        cannot be read.
         """
         if self.conn is None:
             raise RuntimeError("AuditTrail not initialized. Call .init() first.")

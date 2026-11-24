@@ -425,7 +425,10 @@ class SyncPostgresAuditTrail:
     def refresh_root_hash(self) -> str:
         """Read the head of the chain from the store and make it the cached value (see ``AuditTrail``).
 
-        A failed read raises; the cached value is never returned instead.
+        A failed read raises; the cached value is never returned instead. The cache is assigned without a
+        lock: every value it holds is a real head and ``log()`` never uses it as a chain link, so a race
+        can only leave an older real head in the cache. Callers use this trail's connection from the
+        plane's own thread, as ``verify_integrity`` does.
         """
         row = self._fetch("SELECT root_hash FROM audit_log ORDER BY id DESC LIMIT 1", one=True)
         self._root_hash = row["root_hash"] if row else "0" * 64

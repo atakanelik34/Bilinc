@@ -125,7 +125,7 @@ class HealthCheck:
                         "status": audit_status,
                         "enabled": True,
                         "integrity_valid": integrity.get("valid", False),
-                        "root_hash": plane.audit.get_root_hash(),
+                        "root_hash": plane.audit.refresh_root_hash(),
                     }
                     if audit_status != "ok":
                         blocking_issues.append("audit_integrity_invalid")
