@@ -3783,6 +3783,9 @@ class StatePlane:
                     cached = self.agm_engine.belief_state.get_belief(key)
                     if cached is None or previous_entry.created_at > cached.created_at:
                         self.agm_engine.belief_state.add_belief(previous_entry)
+                        # A key loaded from storage is judged against its stored importance, as in
+                        # _sync_cached_state and the hosted revise; otherwise it counts as the default 0.5.
+                        self.agm_engine.set_entrenchment(key, float(previous_entry.importance))
 
                 result = self.agm_engine.revise(entry)
 
