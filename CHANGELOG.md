@@ -6,7 +6,7 @@ All notable changes to Bilinc.
 
 ### Fixed
 
-- A memory saved with importance below 0.5 can be saved again after the service or the local server restarts. Before, every such write was refused after a restart (hosted: 409 `commit_rejected`) because the memory was judged against a default importance of 0.5 instead of its own.
+- A memory saved with importance below 0.5 can be saved again after the service or the local server restarts, or from a second local process that had not loaded it yet. Before, every such write was refused there (hosted: 409 `commit_rejected`) because the memory was judged against a default importance of 0.5 instead of its own.
 
 ## [2.7.3] — 2026-11-21
 

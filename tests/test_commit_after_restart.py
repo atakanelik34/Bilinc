@@ -101,6 +101,13 @@ async def test_local_plane_that_never_saw_the_key_can_write_it(tmp_path):
         assert (await a.commit_with_agm_async("low.key", "from a", importance=0.3)).success is True
         assert (await b.commit_with_agm_async("low.key", "from b", importance=0.3)).success is True
         assert (await b.backend.load("low.key")).value == "from b"
+        # A third plane that never saw the key still refuses a lower importance.
+        c = StatePlane(backend=SQLiteBackend(path), enable_verification=False, enable_audit=True)
+        await c.init()
+        c.init_agm()
+        planes.append(c)
+        assert (await c.commit_with_agm_async("low.key", "lower", importance=0.2)).success is False
+        assert (await c.backend.load("low.key")).value == "from b"
     finally:
         for plane in planes:
             await plane.backend.close()
