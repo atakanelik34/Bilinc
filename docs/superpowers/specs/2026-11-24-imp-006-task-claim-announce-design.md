@@ -43,6 +43,11 @@ later change breaks them. It adds no server, schema or storage change.
   pass a create-only check (deployment fact, owner).
 - **G8** The SDK cannot tell whether the live route honoured `ifAbsent` (owner check, same as B4b).
 - **G12** The local stdio server has neither `if_absent` nor `expected_version`.
+- **G13** `updated_after` is a strict bound on both backends (`updated_at > ?`: storage/sqlite.py
+  page filter; Postgres `_page_filters`). A feed that re-reads with `updated_after=<newest seen>` never
+  sees a record that lands later with the same `updated_at` (found by the design gate). The recipe
+  works around it (Feed rule below); a service-side fix (an inclusive bound or a per-write sequence) is
+  a second-step option.
 
 ## Approaches
 
@@ -62,7 +67,10 @@ Choice: approach 1 now; approach 2 is the named second step, gated on evidence f
 
 ## Behaviour (the recipe as a client sees it)
 
-Keys use only `[A-Za-z0-9_.:-]`, at most 256 characters (security/validator.py:10).
+Keys use only `[A-Za-z0-9_.:-]`, at most 256 characters (security/validator.py:10). `<utc>` is the
+fixed-width form `YYYYMMDDTHHMMSSffffffZ` (no `+` or `:`; lexical order equals time order). Task ids are
+never reused: a forgotten or expired task key still blocks a create-only write (G4), so a new task
+always gets a new id.
 
 | Record | Key | Value | Written with |
 |---|---|---|---|
@@ -82,8 +90,13 @@ Rules:
   `version_conflict` (wanted).
 - Done / failed / release: `revise` with the current version.
 - Board: `iter_memories(prefix="coord:<board>:task:", values="full")`, filter by `state`.
-- Feed: `list_memories(prefix="coord:<board>:announce:", order="newest", updated_after=<newest seen>)`,
-  de-duplicate by key.
+- Feed (tie-safe, G13): keep the set of keys already seen and the two newest distinct `updatedAt`
+  values seen. Re-read with `updated_after=<the second-newest distinct updatedAt seen>` (from the
+  start while only one value has been seen), `order="newest"`, and drop keys already seen. A record
+  that lands later with the same `updatedAt` as the newest seen is then still returned. No epsilon is
+  used. The seen-key set can be trimmed to keys whose `updatedAt` is at or after that bound. Writes of
+  one project are serialised and stamped with the service clock, so a later write does not get an
+  older stamp unless the service clock steps back (not handled).
 - Who did what: `owner`, the `reason` text, and `history(key)` (G5).
 
 ## Open questions
@@ -96,7 +109,9 @@ Rules:
    project (G7)? **owner**; the recipe's safety rests on both. Same live check as B4b.
 4. Clock for staleness: the recipe compares the reader's clock with the service's `updatedAt`.
    Answer from this repo: take "now" from the `updatedAt` of a write the reader just made (any confirm
-   or note) to avoid skew; lease length stays a client choice (no number fixed here).
+   or note) to avoid skew; lease length stays a client choice (no number fixed here). Trade-off: this
+   needs a write (so write access, and a metered write) just to read the clock; a reader without write
+   access must use its own clock and a lease long enough for the skew it expects.
 5. Metering of coordination writes: **owner** (no figures here).
 6. SDK helper or recipe only: recipe only for now; a helper after one real run.
 7. Local parity (G12): local agents would need `if_absent` and `expected_version` on the stdio server
@@ -106,16 +121,22 @@ Rules:
 
 1. This spec.
 2. **Pinned guarantees** `tests/test_coordination_primitives.py` (build step), hosted runtime class,
-   SQLite and Postgres where marked; they must pass on 29ed56d unchanged (characterization, not
+   every test parametrized over SQLite and Postgres (Postgres via the `needs_postgres` /
+   `postgres_runtime` pattern of tests/test_cloud_postgres_tenancy.py:19-51,
+   `BILINC_STORAGE_BACKEND=postgres`); they must pass on 29ed56d unchanged (characterization, not
    red-first). Every test asserts outcomes, versions and order, never timings:
    - E1: N concurrent create-only commits on one key -> exactly one success, the rest `memory_exists`;
-     the stored value is the winner's. Both backends.
+     the stored value is the winner's.
    - E2: N concurrent revises naming the same version -> exactly one success, the rest
-     `version_conflict`. Both backends.
+     `version_conflict`.
    - E3: version unchanged by recall, history and list; the version a revise/confirm returns equals
      the one listed afterwards.
    - E5: `list_memories(order="newest", updated_after=t)` returns only later entries, newest first,
      and a cursor stays valid while another write lands.
+   - G13 pins: two announcements stored with the same `updated_at` T (written through the backend with
+     a fixed stamp): `updated_after=T` returns neither (the strict bound, so a change to it is seen);
+     the Feed rule (re-read from the previous distinct stamp, drop seen keys) returns the one not yet
+     seen.
    - E6: history of a task shows create, update (reason "claim by a"), confirm (reason "heartbeat")
      in order.
    - E7: a takeover naming the version from before a heartbeat gets `version_conflict`.
@@ -124,8 +145,8 @@ Rules:
 3. Step 3 of the plan (`if_absent` on the Cloud MCP tool and the CLI) is **done as B4b** (vm/b4b);
    not repeated here.
 
-STOP rules carried from the plan: if any pinned test fails on unmodified 29ed56d, or the Postgres
-concurrency pins fail while SQLite passes, stop and report (that changes the design); do not weaken
+STOP rules carried from the plan: if any pinned test fails on unmodified 29ed56d, or any pin fails on
+Postgres while it passes on SQLite, stop and report (that changes the design); do not weaken
 an assertion.
 
 Not in this item: new routes, a version-required rule, a reserved range, service-side leases, a writer
@@ -134,7 +155,8 @@ site text, the remote connector, and any public claim about multi-agent coordina
 
 ## Test plan
 
-The pinned tests above (`bilinc-test`, Postgres via `BILINC_TEST_POSTGRES_DSN`); then the full gate:
+The pinned tests above, every one on both SQLite and Postgres (`bilinc-test` sets
+`BILINC_TEST_POSTGRES_DSN`); then the full gate:
 `bilinc-test -q -m public_source`, `-m internal_runtime`, `ruff check`. Failure cases covered:
 `memory_exists`, `version_conflict`, `success: false`. Not tested here on purpose: two runtime
 processes (G7) and the live route (G8); both are owner checks.
