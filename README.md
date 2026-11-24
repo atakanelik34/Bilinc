@@ -10,6 +10,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/bilinc.svg)](https://pypi.org/project/bilinc/)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-blue.svg)](https://github.com/ReARCLabs/bilinc/blob/main/LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-server-purple.svg)](https://bilinc.space/for/mcp)
+[![atakanelik34/Bilinc MCP server](https://glama.ai/mcp/servers/atakanelik34/Bilinc/badges/score.svg)](https://glama.ai/mcp/servers/atakanelik34/Bilinc)
 <a href="https://pepy.tech/project/bilinc"><img src="https://static.pepy.tech/badge/bilinc" alt="Downloads"></a>
 
 **Hosted memory for AI agents.** Save what your agents learn, recall it before they act, see who wrote each memory and what changed, and roll back when a run goes wrong.
