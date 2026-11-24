@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Fixed
+
+- Hosted service: the audit record and the history event of an edit now hold the memory exactly as it was stored before the edit. Before, the metadata of that earlier state already carried fields of the new version (`previous_value_sha256`, `reason_for_revision`, the verification flag), and a refused edit could return a version that matched no stored row. Records written earlier are unchanged.
+
 ## [2.7.3] — 2026-11-21
 
 ### Performance

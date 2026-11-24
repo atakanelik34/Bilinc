@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import hashlib
 import inspect
 import json
@@ -1245,11 +1246,13 @@ class ProjectRuntimeManager:
         cached = plane.agm_engine.belief_state.get_belief(key)
         # The belief itself always becomes the persisted entry, so every
         # strategy (recency included) compares against what is stored.
-        plane.agm_engine.belief_state.add_belief(MemoryEntry.from_dict(dict(previous_state)))
+        # Deep copies here and below: ``previous_state`` is logged as the "before" of this change and must stay
+        # the stored row, while the new entry's metadata is changed in place (verification flag, AGM fields).
+        plane.agm_engine.belief_state.add_belief(MemoryEntry.from_dict(copy.deepcopy(previous_state)))
         if _belief_is_stale(cached, previous_state):
             plane.agm_engine.set_entrenchment(key, float(previous_state.get("importance", 0.5)))
 
-        entry_data = dict(previous_state)
+        entry_data = copy.deepcopy(previous_state)
         entry_data.update(
             {
                 "key": key,
