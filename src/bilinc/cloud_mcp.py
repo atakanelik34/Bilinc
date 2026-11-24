@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from bilinc.client import CloudClient
+from bilinc.client import BilincCloudError, CloudClient, _show_error_code
 
 #: The exact public Cloud MCP surface. Docs, tests, and the site's product
 #: truth all check against this list.
@@ -93,27 +93,31 @@ def build_server():
         By default, creates the entry if it is new and revises it if the key
         already exists. With `if_absent=true` the write only creates: an
         existing key is left untouched and the call fails with `memory_exists`
-        (use `revise` to change it). Returns an opaque entry version you can pass to `revise` or
-        `forget` as `expected_version` for optimistic concurrency.
+        (use `revise` to change it). Returns an opaque entry version you can
+        pass to `revise` or `forget` as `expected_version` for optimistic
+        concurrency.
 
         Pass `idempotency_key` when retrying: the same key with the same
         payload returns the original result instead of writing twice.
         """
 
-        return create_client().commit(
-            key,
-            value,
-            memory_type=memory_type,
-            importance=importance,
-            metadata=metadata,
-            source=source,
-            session_id=session_id,
-            canonical=canonical,
-            priority=priority,
-            ttl=ttl,
-            idempotency_key=idempotency_key,
-            if_absent=if_absent,
-        )
+        try:
+            return create_client().commit(
+                key,
+                value,
+                memory_type=memory_type,
+                importance=importance,
+                metadata=metadata,
+                source=source,
+                session_id=session_id,
+                canonical=canonical,
+                priority=priority,
+                ttl=ttl,
+                idempotency_key=idempotency_key,
+                if_absent=if_absent,
+            )
+        except BilincCloudError as exc:
+            raise _show_error_code(exc)
 
     @mcp.tool()
     def recall(

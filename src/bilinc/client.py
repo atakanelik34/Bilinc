@@ -179,6 +179,17 @@ def _parse_retry_after(value: Any) -> float | None:
     return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
+def _show_error_code(exc: BilincCloudError) -> BilincCloudError:
+    """Put ``exc.code`` in the error text when the service's message does not already name it.
+
+    Used where callers branch on the code but only see text (the MCP tool result, the CLI's error line).
+    """
+
+    if exc.code and exc.code not in str(exc):
+        exc.args = (f"{exc} ({exc.code})",) + tuple(exc.args[1:])
+    return exc
+
+
 def error_for_response(status: int, payload: Any, *, retry_after: Any = None) -> BilincCloudError:
     """Translate a Cloud error response into the matching typed SDK error."""
 

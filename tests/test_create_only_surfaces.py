@@ -65,6 +65,13 @@ def test_mcp_commit_mem_schema_has_an_optional_if_absent(monkeypatch):
     tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
     schema = tools["commit_mem"].inputSchema
     assert "if_absent" in schema["properties"]
+    prop = schema["properties"]["if_absent"]
+    types = {prop.get("type")} | {option.get("type") for option in prop.get("anyOf", [])}
+    assert {"boolean", "null"} <= types
+    assert set(tools) == {                                       # the tool list itself does not change
+        "commit_mem", "recall", "revise", "forget", "confirm", "status", "snapshot", "diff", "rollback",
+        "list_memories", "history", "dream_start", "dream_apply", "dream_undo", "export_wiki",
+    }
     assert "if_absent" not in schema.get("required", [])
     assert "memory_exists" in (tools["commit_mem"].description or "")
 
@@ -78,8 +85,7 @@ def test_mcp_commit_mem_reports_memory_exists_as_an_error(monkeypatch):
         text = str(exc)
     else:
         text = _text(result)                                     # an isError result
-    # The SDK puts the service's message in the error text (the code stays on the exception, as for every
-    # tool); a success answer would carry neither.
+    assert "memory_exists" in text                               # the code is in the text agents see
     assert "memory already exists" in text
     assert '"success": true' not in text.lower()
     assert SECRET_VALUE not in text
@@ -112,5 +118,5 @@ def test_cli_commit_if_absent_flag(cli):
 def test_cli_commit_if_absent_on_an_existing_key_fails(cli, capsys):
     assert cli(Recording(error=_exists()), "commit", "--key", "k", "--value", SECRET_VALUE, "--if-absent") == 1
     err = capsys.readouterr().err
-    assert "bilinc: error:" in err and "memory already exists" in err
+    assert "bilinc: error:" in err and "memory_exists" in err and "memory already exists" in err
     assert SECRET_VALUE not in err

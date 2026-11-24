@@ -36,6 +36,7 @@ from bilinc.client import (
     require_custom_host_allowed,
     save_config_api_key,
     validate_base_url,
+    _show_error_code,
 )
 from bilinc.cli.login import LoginError, device_login, is_headless, loopback_login
 from bilinc.wiki import WikiExportError, export_wiki, summary_line
@@ -768,8 +769,8 @@ def main(argv: list[str] | None = None) -> int:
             metadata = _parse_value(args.metadata)
             if not isinstance(metadata, dict):
                 raise ValueError("--metadata must be a JSON object")
-            _print(
-                client.commit(
+            try:
+                result = client.commit(
                     args.key,
                     _parse_value(args.value),
                     memory_type=args.type,
@@ -778,7 +779,9 @@ def main(argv: list[str] | None = None) -> int:
                     # None, not False, without the flag: the request stays what it was before.
                     if_absent=True if args.if_absent else None,
                 )
-            )
+            except BilincCloudError as exc:
+                raise _show_error_code(exc)
+            _print(result)
         elif args.command == "recall":
             _print(client.recall(args.query, profile=args.profile, limit=args.limit))
         elif args.command == "revise":
