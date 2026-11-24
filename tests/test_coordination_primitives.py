@@ -1,5 +1,8 @@
 """IMP-006: guarantees a task board built on memory entries relies on (hosted runtime, one process).
 
+The backend fixture is a parametrized equivalent of the `needs_postgres` / `postgres_runtime` pattern in
+tests/test_cloud_postgres_tenancy.py (same DSN variable, same skip when it is unset).
+
 Characterization tests: each pins one behaviour of the existing write and list calls on 29ed56d; none adds a
 feature. Every test runs on SQLite and on Postgres. A failure is a finding about the recipe in
 docs/superpowers/specs/2026-11-24-imp-006-task-claim-announce-design.md, not a test to loosen.
@@ -117,10 +120,12 @@ async def test_reads_do_not_move_the_version(manager):
     try:
         created = await manager.commit(project_id, key=TASK, value={"state": "open", "note": "pick me"},
                                        if_absent=True)
-        await manager.recall(project_id, query="pick me", profile="balanced")
+        recalled = await manager.recall(project_id, query="pick me", profile="balanced")
+        assert TASK in [item["key"] for item in recalled["results"]]       # recall really read the entry
         await manager.history(project_id, key=TASK)
-        listed = (await _listed(manager, project_id, TASK))[0]
-        assert listed["entry_version"] == created["entry_version"]
+        once = (await _listed(manager, project_id, TASK))[0]
+        twice = (await _listed(manager, project_id, TASK))[0]               # listing itself must not move it
+        assert once["entry_version"] == twice["entry_version"] == created["entry_version"]
     finally:
         await manager.close()
 
@@ -145,20 +150,29 @@ async def test_a_state_change_needs_the_recency_strategy_when_importance_drops(m
 @pytest.mark.asyncio
 async def test_an_announcement_feed_reads_newest_first_and_pages_by_cursor(manager):
     project_id = str(uuid4())
+    base = time.time() - 100                                            # fixed, distinct stamps: no clock race
     try:
         await manager.commit(project_id, key="coord:demo:task:t9", value={"state": "open"}, if_absent=True)
+        plane = await manager.get_plane(project_id)
         for n in range(5):
-            await manager.commit(project_id, key=f"{ANNOUNCE}{n:03d}", value=f"note {n}", if_absent=True)
+            await plane.backend.restore(MemoryEntry(
+                key=f"{ANNOUNCE}{n:03d}", value=f"note {n}", memory_type=MemoryType.SEMANTIC, importance=1.0,
+                created_at=base + n, updated_at=base + n,
+            ))
         first = await manager.list_memories(project_id, prefix=ANNOUNCE, order="newest", limit=2, values="full")
-        await manager.commit(project_id, key="coord:demo:note:t9:x", value="lands meanwhile", if_absent=True)
+        # A new announcement lands inside the listed prefix while the reader pages (stamped now, so newest).
+        await manager.commit(project_id, key=f"{ANNOUNCE}005", value="note 5", if_absent=True)
+        await manager.commit(project_id, key="coord:demo:note:t9:x", value="outside the prefix", if_absent=True)
         second = await manager.list_memories(project_id, prefix=ANNOUNCE, order="newest", limit=2,
                                              cursor=first["next_cursor"])
-        seen = first["entries"][-1]["updated_at"]
-        newer = await manager.list_memories(project_id, prefix=ANNOUNCE, order="newest", updated_after=seen)
+        fresh = await manager.list_memories(project_id, prefix=ANNOUNCE, order="newest", limit=10)
+        newer = await manager.list_memories(project_id, prefix=ANNOUNCE, order="newest", updated_after=base + 3)
+
         assert [entry["key"] for entry in first["entries"]] == [f"{ANNOUNCE}004", f"{ANNOUNCE}003"]
-        assert [entry["key"] for entry in second["entries"]] == [f"{ANNOUNCE}002", f"{ANNOUNCE}001"]
         assert first["total"] == 5
-        assert [entry["key"] for entry in newer["entries"]] == [f"{ANNOUNCE}004"]
+        assert [entry["key"] for entry in second["entries"]] == [f"{ANNOUNCE}002", f"{ANNOUNCE}001"]
+        assert fresh["entries"][0]["key"] == f"{ANNOUNCE}005" and fresh["total"] == 6
+        assert [entry["key"] for entry in newer["entries"]] == [f"{ANNOUNCE}005", f"{ANNOUNCE}004"]
     finally:
         await manager.close()
 
