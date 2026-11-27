@@ -2,7 +2,7 @@
 
 All notable changes to Bilinc.
 
-## [Unreleased]
+## [2.7.4] — 2026-11-27
 
 ### Added
 
