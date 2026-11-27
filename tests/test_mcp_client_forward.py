@@ -89,6 +89,8 @@ def test_reads_carry_mcp_label_but_not_activation_client():
         (42, None),
         ("a" * 60, "a" * 48),
         ("glama.ai_v1-x", "glama.ai_v1-x"),
+        ("@modelcontextprotocol/inspector", "modelcontextprotocol-inspector"),
+        ("0.9.0+build.7", "0.9.0-build.7"),
     ],
 )
 def test_mcp_client_label(raw, expected):

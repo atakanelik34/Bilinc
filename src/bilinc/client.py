@@ -936,8 +936,13 @@ def mcp_client_label(value: object) -> str | None:
 
     if not isinstance(value, str):
         return None
-    cleaned = "".join(character for character in value if character in _MCP_CLIENT_LABEL_CHARS)
-    cleaned = " ".join(cleaned.split())[:48].strip()
+    # Visible separators ("@scope/name", "1.2.0+build") become "-" so words stay
+    # apart; anything else (controls, non-ASCII, markup) is dropped.
+    cleaned = "".join(
+        character if character in _MCP_CLIENT_LABEL_CHARS else "-" if character in "/+:@" else ""
+        for character in value
+    )
+    cleaned = " ".join(cleaned.split())[:48].strip(" -")
     return cleaned or None
 
 

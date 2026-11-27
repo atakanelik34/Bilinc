@@ -2,6 +2,12 @@
 
 All notable changes to Bilinc.
 
+## [Unreleased]
+
+### Added
+
+- The local stdio MCP adapter now sends the name and version the agent app gave in MCP `initialize` (Claude Code, Codex, Cursor...) as `X-Bilinc-Mcp-Client` and `X-Bilinc-Mcp-Client-Version` on every cloud request. They are labels only: limited to `[A-Za-z0-9._ -]`, at most 48 characters, and never used for identity or activation. Plain SDK calls do not send them.
+
 ## [2.7.3] — 2026-11-21
 
 ### Performance
