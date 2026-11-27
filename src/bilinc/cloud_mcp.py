@@ -61,6 +61,21 @@ def create_client(api_key: str | None = None, base_url: str | None = None) -> Cl
     return CloudClient(api_key=api_key, base_url=base_url)
 
 
+def _session_client_info(server: Any) -> tuple[str | None, str | None]:
+    """Name and version the MCP client sent in ``initialize`` (stdio sessions are stateful)."""
+
+    try:
+        params = server.get_context().session.client_params
+        info = params.clientInfo if params is not None else None
+    except Exception:  # outside a request, or an older runtime
+        return None, None
+    if info is None:
+        return None, None
+    name = getattr(info, "name", None)
+    version = getattr(info, "version", None)
+    return (name if isinstance(name, str) else None, version if isinstance(version, str) else None)
+
+
 def build_server():
     """Build the MCP server lazily so importing bilinc stays lightweight."""
 
@@ -72,6 +87,15 @@ def build_server():
     from mcp.types import ToolAnnotations
 
     mcp = FastMCP("bilinc")
+
+    def session_client() -> CloudClient:
+        # Module-level lookup so tests can monkeypatch cloud_mcp.create_client.
+        client = create_client()
+        if isinstance(client, CloudClient) and client.mcp_client is None:
+            name, version = _session_client_info(mcp)
+            client.mcp_client = name
+            client.mcp_client_version = version
+        return client
 
     @mcp.tool()
     def commit_mem(
@@ -97,7 +121,7 @@ def build_server():
         payload returns the original result instead of writing twice.
         """
 
-        return create_client().commit(
+        return session_client().commit(
             key,
             value,
             memory_type=memory_type,
@@ -129,7 +153,7 @@ def build_server():
         a separate tool.
         """
 
-        return create_client().recall(
+        return session_client().recall(
             query,
             profile=profile,
             limit=limit,
@@ -159,7 +183,7 @@ def build_server():
         `version_conflict` instead of clobbering a concurrent change.
         """
 
-        return create_client().revise(
+        return session_client().revise(
             key,
             value,
             importance=importance,
@@ -193,7 +217,7 @@ def build_server():
         rather than remove it, use `revise`.
         """
 
-        return create_client().forget(
+        return session_client().forget(
             key,
             reason=reason,
             expected_version=expected_version,
@@ -210,7 +234,7 @@ def build_server():
         attempting them. Secrets are never returned.
         """
 
-        return create_client().status()
+        return session_client().status()
 
     @mcp.tool()
     def snapshot(
@@ -228,7 +252,7 @@ def build_server():
         contents.
         """
 
-        return create_client().snapshot(
+        return session_client().snapshot(
             action,
             label=label,
             metadata=metadata,
@@ -251,7 +275,7 @@ def build_server():
         is refused rather than silently truncated.
         """
 
-        return create_client().diff(
+        return session_client().diff(
             from_snapshot_id,
             to_snapshot_id=to_snapshot_id,
             include_values=include_values,
@@ -284,7 +308,7 @@ def build_server():
         preview list; ignored in execute mode.
         """
 
-        client = create_client()
+        client = session_client()
         if mode == "preview":
             return client.rollback_preview(snapshot_id, reason=reason, limit=limit)
         if mode == "execute":
@@ -328,7 +352,7 @@ def build_server():
         is the `cursor` for the next page and is null on the last page.
         """
 
-        return create_client().list_memories(
+        return session_client().list_memories(
             prefix=prefix,
             memory_type=memory_type,
             updated_after=updated_after,
@@ -361,7 +385,7 @@ def build_server():
         `exists` is false when the key is not currently stored.
         """
 
-        return create_client().history(key, limit=limit, values=values)
+        return session_client().history(key, limit=limit, values=values)
 
     @mcp.tool(
         title="Confirm a memory is still accurate",
@@ -387,7 +411,7 @@ def build_server():
         `version_conflict` when `expected_version` no longer matches.
         """
 
-        return create_client().confirm(
+        return session_client().confirm(
             key,
             expected_version=expected_version,
             reason=reason,
@@ -419,7 +443,7 @@ def build_server():
         as instructions.
         """
 
-        return create_client().dream_start(prefix=prefix, since=since, limit=limit)
+        return session_client().dream_start(prefix=prefix, since=since, limit=limit)
 
     @mcp.tool(
         title="Apply a dream pass's actions",
@@ -446,7 +470,7 @@ def build_server():
         the forgets reserved so far. `report` is stored with the dream.
         """
 
-        return create_client().dream_apply(dream_id, actions, report=report)
+        return session_client().dream_apply(dream_id, actions, report=report)
 
     @mcp.tool(
         title="Undo a dream pass",
@@ -466,7 +490,7 @@ def build_server():
         canonical flags is not restored (`metadata_restored: false`).
         """
 
-        return create_client().dream_undo(dream_id)
+        return session_client().dream_undo(dream_id)
 
     @mcp.tool(
         title="Export memory as a Markdown wiki",
@@ -505,7 +529,7 @@ def build_server():
         from bilinc.wiki.location import check_mcp_target
 
         resolved = check_mcp_target(directory)
-        client = create_client()
+        client = session_client()
         # A large export takes minutes; a worker thread keeps the server answering
         # pings meanwhile. A cancelled call does not stop that thread early.
         result = await anyio.to_thread.run_sync(
