@@ -61,6 +61,21 @@ def create_client(api_key: str | None = None, base_url: str | None = None) -> Cl
     return CloudClient(api_key=api_key, base_url=base_url)
 
 
+def _session_client_info(server: Any) -> tuple[str | None, str | None]:
+    """Name and version the MCP client sent in ``initialize`` (stdio sessions are stateful)."""
+
+    try:
+        params = server.get_context().session.client_params
+        info = params.clientInfo if params is not None else None
+    except Exception:  # outside a request, or an older runtime
+        return None, None
+    if info is None:
+        return None, None
+    name = getattr(info, "name", None)
+    version = getattr(info, "version", None)
+    return (name if isinstance(name, str) else None, version if isinstance(version, str) else None)
+
+
 def build_server():
     """Build the MCP server lazily so importing bilinc stays lightweight."""
 
@@ -72,6 +87,15 @@ def build_server():
     from mcp.types import ToolAnnotations
 
     mcp = FastMCP("bilinc")
+
+    def create_client() -> CloudClient:
+        # Module-level lookup so tests can monkeypatch cloud_mcp.create_client.
+        client = globals()["create_client"]()
+        if isinstance(client, CloudClient) and client.mcp_client is None:
+            name, version = _session_client_info(mcp)
+            client.mcp_client = name
+            client.mcp_client_version = version
+        return client
 
     @mcp.tool()
     def commit_mem(

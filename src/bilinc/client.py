@@ -928,6 +928,19 @@ def _is_response_too_large(error: BilincCloudError) -> bool:
     return isinstance(details, dict) and details.get("reason") == "response_too_large"
 
 
+_MCP_CLIENT_LABEL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._ -")
+
+
+def mcp_client_label(value: object) -> str | None:
+    """Reduce an MCP clientInfo field to what the cloud accepts: [A-Za-z0-9._ -]{1,48}."""
+
+    if not isinstance(value, str):
+        return None
+    cleaned = "".join(character for character in value if character in _MCP_CLIENT_LABEL_CHARS)
+    cleaned = " ".join(cleaned.split())[:48].strip()
+    return cleaned or None
+
+
 @dataclass(slots=True)
 class CloudClient:
     """Minimal Bilinc Cloud SDK client."""
@@ -939,6 +952,10 @@ class CloudClient:
     timeout: float = 30.0
     transport: Callable[..., dict[str, Any]] = _default_transport
     read_retry_attempts: int = READ_RETRY_ATTEMPTS
+    #: Name and version of the MCP client (Claude Code, Codex, Cursor...) that
+    #: drives the stdio adapter. A label only, sent as X-Bilinc-Mcp-Client.
+    mcp_client: str | None = None
+    mcp_client_version: str | None = None
     _checked_base_url: str | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -1600,6 +1617,14 @@ class CloudClient:
             command = os.environ.get("BILINC_CLIENT_COMMAND", "").strip()
             if command and all(character.isalnum() or character in "._-" for character in command[:48]):
                 headers["X-Bilinc-Client-Command"] = command[:48]
+        # A label for the agent app behind the stdio MCP adapter. Sent on reads
+        # too: activation telemetry keys on X-Bilinc-Client, not on this.
+        mcp_client = mcp_client_label(self.mcp_client)
+        if mcp_client:
+            headers["X-Bilinc-Mcp-Client"] = mcp_client
+            mcp_version = mcp_client_label(self.mcp_client_version)
+            if mcp_version:
+                headers["X-Bilinc-Mcp-Client-Version"] = mcp_version
         if content_type:
             headers["Content-Type"] = "application/json"
         if idempotency_key:
